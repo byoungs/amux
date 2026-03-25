@@ -1,0 +1,224 @@
+# amux
+
+**The AI Multiplexer. The Attention Multiplexer.**
+
+A terminal multiplexer purpose-built for parallel AI coding.
+
+## Why amux?
+
+You're coding with Claude Code and hit a point where you need something done
+in parallel — a refactor, a test suite, a migration. You spin up a new pane
+and start a second thread. Then a third. Before long you have six agents
+working across your codebase.
+
+Now you need to come back. Which ones are done? Which ones are waiting on you?
+You want to collapse back to four threads and pull the important results into
+focus. You can't. You're tabbing between terminals, hunting for permission
+prompts, losing your place. The agents are fast — but you've become the
+bottleneck.
+
+**Running multiple AI agents is a solved problem. Managing your attention
+across them is not.** That's what amux solves.
+
+amux gives you a fluid workspace where threads expand and contract naturally.
+Spin up agents when you need parallelism. See at a glance which ones need you.
+Zoom in to pair with one. Zoom out to survey the team. Bring background work
+into the foreground. Collapse finished threads. The workspace reshapes around
+your attention — not the other way around.
+
+### Why not tmux / Zellij / screen / iTerm2 splits?
+
+Those are general-purpose terminal multiplexers. They give you panes, but they
+have no concept of what's happening inside them. amux is purpose-built for the
+flow of AI coding:
+
+- **Attention-aware**: pane borders show agent state (working, waiting, idle)
+  — your terminal is a team dashboard, not a grid of anonymous rectangles
+- **Fluid scaling**: expand to 6+ agents when you need parallelism, collapse
+  back to 2 when you don't — panes stick to their spatial positions
+- **Progressive zoom**: three levels from bird's eye survey to deep focus,
+  with the right amount of detail at each level
+- **Calm notifications**: visual indicators when you're in the terminal, a
+  single macOS notification when you're away. No alert fatigue.
+
+## Quick Start
+
+```bash
+# Install (requires Rust and tmux 3.2+)
+cargo install --path .
+
+# Launch
+amux
+```
+
+Create panes with `Ctrl-n`, zoom in with `Ctrl-+`, zoom out with `Ctrl--`.
+
+## How It Works
+
+amux is a thin layer on top of tmux. It configures layout, styles, key
+bindings, and attention tracking, then gets out of the way. tmux handles all
+rendering — perfect keystroke fidelity, perfect resize, zero overhead.
+
+### Three-Level Zoom
+
+Think of it like a camera — or a manager moving between oversight and
+hands-on work:
+
+| Level | View | Mode | Enter | Exit |
+|-------|------|------|-------|------|
+| **Bird's Eye** | All panes tiled equally | Survey the team — scan states, navigate | `Ctrl--` | `Ctrl-+` or `Ctrl-N` |
+| **Working** | All visible, stable grid | Pair with one agent — type in the active pane | `Ctrl-+` from L1, or `Ctrl-N` | `Ctrl--` or `Ctrl-+` |
+| **Full Screen** | One pane fills terminal | Deep focus — heads down on one task | `Ctrl-+` from L2 | `Ctrl--` |
+
+`Ctrl-1` through `Ctrl-9` jumps to a specific pane. Press the same number
+again to zoom deeper. Press a different number to switch panes.
+
+### Attention Management
+
+Every pane border tells you its state at a glance:
+
+| Border | Meaning |
+|--------|---------|
+| **Teal** (bright) | Active — you're focused here |
+| **Amber** | Ready for you — agent needs input |
+| **Dark** | Working — agent is busy, nothing to do |
+
+The system respects your attention level:
+
+- **Full Screen**: a subtle badge in the status bar corner shows how many
+  agents are waiting. No detail, no interruption.
+- **Working**: amber borders glow on panes that need you.
+- **Bird's Eye**: full team dashboard — every pane's state visible.
+- **Space Picker** (`Ctrl-P`): indicators show which spaces have waiting agents.
+- **Outside amux**: a single macOS notification brings you back. No per-agent
+  spam.
+
+### Pane Layout
+
+Panes arrange in a consistent grid:
+
+```
+2 panes         3 panes         4 panes         5 panes         6 panes
+┌─────┬─────┐   ┌────┬────┐    ┌────┬────┐     ┌────┬────┐     ┌───┬───┬───┐
+│     │     │   │    │ 2  │    │ 1  │ 2  │     │  1 │  2 │     │ 1 │ 2 │ 3 │
+│  1  │  2  │   │ 1  ├────┤    ├────┼────┤     ├───┬┴┬───┤     ├───┼───┼───┤
+│     │     │   │    │ 3  │    │ 3  │ 4  │     │ 3 │4│ 5 │     │ 4 │ 5 │ 6 │
+└─────┴─────┘   └────┴────┘    └────┴────┘     └───┴─┴───┘     └───┴───┴───┘
+```
+
+**Spatial stickiness:** When you close a pane, neighbors expand to fill the gap —
+other panes stay where they are. When you create a new pane, it fills the vacancy.
+Close pane 2 from a 2x2, then create a new pane — the three surviving panes snap
+back to their original corners and the new pane takes the empty slot.
+
+### Spaces
+
+Spaces are independent workspaces, each with their own grid of panes.
+Think of them like desks — you swivel your chair to face a different desk,
+and everything on the previous desk stays exactly where you left it.
+
+`Ctrl-P` opens the space picker. Spaces with agents waiting for you are
+marked, so you know where to go next. Press a number to switch, or `n` to
+create a new space. `Ctrl-S` sends the current pane to another space.
+
+### Split View
+
+`Ctrl-L` pulls two panes into a side-by-side view in a dedicated window.
+The rest of your grid stays in the background. `Ctrl--` exits back to the grid.
+
+## Key Bindings
+
+All bindings work without a prefix key.
+
+| Key | Action |
+|-----|--------|
+| `Ctrl-+` | Zoom in one level |
+| `Ctrl--` | Zoom out one level (or exit split view) |
+| `Ctrl-1..9` | Jump to pane N (context-aware zoom) |
+| `Ctrl-n` | Create new pane |
+| `Ctrl-P` | Space picker (notification center) |
+| `Ctrl-S` | Send current pane to another space |
+| `Ctrl-L` | Start split view |
+| Arrow keys | Navigate panes (Bird's Eye only) |
+
+## Commands
+
+```
+amux               Start or attach to a session
+amux start         Start a new session
+amux new [name]    Create a new pane (auto-names from cwd + git branch)
+amux list          List all panes
+amux refresh       Re-apply config to existing session
+amux spaces        Space picker
+amux send          Send pane to another space
+```
+
+## How Attention Management Works
+
+amux's attention system has two layers:
+
+**In-terminal indicators** (all platforms): amber pane borders, status bar
+badges, and space picker dots show you which agents need attention. These
+work everywhere — they're just tmux styling driven by pane options.
+
+**System notifications** (macOS only): when you leave the terminal — switch
+to Chrome, email, Slack — amux sends a macOS notification to bring you back.
+When you're in the terminal, no popups. Only when you're away, and only once
+per 30 seconds to prevent alert fatigue.
+
+System notification detection uses `lsappinfo` (a built-in macOS tool that
+requires no special permissions) to check if your terminal is the frontmost
+app. This has been tested on macOS with iTerm2. On Linux or other platforms,
+system notifications are not sent — the in-terminal indicators still work.
+
+## Configuration
+
+amux stores state in `~/.amux/`. The tmux session name defaults to `amux` —
+override with `AMUX_SESSION=myname amux`.
+
+Pane titles are auto-generated from the working directory and git branch:
+`project-name/feature-branch`. Override with `amux new "custom name"`.
+
+## Requirements
+
+- **tmux (HEAD build required for flicker-free rendering)** — amux requires
+  tmux 3.2+ for pane options, layout strings, and key tables. However, **tmux
+  3.6a and earlier have a rendering bug** that causes visible screen flashing
+  when Claude Code redraws its UI (e.g., expanding/collapsing tool output with
+  Ctrl-O). This is fixed in tmux HEAD by [PR #4744](https://github.com/tmux/tmux/pull/4744),
+  which adds pane-level synchronized output buffering — the same mechanism that
+  makes iTerm2 flicker-free. Until tmux 3.7 is released, you need to build from
+  HEAD:
+  ```bash
+  # macOS (Homebrew)
+  brew unlink tmux
+  brew install tmux --HEAD
+
+  # Linux (from source)
+  git clone https://github.com/tmux/tmux.git
+  cd tmux && sh autogen.sh && ./configure && make && sudo make install
+  ```
+  tmux is BSD-licensed. A future version of amux may bundle a patched tmux
+  to simplify installation.
+- **Rust** — for building from source (`cargo install --path .`)
+- **macOS or Linux** — uses libc for raw terminal I/O in picker UIs
+
+## Architecture
+
+```
+src/
+├── main.rs      CLI entry point, zoom state machine, picker UIs
+├── alert.rs     Pure alert decision logic (smart landing, counting)
+├── notify.rs    macOS notification sending, frontmost-app detection
+├── config.rs    tmux styles, borders, key bindings, status bar
+├── layout.rs    Grid position calculator, tmux layout string generator
+├── sticky.rs    Spatial matching algorithm, pane center tracking
+├── tmux.rs      tmux command wrappers (sessions, panes, layout, zoom)
+├── state.rs     State persistence (JSON to ~/.amux/)
+├── util.rs      Auto-title generation (project name + git branch)
+└── lib.rs       Public module exports, constants
+```
+
+See [docs/architecture.md](docs/architecture.md) for deep technical details
+and [docs/attention-management.md](docs/attention-management.md) for the
+attention system design.

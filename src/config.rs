@@ -6,10 +6,10 @@ use std::process::Command;
 /// Pane border format string. Uses explicit #{==:#{@amux-alert},1} comparison
 /// instead of #{?@amux-alert,...} because tmux treats any non-empty value
 /// (including "0") as truthy.
-pub const PANE_BORDER_FORMAT: &str = " #{?pane_active,#[fg=colour43 bold]▎ #[fg=yellow]#{e|+:#{pane_index},1}#[fg=colour252] #{?@amux-title,#{@amux-title},#{pane_title}} #[fg=colour43]●,#{?#{==:#{@amux-alert},1},#[fg=colour214 bold]▎ #[fg=colour214]#{e|+:#{pane_index},1}#[fg=colour214] #{?@amux-title,#{@amux-title},#{pane_title}} #[fg=colour214]⬤,#[fg=colour236]▎ #[fg=colour240]#{e|+:#{pane_index},1}#[fg=colour245] #{?@amux-title,#{@amux-title},#{pane_title}}}} ";
+pub const PANE_BORDER_FORMAT: &str = " #{?pane_active,#[fg=colour43 bold]▎ #[fg=yellow]#{e|+:#{pane_index},1}#[fg=colour252] #{?@amux-title,#{@amux-title},#{pane_title}} #[fg=colour43]●,#{?#{==:#{@amux-alert},1},#[fg=colour214 bold]▎ #[fg=colour214]#{e|+:#{pane_index},1}#[fg=colour252] #{?@amux-title,#{@amux-title},#{pane_title}} #[fg=colour214]●,#[fg=colour236]▎ #[fg=colour240]#{e|+:#{pane_index},1}#[fg=colour245] #{?@amux-title,#{@amux-title},#{pane_title}}}} ";
 
 /// Status bar right-side format string.
-pub const STATUS_RIGHT_FORMAT: &str = " #{?#{>:#{window_index},0},#[fg=cyan bold]SPLIT #[fg=colour238]C-- exit,#{?#{==:#{AMUX_LEVEL},1},#[fg=colour81]BIRD'S EYE #[fg=colour238]arrows nav · C-1..9 focus · C-n new · C-p spaces,#{?window_zoomed_flag,#[fg=yellow bold]FULL SCREEN #[fg=colour238]C-- working · C-1..9 switch · C-p spaces#{?#{>:#{@amux-alert-count},0}, #[fg=colour214 bold]⬤ #{@amux-alert-count},},#[fg=colour245]WORKING #[fg=colour238]C-+ full · C-- bird's eye · C-1..9 focus · C-p spaces#{?#{>:#{@amux-alert-count},0}, #[fg=colour214 bold]⬤ #{@amux-alert-count},}}}} ";
+pub const STATUS_RIGHT_FORMAT: &str = " #{?#{>:#{window_index},0},#[fg=cyan bold]SPLIT #[fg=colour238]C-- exit,#{?#{==:#{AMUX_LEVEL},1},#[fg=colour81]BIRD'S EYE #[fg=colour238]arrows nav · C-1..9 focus · C-n new · C-p spaces,#{?window_zoomed_flag,#[fg=yellow bold]FULL SCREEN #[fg=colour238]C-- working · C-1..9 switch · C-p spaces#{?#{>:#{@amux-alert-count},0}, #[fg=colour214 bold]● #{@amux-alert-count},},#[fg=colour245]WORKING #[fg=colour238]C-+ full · C-- bird's eye · C-1..9 focus · C-p spaces#{?#{>:#{@amux-alert-count},0}, #[fg=colour214 bold]● #{@amux-alert-count},}}}} ";
 
 /// Apply all amux tmux configuration to a session.
 pub fn apply_config(session: &str) -> Result<()> {
@@ -46,11 +46,27 @@ pub fn apply_hooks(session: &str) -> Result<()> {
         ])
         .output();
 
+    // Update pane title from cwd when focus leaves a pane
+    let _ = Command::new("tmux")
+        .args([
+            "set-hook",
+            "-g",
+            "pane-focus-out",
+            &format!(
+                "run-shell \"{bin} update-title #{{pane_index}} '#{{pane_current_path}}' 2>/dev/null\""
+            ),
+        ])
+        .output();
+
     Ok(())
 }
 
 /// Configure pane borders with colored title bars.
 fn apply_border_style(session: &str) -> Result<()> {
+    // When the last pane in a session closes, switch to another session
+    // instead of detaching from tmux entirely.
+    tmux_set_global("detach-on-destroy", "off")?;
+
     // Fix Claude Code flickering + enable Shift-Enter passthrough
     tmux_set_global("allow-passthrough", "on")?;
     tmux_set_global("extended-keys", "always")?; // force extended key forwarding (Shift-Enter etc.)

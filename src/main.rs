@@ -81,6 +81,13 @@ enum Commands {
     },
     /// Install Claude Code notification hook (called by make setup)
     HookInstall,
+    /// Update a pane's title from its current directory (called by pane-focus-out hook)
+    UpdateTitle {
+        /// Pane index to update
+        pane: usize,
+        /// Pane's current working directory
+        cwd: String,
+    },
 }
 
 /// The amux session name. AMUX_SESSION env var takes priority (used by hooks
@@ -131,6 +138,7 @@ fn main() -> Result<()> {
         Some(Commands::AlertPane { pane }) => cmd_alert_pane(pane),
         Some(Commands::BellWatch { pane, session }) => cmd_bell_watch(session, pane),
         Some(Commands::HookInstall) => unreachable!("HookInstall handled before tmux check"),
+        Some(Commands::UpdateTitle { pane, cwd }) => cmd_update_title(pane, &cwd),
         None => {
             // Default: start if no session exists, refresh+attach if it does
             let session = session_name();
@@ -266,6 +274,13 @@ fn cmd_refresh() -> Result<()> {
     }
 
     eprintln!("Refreshed {} panes in session '{}'", panes.len(), session);
+    Ok(())
+}
+
+fn cmd_update_title(pane_index: usize, cwd: &str) -> Result<()> {
+    let session = session_name();
+    let title = auto_title(cwd);
+    tmux::set_title(&session, pane_index, &title)?;
     Ok(())
 }
 
@@ -423,8 +438,7 @@ fn cmd_zoom_out() -> Result<()> {
             // Already at L1, do nothing
         }
         2 => {
-            // L2 → L1: restore tiled, enter bird's eye key table
-            tmux::restore_tiled(&session)?;
+            // L2 → L1: just switch key table (layout is already tiled)
             tmux::set_level(&session, 1)?;
             tmux::enter_birdeye_table()?;
         }

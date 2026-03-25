@@ -20,6 +20,10 @@ make setup     # Full environment setup (idempotent)
 
 **All code changes happen in worktrees. Never commit directly to main.**
 
+When asked to make any code change, create a worktree first — don't ask,
+just do it. Name the branch after the work (e.g., `fix-alert-dismiss`,
+`add-split-view`).
+
 ### Creating a worktree
 ```
 git worktree add -b <branch-name> .worktrees/<branch-name> main

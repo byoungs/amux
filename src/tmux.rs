@@ -185,6 +185,8 @@ pub fn set_title(session: &str, pane_index: usize, title: &str) -> Result<()> {
 /// Sets explicit "1" or "0" values. The pane-border-format uses
 /// #{==:#{@amux-alert},1} (explicit comparison) to avoid tmux's truthy
 /// behavior where any non-empty value — including "0" — is true.
+/// Also sets per-pane border color: amber when alerting, unset (back to
+/// session default) when dismissing.
 pub fn set_alert(session: &str, pane_index: usize, alert: bool) -> Result<()> {
     let target = format!("{}:.{}", session, pane_index);
     let value = if alert { "1" } else { "0" };
@@ -197,6 +199,23 @@ pub fn set_alert(session: &str, pane_index: usize, alert: bool) -> Result<()> {
             "tmux set @amux-alert failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+    // Set or unset per-pane border color
+    if alert {
+        let _ = Command::new("tmux")
+            .args([
+                "set-option",
+                "-p",
+                "-t",
+                &target,
+                "pane-border-style",
+                "fg=colour214",
+            ])
+            .output();
+    } else {
+        let _ = Command::new("tmux")
+            .args(["set-option", "-p", "-u", "-t", &target, "pane-border-style"])
+            .output();
     }
     Ok(())
 }
@@ -826,7 +845,7 @@ pub fn get_level(session: &str) -> Result<u8> {
     Ok(level)
 }
 
-/// Set the current zoom level.
+/// Set the current zoom level and refresh the status bar immediately.
 pub fn set_level(session: &str, level: u8) -> Result<()> {
     let output = Command::new("tmux")
         .args([
@@ -841,6 +860,8 @@ pub fn set_level(session: &str, level: u8) -> Result<()> {
     if !output.status.success() {
         bail!("failed to set AMUX_LEVEL");
     }
+    // Force status bar to redraw so the level indicator updates immediately
+    let _ = Command::new("tmux").args(["refresh-client", "-S"]).output();
     Ok(())
 }
 

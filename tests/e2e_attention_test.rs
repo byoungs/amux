@@ -8,7 +8,6 @@
 ///
 /// Each test creates a real tmux session, runs real commands, and verifies
 /// tmux state. Tests are independent and clean up after themselves.
-
 use std::process::Command;
 
 fn session_name() -> String {
@@ -56,8 +55,11 @@ fn get_alert_count(session: &str) -> usize {
 fn pane_id(session: &str, index: usize) -> String {
     let output = Command::new("tmux")
         .args([
-            "display-message", "-t", &format!("{}:.{}", session, index),
-            "-p", "#{pane_id}",
+            "display-message",
+            "-t",
+            &format!("{}:.{}", session, index),
+            "-p",
+            "#{pane_id}",
         ])
         .output()
         .expect("get pane_id");
@@ -83,7 +85,10 @@ fn cli_alert_pane_sets_alert_on_non_active_pane() {
     assert!(status.success(), "amux alert-pane should succeed");
 
     assert!(get_alert(&session, 1), "pane 1 should be alerted");
-    assert!(!get_alert(&session, 0), "pane 0 (active) should not be alerted");
+    assert!(
+        !get_alert(&session, 0),
+        "pane 0 (active) should not be alerted"
+    );
     assert!(!get_alert(&session, 2), "pane 2 should not be alerted");
     assert_eq!(get_alert_count(&session), 1);
 
@@ -109,7 +114,10 @@ fn cli_alert_pane_skips_active_pane_when_terminal_frontmost() {
     // If not (user switched apps during test), it would be alerted.
     // We test the common case: terminal is frontmost.
     if amux::notify::is_terminal_frontmost() {
-        assert!(!get_alert(&session, 0), "active pane should not be alerted when terminal is frontmost");
+        assert!(
+            !get_alert(&session, 0),
+            "active pane should not be alerted when terminal is frontmost"
+        );
         assert_eq!(get_alert_count(&session), 0);
     }
 
@@ -133,7 +141,10 @@ fn cli_alert_pane_allows_active_pane_at_birdeye() {
         .expect("run amux alert-pane");
     assert!(status.success());
 
-    assert!(get_alert(&session, 0), "at bird's eye, active pane SHOULD be alerted");
+    assert!(
+        get_alert(&session, 0),
+        "at bird's eye, active pane SHOULD be alerted"
+    );
     assert_eq!(get_alert_count(&session), 1);
 
     cleanup(&session);
@@ -149,14 +160,20 @@ fn cli_alert_pane_skips_already_alerted() {
     Command::new(amux_bin())
         .env("AMUX_SESSION", &session)
         .args(["alert-pane", "1"])
-        .status().expect("first alert");
+        .status()
+        .expect("first alert");
     Command::new(amux_bin())
         .env("AMUX_SESSION", &session)
         .args(["alert-pane", "1"])
-        .status().expect("second alert");
+        .status()
+        .expect("second alert");
 
     assert!(get_alert(&session, 1));
-    assert_eq!(get_alert_count(&session), 1, "count should still be 1 after double alert");
+    assert_eq!(
+        get_alert_count(&session),
+        1,
+        "count should still be 1 after double alert"
+    );
 
     cleanup(&session);
 }
@@ -193,8 +210,14 @@ fn hook_command_alerts_correct_pane_from_subprocess() {
 
     // Pane 1 should be alerted (the hook's pane), NOT pane 2 (active pane)
     assert!(!get_alert(&session, 0), "pane 0 should not be alerted");
-    assert!(get_alert(&session, 1), "pane 1 (hook source) should be alerted");
-    assert!(!get_alert(&session, 2), "pane 2 (active) should not be alerted");
+    assert!(
+        get_alert(&session, 1),
+        "pane 1 (hook source) should be alerted"
+    );
+    assert!(
+        !get_alert(&session, 2),
+        "pane 2 (active) should not be alerted"
+    );
 
     cleanup(&session);
 }
@@ -220,7 +243,10 @@ fn hook_command_skips_active_pane_when_terminal_frontmost() {
 
     // Active pane is only skipped if terminal is frontmost
     if amux::notify::is_terminal_frontmost() {
-        assert!(!get_alert(&session, 0), "active pane should not be alerted when terminal is frontmost");
+        assert!(
+            !get_alert(&session, 0),
+            "active pane should not be alerted when terminal is frontmost"
+        );
     }
 
     cleanup(&session);
@@ -250,7 +276,10 @@ fn zoom_to_alerted_pane_clears_alert() {
     assert!(status.success());
 
     // Alert should be cleared because focusing pane 1 dismisses it
-    assert!(!get_alert(&session, 1), "alert should clear when pane is focused via zoom");
+    assert!(
+        !get_alert(&session, 1),
+        "alert should clear when pane is focused via zoom"
+    );
     assert_eq!(get_alert_count(&session), 0);
 
     cleanup(&session);
@@ -275,7 +304,10 @@ fn zoom_in_from_birdeye_clears_alert_on_current_pane() {
         .expect("zoom in");
     assert!(status.success());
 
-    assert!(!get_alert(&session, 0), "zoom-in should clear alert on current pane");
+    assert!(
+        !get_alert(&session, 0),
+        "zoom-in should clear alert on current pane"
+    );
     assert_eq!(get_alert_count(&session), 0);
 
     cleanup(&session);
@@ -296,7 +328,8 @@ fn full_alert_lifecycle_multiple_panes() {
         Command::new(amux_bin())
             .env("AMUX_SESSION", &session)
             .args(["alert-pane", &i.to_string()])
-            .status().expect("alert");
+            .status()
+            .expect("alert");
     }
     assert_eq!(get_alert_count(&session), 3);
 
@@ -304,7 +337,8 @@ fn full_alert_lifecycle_multiple_panes() {
     Command::new(amux_bin())
         .env("AMUX_SESSION", &session)
         .args(["zoom", "1"])
-        .status().expect("zoom 1");
+        .status()
+        .expect("zoom 1");
     assert!(!get_alert(&session, 1));
     assert_eq!(get_alert_count(&session), 2);
 
@@ -312,7 +346,8 @@ fn full_alert_lifecycle_multiple_panes() {
     Command::new(amux_bin())
         .env("AMUX_SESSION", &session)
         .args(["zoom", "2"])
-        .status().expect("zoom 2");
+        .status()
+        .expect("zoom 2");
     assert!(!get_alert(&session, 2));
     assert_eq!(get_alert_count(&session), 1);
 
@@ -320,7 +355,8 @@ fn full_alert_lifecycle_multiple_panes() {
     Command::new(amux_bin())
         .env("AMUX_SESSION", &session)
         .args(["zoom", "3"])
-        .status().expect("zoom 3");
+        .status()
+        .expect("zoom 3");
     assert!(!get_alert(&session, 3));
     assert_eq!(get_alert_count(&session), 0);
 
@@ -339,7 +375,13 @@ fn pipe_pane_active_on_all_panes_after_config() {
 
     for i in 0..3 {
         let output = Command::new("tmux")
-            .args(["display-message", "-t", &format!("{}:.{}", session, i), "-p", "#{pane_pipe}"])
+            .args([
+                "display-message",
+                "-t",
+                &format!("{}:.{}", session, i),
+                "-p",
+                "#{pane_pipe}",
+            ])
             .output()
             .expect("check pipe");
         let pipe = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -361,7 +403,13 @@ fn pipe_pane_active_on_newly_created_pane() {
     // Both panes should have pipe-pane active
     for i in 0..2 {
         let output = Command::new("tmux")
-            .args(["display-message", "-t", &format!("{}:.{}", session, i), "-p", "#{pane_pipe}"])
+            .args([
+                "display-message",
+                "-t",
+                &format!("{}:.{}", session, i),
+                "-p",
+                "#{pane_pipe}",
+            ])
             .output()
             .expect("check pipe");
         let pipe = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -392,7 +440,10 @@ fn border_format_has_three_states() {
     assert!(format.contains("@amux-alert"), "should check @amux-alert");
     assert!(format.contains("colour43"), "should have teal for active");
     assert!(format.contains("colour214"), "should have amber for alert");
-    assert!(format.contains("colour236"), "should have dark for inactive");
+    assert!(
+        format.contains("colour236"),
+        "should have dark for inactive"
+    );
 
     cleanup(&session);
 }
@@ -409,7 +460,10 @@ fn status_bar_has_alert_badge() {
         .expect("show status-right");
     let status = String::from_utf8_lossy(&output.stdout);
 
-    assert!(status.contains("@amux-alert-count"), "should reference alert count");
+    assert!(
+        status.contains("@amux-alert-count"),
+        "should reference alert count"
+    );
     assert!(status.contains("⬤"), "should have amber dot character");
 
     cleanup(&session);

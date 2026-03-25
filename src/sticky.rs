@@ -114,8 +114,11 @@ pub fn load_pane_prev_center(session: &str, pane_index: usize) -> Option<(i32, i
 pub fn read_all_pane_centers(session: &str) -> Result<Vec<PaneCenter>> {
     let output = Command::new("tmux")
         .args([
-            "list-panes", "-t", session,
-            "-F", "#{pane_id}\t#{pane_index}\t#{@amux-cx}\t#{@amux-cy}\t#{@amux-pcx}\t#{@amux-pcy}",
+            "list-panes",
+            "-t",
+            session,
+            "-F",
+            "#{pane_id}\t#{pane_index}\t#{@amux-cx}\t#{@amux-cy}\t#{@amux-pcx}\t#{@amux-pcy}",
         ])
         .output()
         .context("failed to list pane centers")?;
@@ -124,7 +127,9 @@ pub fn read_all_pane_centers(session: &str) -> Result<Vec<PaneCenter>> {
     let mut centers = Vec::new();
     for line in stdout.lines().filter(|l| !l.is_empty()) {
         let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 6 { continue; }
+        if parts.len() < 6 {
+            continue;
+        }
         let id: u32 = parts[0].trim_start_matches('%').parse().unwrap_or(0);
         let cx = parts[2].parse().ok();
         let cy = parts[3].parse().ok();
@@ -148,7 +153,11 @@ fn set_pane_option(target: &str, key: &str, value: i32) -> Result<()> {
         .output()
         .with_context(|| format!("failed to set {} on {}", key, target))?;
     if !output.status.success() {
-        anyhow::bail!("tmux set-option {} failed: {}", key, String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "tmux set-option {} failed: {}",
+            key,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     Ok(())
 }
@@ -159,7 +168,8 @@ fn get_pane_option(target: &str, key: &str) -> Result<i32> {
         .output()
         .with_context(|| format!("failed to get {} on {}", key, target))?;
     let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    val.parse().with_context(|| format!("{} not set or invalid: {:?}", key, val))
+    val.parse()
+        .with_context(|| format!("{} not set or invalid: {:?}", key, val))
 }
 
 #[cfg(test)]
@@ -168,25 +178,49 @@ mod tests {
     use crate::layout::{grid_positions, Rect};
 
     fn centers_from_rects(rects: &[Rect]) -> Vec<SlotCenter> {
-        rects.iter().map(|r| {
-            let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
-            SlotCenter { cx, cy }
-        }).collect()
+        rects
+            .iter()
+            .map(|r| {
+                let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
+                SlotCenter { cx, cy }
+            })
+            .collect()
     }
 
     fn pane_centers_from_rects(rects: &[Rect], ids: &[u32]) -> Vec<PaneCenter> {
-        rects.iter().zip(ids.iter()).map(|(r, &id)| {
-            let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
-            PaneCenter { id, cx, cy, prev_cx: None, prev_cy: None }
-        }).collect()
+        rects
+            .iter()
+            .zip(ids.iter())
+            .map(|(r, &id)| {
+                let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
+                PaneCenter {
+                    id,
+                    cx,
+                    cy,
+                    prev_cx: None,
+                    prev_cy: None,
+                }
+            })
+            .collect()
     }
 
     fn pane_centers_with_prev(rects: &[Rect], prev_rects: &[Rect], ids: &[u32]) -> Vec<PaneCenter> {
-        rects.iter().zip(prev_rects.iter()).zip(ids.iter()).map(|((r, pr), &id)| {
-            let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
-            let (pcx, pcy) = rect_center(pr.x, pr.y, pr.w, pr.h);
-            PaneCenter { id, cx, cy, prev_cx: Some(pcx), prev_cy: Some(pcy) }
-        }).collect()
+        rects
+            .iter()
+            .zip(prev_rects.iter())
+            .zip(ids.iter())
+            .map(|((r, pr), &id)| {
+                let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
+                let (pcx, pcy) = rect_center(pr.x, pr.y, pr.w, pr.h);
+                PaneCenter {
+                    id,
+                    cx,
+                    cy,
+                    prev_cx: Some(pcx),
+                    prev_cy: Some(pcy),
+                }
+            })
+            .collect()
     }
 
     #[test]

@@ -23,7 +23,12 @@ pub struct Rect {
 pub fn grid_positions(count: usize, width: u16, height: u16) -> Vec<Rect> {
     match count {
         0 => vec![],
-        1 => vec![Rect { x: 0, y: 0, w: width, h: height }],
+        1 => vec![Rect {
+            x: 0,
+            y: 0,
+            w: width,
+            h: height,
+        }],
         2 => layout_columns(2, width, height),
         3 => {
             // Left full-height + right column split into 2
@@ -33,9 +38,24 @@ pub fn grid_positions(count: usize, width: u16, height: u16) -> Vec<Rect> {
             let top_h = (height - 1) / 2;
             let bot_h = height - 1 - top_h;
             vec![
-                Rect { x: 0, y: 0, w: left_w, h: height },
-                Rect { x: right_x, y: 0, w: right_w, h: top_h },
-                Rect { x: right_x, y: top_h + 1, w: right_w, h: bot_h },
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: left_w,
+                    h: height,
+                },
+                Rect {
+                    x: right_x,
+                    y: 0,
+                    w: right_w,
+                    h: top_h,
+                },
+                Rect {
+                    x: right_x,
+                    y: top_h + 1,
+                    w: right_w,
+                    h: bot_h,
+                },
             ]
         }
         4 => layout_grid(2, 2, width, height),
@@ -49,17 +69,32 @@ pub fn grid_positions(count: usize, width: u16, height: u16) -> Vec<Rect> {
             // Bottom: 3 columns
             let bot_rects = layout_columns(3, width, bh);
             vec![
-                top_rects[0].clone(),                                            // 1: top-left
-                top_rects[1].clone(),                                            // 2: top-right
-                Rect { x: bot_rects[0].x, y: bot_y, w: bot_rects[0].w, h: bh }, // 3: bottom-left
-                Rect { x: bot_rects[1].x, y: bot_y, w: bot_rects[1].w, h: bh }, // 4: bottom-mid
-                Rect { x: bot_rects[2].x, y: bot_y, w: bot_rects[2].w, h: bh }, // 5: bottom-right
+                top_rects[0].clone(), // 1: top-left
+                top_rects[1].clone(), // 2: top-right
+                Rect {
+                    x: bot_rects[0].x,
+                    y: bot_y,
+                    w: bot_rects[0].w,
+                    h: bh,
+                }, // 3: bottom-left
+                Rect {
+                    x: bot_rects[1].x,
+                    y: bot_y,
+                    w: bot_rects[1].w,
+                    h: bh,
+                }, // 4: bottom-mid
+                Rect {
+                    x: bot_rects[2].x,
+                    y: bot_y,
+                    w: bot_rects[2].w,
+                    h: bh,
+                }, // 5: bottom-right
             ]
         }
         6 => layout_grid(2, 3, width, height),
         _ => {
             // 7+: 2 rows, ceil(n/2) columns
-            let cols = (count + 1) / 2;
+            let cols = count.div_ceil(2);
             layout_grid(2, cols, width, height)
                 .into_iter()
                 .take(count)
@@ -77,7 +112,12 @@ fn layout_columns(n: usize, width: u16, height: u16) -> Vec<Rect> {
     let mut x = 0u16;
     for i in 0..n {
         let w = if i == n - 1 { width - x } else { col_w };
-        rects.push(Rect { x, y: 0, w, h: height });
+        rects.push(Rect {
+            x,
+            y: 0,
+            w,
+            h: height,
+        });
         x += w + 1; // +1 for divider
     }
     rects
@@ -93,7 +133,12 @@ fn layout_rows(n: usize, x: u16, y: u16, width: u16, height: u16) -> Vec<Rect> {
     let mut cy = y;
     for i in 0..n {
         let h = if i == n - 1 { y + height - cy } else { row_h };
-        rects.push(Rect { x, y: cy, w: width, h });
+        rects.push(Rect {
+            x,
+            y: cy,
+            w: width,
+            h,
+        });
         cy += h + 1; // +1 for divider
     }
     rects
@@ -131,10 +176,15 @@ fn layout_grid(rows: usize, cols: usize, width: u16, height: u16) -> Vec<Rect> {
 /// panes loses `border_top` rows to the border title bar, so we make the
 /// first row that many rows taller in the layout string.
 pub fn build_layout_string_direct(
-    width: u16, height: u16, pane_ids: &[u32], border_top: u16,
+    width: u16,
+    height: u16,
+    pane_ids: &[u32],
+    border_top: u16,
 ) -> Option<String> {
     let n = pane_ids.len();
-    if n == 0 { return None; }
+    if n == 0 {
+        return None;
+    }
 
     let body = match n {
         1 => {
@@ -145,10 +195,10 @@ pub fn build_layout_string_direct(
             let lw = (width - 1) / 2;
             let rw = width - 1 - lw;
             let rx = lw + 1;
-            format!("{}x{},0,0{{{}x{},0,0,{},{}x{},{},0,{}}}",
-                width, height,
-                lw, height, pane_ids[0],
-                rw, height, rx, pane_ids[1])
+            format!(
+                "{}x{},0,0{{{}x{},0,0,{},{}x{},{},0,{}}}",
+                width, height, lw, height, pane_ids[0], rw, height, rx, pane_ids[1]
+            )
         }
         3 => {
             // Left full-height + right split vertically
@@ -157,12 +207,26 @@ pub fn build_layout_string_direct(
             let rx = lw + 1;
             let (th, bh) = split_two_rows(height, border_top);
             let by = th + 1;
-            format!("{}x{},0,0{{{}x{},0,0,{},{}x{},{},0[{}x{},{},0,{},{}x{},{},{},{}]}}",
-                width, height,
-                lw, height, pane_ids[0],
-                rw, height, rx,
-                rw, th, rx, pane_ids[1],
-                rw, bh, rx, by, pane_ids[2])
+            format!(
+                "{}x{},0,0{{{}x{},0,0,{},{}x{},{},0[{}x{},{},0,{},{}x{},{},{},{}]}}",
+                width,
+                height,
+                lw,
+                height,
+                pane_ids[0],
+                rw,
+                height,
+                rx,
+                rw,
+                th,
+                rx,
+                pane_ids[1],
+                rw,
+                bh,
+                rx,
+                by,
+                pane_ids[2]
+            )
         }
         4 => {
             // 2x2
@@ -192,7 +256,7 @@ pub fn build_layout_string_direct(
         }
         _ => {
             // For 6+, use 2 rows with ceil(n/2) columns per row
-            let cols = (n + 1) / 2;
+            let cols = n.div_ceil(2);
             let top_count = cols;
             let (th, bh) = split_two_rows(height, border_top);
             let by = th + 1;
@@ -232,7 +296,10 @@ fn split_three_rows(height: u16, border_top: u16) -> (u16, u16, u16) {
     let remainder = content - per_row * 3;
     let h1 = per_row + border_top + if remainder >= 1 { 1 } else { 0 };
     let h2 = per_row + if remainder >= 2 { 1 } else { 0 };
-    let h3 = height.saturating_sub(2).saturating_sub(h1).saturating_sub(h2);
+    let h3 = height
+        .saturating_sub(2)
+        .saturating_sub(h1)
+        .saturating_sub(h2);
     (h1, h2, h3)
 }
 
@@ -258,14 +325,16 @@ fn layout_row_string(ids: &[u32], x: u16, y: u16, width: u16, height: u16) -> St
     let mut parts = Vec::new();
     let mut cx = x;
     for (i, &id) in ids.iter().enumerate() {
-        let w = if i == ids.len() - 1 { x + width - cx } else { col_w };
+        let w = if i == ids.len() - 1 {
+            x + width - cx
+        } else {
+            col_w
+        };
         parts.push(format!("{}x{},{},{},{}", w, height, cx, y, id));
         cx += w + 1;
     }
 
-    format!("{}x{},{},{}{{{}}}",
-        width, height, x, y,
-        parts.join(","))
+    format!("{}x{},{},{}{{{}}}", width, height, x, y, parts.join(","))
 }
 
 #[cfg(test)]
@@ -276,7 +345,15 @@ mod tests {
     fn one_pane_full_screen() {
         let rects = grid_positions(1, 280, 80);
         assert_eq!(rects.len(), 1);
-        assert_eq!(rects[0], Rect { x: 0, y: 0, w: 280, h: 80 });
+        assert_eq!(
+            rects[0],
+            Rect {
+                x: 0,
+                y: 0,
+                w: 280,
+                h: 80
+            }
+        );
     }
 
     #[test]
@@ -356,8 +433,16 @@ mod tests {
                 let rects = grid_positions(2, w, h);
                 assert_eq!(rects[0].y, 0, "pane 1 should be at top for {}x{}", w, h);
                 assert_eq!(rects[1].y, 0, "pane 2 should be at top for {}x{}", w, h);
-                assert_eq!(rects[0].h, h, "pane 1 should be full height for {}x{}", w, h);
-                assert_eq!(rects[1].h, h, "pane 2 should be full height for {}x{}", w, h);
+                assert_eq!(
+                    rects[0].h, h,
+                    "pane 1 should be full height for {}x{}",
+                    w, h
+                );
+                assert_eq!(
+                    rects[1].h, h,
+                    "pane 2 should be full height for {}x{}",
+                    w, h
+                );
             }
         }
     }
@@ -397,14 +482,27 @@ mod tests {
         for h in [24, 40, 60, 80, 81] {
             for bt in [0, 1] {
                 let (th, bh) = split_two_rows(h, bt);
-                assert_eq!(th + 1 + bh, h,
-                    "split_two_rows({}, {}): {} + 1 + {} != {}", h, bt, th, bh, h);
+                assert_eq!(
+                    th + 1 + bh,
+                    h,
+                    "split_two_rows({}, {}): {} + 1 + {} != {}",
+                    h,
+                    bt,
+                    th,
+                    bh,
+                    h
+                );
                 if bt > 0 {
                     // With border, visible content should be equal (±1)
                     let visible_top = th - bt;
-                    assert!((visible_top as i32 - bh as i32).unsigned_abs() <= 1,
+                    assert!(
+                        (visible_top as i32 - bh as i32).unsigned_abs() <= 1,
                         "split_two_rows({}, {}): visible {} vs {} differ by >1",
-                        h, bt, visible_top, bh);
+                        h,
+                        bt,
+                        visible_top,
+                        bh
+                    );
                 }
             }
         }
@@ -415,17 +513,29 @@ mod tests {
         for h in [24, 40, 60, 80, 81] {
             for bt in [0, 1] {
                 let (h1, h2, h3) = split_three_rows(h, bt);
-                assert_eq!(h1 + 1 + h2 + 1 + h3, h,
+                assert_eq!(
+                    h1 + 1 + h2 + 1 + h3,
+                    h,
                     "split_three_rows({}, {}): {} + 1 + {} + 1 + {} != {}",
-                    h, bt, h1, h2, h3, h);
+                    h,
+                    bt,
+                    h1,
+                    h2,
+                    h3,
+                    h
+                );
                 if bt > 0 {
                     let v1 = h1 - bt;
                     let vals = [v1, h2, h3];
                     let max = *vals.iter().max().unwrap();
                     let min = *vals.iter().min().unwrap();
-                    assert!(max - min <= 1,
+                    assert!(
+                        max - min <= 1,
                         "split_three_rows({}, {}): visible {:?} spread > 1",
-                        h, bt, vals);
+                        h,
+                        bt,
+                        vals
+                    );
                 }
             }
         }
@@ -468,12 +578,14 @@ mod tests {
             let ids: Vec<u32> = (1000..1000 + count as u32).collect();
             let layout = build_layout_string_direct(280, 80, &ids, 0).unwrap();
             let found = extract_pane_ids_in_order(&layout);
-            assert_eq!(found, ids,
+            assert_eq!(
+                found, ids,
                 "layout string pane order != sequential for {} panes.\n\
                  Expected (grid_positions order): {:?}\n\
                  Got (layout tree-walk order):    {:?}\n\
                  Layout: {}",
-                count, ids, found, layout);
+                count, ids, found, layout
+            );
         }
     }
 
@@ -484,9 +596,14 @@ mod tests {
             let rects = grid_positions(4, w, 80);
             let left_w = rects[0].w;
             let right_w = rects[1].w;
-            assert!((left_w as i32 - right_w as i32).abs() <= 1,
+            assert!(
+                (left_w as i32 - right_w as i32).abs() <= 1,
                 "4-pane columns unequal at width={}: left={}, right={} (diff={})",
-                w, left_w, right_w, (right_w as i32 - left_w as i32).abs());
+                w,
+                left_w,
+                right_w,
+                (right_w as i32 - left_w as i32).abs()
+            );
         }
     }
 
@@ -500,6 +617,10 @@ mod tests {
         assert!(s.contains(",4"));
         // With border_top=1, top row should be 12 (not 11) to compensate
         assert!(s.contains("80x12,0,0"), "top row should be 12 high: {}", s);
-        assert!(s.contains("80x11,0,13"), "bottom row should be 11 high at y=13: {}", s);
+        assert!(
+            s.contains("80x11,0,13"),
+            "bottom row should be 11 high at y=13: {}",
+            s
+        );
     }
 }

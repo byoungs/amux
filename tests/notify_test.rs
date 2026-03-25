@@ -63,16 +63,10 @@ fn rejects_empty() {
 
 #[test]
 fn notification_message_formats_correctly() {
-    assert_eq!(
-        amux::notify::format_message(1),
-        "1 agent is ready for you"
-    );
+    assert_eq!(amux::notify::format_message(1), "1 agent is ready for you");
     assert_eq!(
         amux::notify::format_message(3),
         "3 agents are ready for you"
     );
-    assert_eq!(
-        amux::notify::format_message(0),
-        "All agents are working"
-    );
+    assert_eq!(amux::notify::format_message(0), "All agents are working");
 }

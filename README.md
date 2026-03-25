@@ -43,13 +43,32 @@ flow of AI coding:
 
 ## Quick Start
 
-```bash
-# Install (requires Rust and tmux 3.2+)
-cargo install --path .
+### One-Line Install
 
-# Launch
+```bash
+curl -sSL https://raw.githubusercontent.com/byoungs/amux/main/scripts/install.sh | bash
+```
+
+### Manual Install
+
+```bash
+git clone https://github.com/byoungs/amux.git
+cd amux
+make setup
 amux
 ```
+
+### What Setup Does
+
+`make setup` prepares your environment (safe to re-run anytime):
+
+1. Verifies Rust toolchain is installed
+2. Checks tmux version and warns if tmux HEAD is needed (for flicker-free rendering)
+3. Builds the amux binary
+4. Creates a symlink so `amux` is on your PATH
+5. Installs the Claude Code notification hook for attention management
+
+If you move the repo, re-run `make setup` to update the symlink.
 
 Create panes with `Ctrl-n`, zoom in with `Ctrl-+`, zoom out with `Ctrl--`.
 
@@ -181,27 +200,23 @@ Pane titles are auto-generated from the working directory and git branch:
 
 ## Requirements
 
-- **tmux (HEAD build required for flicker-free rendering)** — amux requires
-  tmux 3.2+ for pane options, layout strings, and key tables. However, **tmux
-  3.6a and earlier have a rendering bug** that causes visible screen flashing
-  when Claude Code redraws its UI (e.g., expanding/collapsing tool output with
-  Ctrl-O). This is fixed in tmux HEAD by [PR #4744](https://github.com/tmux/tmux/pull/4744),
-  which adds pane-level synchronized output buffering — the same mechanism that
-  makes iTerm2 flicker-free. Until tmux 3.7 is released, you need to build from
-  HEAD:
-  ```bash
-  # macOS (Homebrew)
-  brew unlink tmux
-  brew install tmux --HEAD
+- **tmux HEAD** — required for flicker-free rendering. `make setup` checks
+  your version and provides install instructions. See
+  [PR #4744](https://github.com/tmux/tmux/pull/4744) for details.
+- **Rust** — for building from source. Install from [rustup.rs](https://rustup.rs).
+- **macOS or Linux** — uses libc for raw terminal I/O in picker UIs.
 
-  # Linux (from source)
-  git clone https://github.com/tmux/tmux.git
-  cd tmux && sh autogen.sh && ./configure && make && sudo make install
-  ```
-  tmux is BSD-licensed. A future version of amux may bundle a patched tmux
-  to simplify installation.
-- **Rust** — for building from source (`cargo install --path .`)
-- **macOS or Linux** — uses libc for raw terminal I/O in picker UIs
+## Development
+
+See [docs/development.md](docs/development.md) for the full contributor
+guide. Quick reference:
+
+```bash
+make dev       # Build — live on next keypress
+make test      # Run tests
+make refresh   # Re-apply tmux config after changing config.rs
+make check     # Build + test
+```
 
 ## Architecture
 

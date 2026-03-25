@@ -9,9 +9,10 @@
 // different numbers, DCS, APC, PM). Pure logic — no I/O.
 
 /// Scanner state machine.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ScanState {
     /// Default state — processing normal output.
+    #[default]
     Normal,
     /// Just saw ESC (0x1B). Next byte determines sequence type.
     Esc,
@@ -30,7 +31,7 @@ pub enum ScanState {
 
 impl ScanState {
     pub fn new() -> Self {
-        ScanState::Normal
+        Self::default()
     }
 }
 
@@ -49,14 +50,23 @@ fn scan_byte(state: &mut ScanState, byte: u8) -> bool {
         // Normal: BEL is a real bell
         (ScanState::Normal, 0x07) => true,
         // Normal: ESC starts an escape sequence
-        (ScanState::Normal, 0x1B) => { *state = ScanState::Esc; false }
+        (ScanState::Normal, 0x1B) => {
+            *state = ScanState::Esc;
+            false
+        }
         // Normal: anything else
         (ScanState::Normal, _) => false,
 
         // Esc: ] starts OSC — need to collect the number
-        (ScanState::Esc, b']') => { *state = ScanState::OscNum(Vec::new()); false }
+        (ScanState::Esc, b']') => {
+            *state = ScanState::OscNum(Vec::new());
+            false
+        }
         // Esc: P _ ^ start non-OSC string sequences
-        (ScanState::Esc, b'P' | b'_' | b'^') => { *state = ScanState::StringSeq; false }
+        (ScanState::Esc, b'P' | b'_' | b'^') => {
+            *state = ScanState::StringSeq;
+            false
+        }
         // Esc: anything else — not a string sequence
         (ScanState::Esc, _) => false, // state already set to Normal
 
@@ -67,9 +77,7 @@ fn scan_byte(state: &mut ScanState, byte: u8) -> bool {
             false
         }
         // OscNum: BEL terminates OSC before any semicolon (e.g. ESC ] 9 BEL)
-        (ScanState::OscNum(num), 0x07) => {
-            is_notification_osc(&num)
-        }
+        (ScanState::OscNum(num), 0x07) => is_notification_osc(&num),
         // OscNum: ESC might start ST
         (ScanState::OscNum(num), 0x1B) => {
             let is_notif = is_notification_osc(&num);
@@ -113,14 +121,23 @@ fn scan_byte(state: &mut ScanState, byte: u8) -> bool {
         // StringSeq: BEL terminates (never an alert for DCS/APC/PM)
         (ScanState::StringSeq, 0x07) => false, // state already Normal
         // StringSeq: ESC might be ST
-        (ScanState::StringSeq, 0x1B) => { *state = ScanState::StringEsc; false }
+        (ScanState::StringSeq, 0x1B) => {
+            *state = ScanState::StringEsc;
+            false
+        }
         // StringSeq: anything else
-        (ScanState::StringSeq, _) => { *state = ScanState::StringSeq; false }
+        (ScanState::StringSeq, _) => {
+            *state = ScanState::StringSeq;
+            false
+        }
 
         // StringEsc: \ completes ST
         (ScanState::StringEsc, b'\\') => false, // state already Normal
         // StringEsc: anything else — still in sequence
-        (ScanState::StringEsc, _) => { *state = ScanState::StringSeq; false }
+        (ScanState::StringEsc, _) => {
+            *state = ScanState::StringSeq;
+            false
+        }
     }
 }
 

@@ -34,10 +34,7 @@ pub fn is_terminal_frontmost() -> bool {
 /// Returns None on non-macOS or if the command fails.
 fn frontmost_app() -> Option<String> {
     // Get the ASN (Application Serial Number) of the frontmost app
-    let front = Command::new("lsappinfo")
-        .arg("front")
-        .output()
-        .ok()?;
+    let front = Command::new("lsappinfo").arg("front").output().ok()?;
     let asn = String::from_utf8_lossy(&front.stdout).trim().to_string();
     if asn.is_empty() {
         return None;

@@ -73,8 +73,11 @@ fn border_format_includes_alert_conditional() {
         .output()
         .expect("show-options");
     let format = String::from_utf8_lossy(&output.stdout);
-    assert!(format.contains("@amux-alert"),
-        "border format should reference @amux-alert: {}", format);
+    assert!(
+        format.contains("@amux-alert"),
+        "border format should reference @amux-alert: {}",
+        format
+    );
 
     cleanup(&session);
 }
@@ -92,8 +95,11 @@ fn status_bar_includes_alert_badge() {
         .expect("show-options");
     let status = String::from_utf8_lossy(&output.stdout);
 
-    assert!(status.contains("amux-alert-count") || status.contains("⬤"),
-        "status-right should include alert badge logic: {}", status);
+    assert!(
+        status.contains("amux-alert-count") || status.contains("⬤"),
+        "status-right should include alert badge logic: {}",
+        status
+    );
 
     cleanup(&session);
 }
@@ -211,8 +217,10 @@ fn focusing_pane_clears_alert() {
     amux::tmux::select_pane(&session, 1).expect("select");
     amux::tmux::dismiss_alert(&session, 1).expect("dismiss");
 
-    assert!(!amux::tmux::get_alert(&session, 1).expect("get"),
-        "alert should be cleared after focusing");
+    assert!(
+        !amux::tmux::get_alert(&session, 1).expect("get"),
+        "alert should be cleared after focusing"
+    );
     assert_eq!(amux::tmux::get_alert_count(&session).expect("count"), 0);
 
     cleanup(&session);
@@ -227,7 +235,11 @@ fn notification_timestamp_persists() {
     amux::tmux::set_last_notification_time(&session).expect("set");
 
     let elapsed = amux::tmux::get_last_notification_elapsed(&session).expect("get");
-    assert!(elapsed < 2, "timestamp should be recent, got {}s elapsed", elapsed);
+    assert!(
+        elapsed < 2,
+        "timestamp should be recent, got {}s elapsed",
+        elapsed
+    );
 
     cleanup(&session);
 }
@@ -316,8 +328,10 @@ fn scenario_two_panes_alert_independently() {
     let count = amux::alert::count_alerts(&states);
     amux::tmux::set_alert_count(&session, count).expect("count");
 
-    assert!(!amux::tmux::get_alert(&session, 0).expect("get"),
-        "active pane should not be alerted");
+    assert!(
+        !amux::tmux::get_alert(&session, 0).expect("get"),
+        "active pane should not be alerted"
+    );
     assert!(amux::tmux::get_alert(&session, 1).expect("get"));
     assert!(amux::tmux::get_alert(&session, 2).expect("get"));
     assert_eq!(count, 2);
@@ -352,8 +366,14 @@ fn scenario_pane_close_updates_alert_count() {
 fn notification_messages() {
     assert_eq!(amux::notify::format_message(0), "All agents are working");
     assert_eq!(amux::notify::format_message(1), "1 agent is ready for you");
-    assert_eq!(amux::notify::format_message(2), "2 agents are ready for you");
-    assert_eq!(amux::notify::format_message(5), "5 agents are ready for you");
+    assert_eq!(
+        amux::notify::format_message(2),
+        "2 agents are ready for you"
+    );
+    assert_eq!(
+        amux::notify::format_message(5),
+        "5 agents are ready for you"
+    );
 }
 
 #[test]
@@ -365,11 +385,20 @@ fn bell_watch_pipe_is_set_up_on_refresh() {
 
     // Check that pipe-pane was set up on the pane
     let output = Command::new("tmux")
-        .args(["display-message", "-t", &format!("{}:.0", session), "-p", "#{pane_pipe}"])
+        .args([
+            "display-message",
+            "-t",
+            &format!("{}:.0", session),
+            "-p",
+            "#{pane_pipe}",
+        ])
         .output()
         .expect("display-message");
     let pipe = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    assert_eq!(pipe, "1", "pipe-pane should be active on pane 0 after config");
+    assert_eq!(
+        pipe, "1",
+        "pipe-pane should be active on pane 0 after config"
+    );
 
     cleanup(&session);
 }

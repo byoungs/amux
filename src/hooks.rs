@@ -28,10 +28,9 @@ pub fn ensure_claude_hook() -> Result<()> {
 
     // Read existing settings or start with empty object
     let mut settings: serde_json::Value = if path.exists() {
-        let content = std::fs::read_to_string(&path)
-            .context("failed to read ~/.claude/settings.json")?;
-        serde_json::from_str(&content)
-            .context("failed to parse ~/.claude/settings.json")?
+        let content =
+            std::fs::read_to_string(&path).context("failed to read ~/.claude/settings.json")?;
+        serde_json::from_str(&content).context("failed to parse ~/.claude/settings.json")?
     } else {
         serde_json::json!({})
     };
@@ -67,10 +66,9 @@ pub fn ensure_claude_hook() -> Result<()> {
     arr.push(hook_entry);
 
     // Write back with pretty formatting
-    let content = serde_json::to_string_pretty(&settings)
-        .context("failed to serialize settings")?;
-    std::fs::write(&path, content)
-        .context("failed to write ~/.claude/settings.json")?;
+    let content =
+        serde_json::to_string_pretty(&settings).context("failed to serialize settings")?;
+    std::fs::write(&path, content).context("failed to write ~/.claude/settings.json")?;
 
     eprintln!("Installed amux notification hook in ~/.claude/settings.json");
 

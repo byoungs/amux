@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 description = "Terminal workflow manager for AI coding — orchestrates tmux with three-level zoom, spatial layout, and workspace switching"
 license = "MIT"
-repository = "https://github.com/brianyoungs/amux"
+repository = "https://github.com/byoungs/amux"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

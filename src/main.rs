@@ -79,6 +79,8 @@ enum Commands {
         #[arg(long)]
         session: String,
     },
+    /// Install Claude Code notification hook (called by make setup)
+    HookInstall,
 }
 
 /// The amux session name. AMUX_SESSION env var takes priority (used by hooks
@@ -103,6 +105,11 @@ fn session_name() -> String {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // hook-install doesn't need tmux — handle before version check
+    if matches!(cli.command, Some(Commands::HookInstall)) {
+        return amux::hooks::ensure_claude_hook();
+    }
+
     tmux::check_version()?;
 
     match cli.command {
@@ -123,6 +130,7 @@ fn main() -> Result<()> {
         Some(Commands::Send) => cmd_send(),
         Some(Commands::AlertPane { pane }) => cmd_alert_pane(pane),
         Some(Commands::BellWatch { pane, session }) => cmd_bell_watch(session, pane),
+        Some(Commands::HookInstall) => unreachable!("HookInstall handled before tmux check"),
         None => {
             // Default: start if no session exists, refresh+attach if it does
             let session = session_name();
@@ -207,8 +215,10 @@ fn cmd_list() -> Result<()> {
 
     for pane in &panes {
         let indicator = if pane.active { ">" } else { " " };
-        println!("{} {} {} ({}x{})",
-            indicator, pane.index, pane.title, pane.width, pane.height);
+        println!(
+            "{} {} {} ({}x{})",
+            indicator, pane.index, pane.title, pane.width, pane.height
+        );
     }
 
     Ok(())
@@ -224,7 +234,10 @@ fn cmd_refresh() -> Result<()> {
     let session = session_name();
 
     if !tmux::session_exists(&session) {
-        anyhow::bail!("No amux session '{}' found. Run `amux start` to create one.", session);
+        anyhow::bail!(
+            "No amux session '{}' found. Run `amux start` to create one.",
+            session
+        );
     }
 
     // Mark as amux-managed (for space listing)
@@ -261,11 +274,21 @@ fn cmd_split_start() -> Result<()> {
 
     // Save the active pane index to a tmux environment variable
     let panes = tmux::list_panes(&session)?;
-    let active = panes.iter().find(|p| p.active).map(|p| p.index).unwrap_or(0);
+    let active = panes
+        .iter()
+        .find(|p| p.active)
+        .map(|p| p.index)
+        .unwrap_or(0);
 
     // Store in tmux session environment
     let _output = std::process::Command::new("tmux")
-        .args(["set-environment", "-t", &session, "AMUX_SPLIT_FIRST", &active.to_string()])
+        .args([
+            "set-environment",
+            "-t",
+            &session,
+            "AMUX_SPLIT_FIRST",
+            &active.to_string(),
+        ])
         .output()
         .context("failed to set split env")?;
 
@@ -451,30 +474,34 @@ fn read_input_raw() -> Option<String> {
             break None;
         }
         match buf[0] {
-            0x1B => break None,           // Escape — cancel
+            0x1B => break None, // Escape — cancel
             b'\r' | b'\n' => {
                 print!("\r\n");
                 std::io::stdout().flush().ok();
                 break Some(input);
             }
-            0x7F | 0x08 => {              // Backspace/Delete
+            0x7F | 0x08 => {
+                // Backspace/Delete
                 if !input.is_empty() {
                     input.pop();
-                    print!("\x08 \x08");   // erase character
+                    print!("\x08 \x08"); // erase character
                     std::io::stdout().flush().ok();
                 }
             }
-            b if b >= 0x20 => {           // Printable character
+            b if b >= 0x20 => {
+                // Printable character
                 input.push(b as char);
                 print!("{}", b as char);
                 std::io::stdout().flush().ok();
             }
-            _ => {}                       // Ignore control chars
+            _ => {} // Ignore control chars
         }
     };
 
     // Restore terminal
-    unsafe { libc::tcsetattr(fd, libc::TCSANOW, &orig); }
+    unsafe {
+        libc::tcsetattr(fd, libc::TCSANOW, &orig);
+    }
 
     result
 }
@@ -565,7 +592,9 @@ fn enter_raw_mode() -> libc::termios {
 /// Restore terminal mode.
 fn restore_term(orig: &libc::termios) {
     let fd = std::io::stdin().as_raw_fd();
-    unsafe { libc::tcsetattr(fd, libc::TCSANOW, orig); }
+    unsafe {
+        libc::tcsetattr(fd, libc::TCSANOW, orig);
+    }
 }
 
 /// Switch to a space with smart landing based on alert state.
@@ -615,20 +644,34 @@ fn cmd_spaces() -> Result<()> {
             println!("  \x1b[90m(no spaces yet)\x1b[0m\n");
         } else {
             for (i, s) in sessions.iter().enumerate() {
-                let current_dot = if *s == current { " \x1b[32m●\x1b[0m" } else { "" };
-                let arrow = if i == selected { "\x1b[36m→\x1b[0m" } else { " " };
+                let current_dot = if *s == current {
+                    " \x1b[32m●\x1b[0m"
+                } else {
+                    ""
+                };
+                let arrow = if i == selected {
+                    "\x1b[36m→\x1b[0m"
+                } else {
+                    " "
+                };
                 let name_style = if i == selected { "\x1b[1m" } else { "" };
 
                 let alert_count = tmux::get_alert_count(s).unwrap_or(0);
                 let alert_dots = if alert_count > 0 {
-                    format!(" \x1b[38;5;214m{}\x1b[0m",
-                        "⬤".repeat(alert_count.min(5)))
+                    format!(" \x1b[38;5;214m{}\x1b[0m", "⬤".repeat(alert_count.min(5)))
                 } else {
                     String::new()
                 };
 
-                println!("  {} \x1b[33m{}\x1b[0m {}{}{}{}",
-                    arrow, i + 1, name_style, s, current_dot, alert_dots);
+                println!(
+                    "  {} \x1b[33m{}\x1b[0m {}{}{}{}",
+                    arrow,
+                    i + 1,
+                    name_style,
+                    s,
+                    current_dot,
+                    alert_dots
+                );
             }
             println!();
         }
@@ -661,7 +704,7 @@ fn cmd_spaces() -> Result<()> {
                 }
                 return Ok(());
             }
-            RawKey::Char(b) if b >= b'1' && b <= b'9' => {
+            RawKey::Char(b) if (b'1'..=b'9').contains(&b) => {
                 restore_term(&orig);
                 let num = (b - b'0') as usize;
                 if num >= 1 && num <= sessions.len() {
@@ -715,9 +758,7 @@ fn cmd_send() -> Result<()> {
     let current = current_session_from_tmux()?;
     let sessions = tmux::list_focus_sessions()?;
 
-    let other_sessions: Vec<&String> = sessions.iter()
-        .filter(|s| **s != current)
-        .collect();
+    let other_sessions: Vec<&String> = sessions.iter().filter(|s| **s != current).collect();
 
     let mut selected: usize = 0;
     let orig = enter_raw_mode();
@@ -727,10 +768,13 @@ fn cmd_send() -> Result<()> {
         println!("\n  \x1b[1;36m Send pane to space \x1b[0m\n");
 
         for (i, s) in other_sessions.iter().enumerate() {
-            let arrow = if i == selected { "\x1b[36m→\x1b[0m" } else { " " };
+            let arrow = if i == selected {
+                "\x1b[36m→\x1b[0m"
+            } else {
+                " "
+            };
             let name_style = if i == selected { "\x1b[1m" } else { "" };
-            println!("  {} \x1b[33m{}\x1b[0m {}{}",
-                arrow, i + 1, name_style, s);
+            println!("  {} \x1b[33m{}\x1b[0m {}{}", arrow, i + 1, name_style, s);
         }
 
         if other_sessions.is_empty() {
@@ -746,7 +790,7 @@ fn cmd_send() -> Result<()> {
                 return Ok(());
             }
             RawKey::Up => {
-                if selected > 0 { selected -= 1; }
+                selected = selected.saturating_sub(1);
             }
             RawKey::Down => {
                 if !other_sessions.is_empty() && selected < other_sessions.len() - 1 {
@@ -761,7 +805,7 @@ fn cmd_send() -> Result<()> {
                     return Ok(());
                 }
             }
-            RawKey::Char(b) if b >= b'1' && b <= b'9' => {
+            RawKey::Char(b) if (b'1'..=b'9').contains(&b) => {
                 let num = (b - b'0') as usize;
                 if num >= 1 && num <= other_sessions.len() {
                     restore_term(&orig);
@@ -857,7 +901,9 @@ fn cmd_bell_watch(session: String, pane_index: usize) -> Result<()> {
 
     loop {
         let n = std::io::stdin().read(&mut buf)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
 
         let bells = amux::bell::scan_bytes(&mut state, &buf[..n]);
         if bells > 0 {
@@ -880,9 +926,7 @@ fn build_state(session: &str) -> Result<AmuxState> {
         })
         .collect();
 
-    let selected = panes.iter()
-        .position(|p| p.active)
-        .unwrap_or(0);
+    let selected = panes.iter().position(|p| p.active).unwrap_or(0);
 
     Ok(AmuxState {
         version: 2,

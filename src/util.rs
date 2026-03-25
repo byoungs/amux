@@ -7,12 +7,11 @@ pub fn auto_title(dir: &str) -> String {
     let abs = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.into());
     let abs_str = abs.to_string_lossy();
 
-    let project = extract_src_project(&abs_str)
-        .unwrap_or_else(|| {
-            abs.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "session".to_string())
-        });
+    let project = extract_src_project(&abs_str).unwrap_or_else(|| {
+        abs.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "session".to_string())
+    });
 
     let branch = git_worktree_or_branch(dir);
 

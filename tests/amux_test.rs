@@ -16,7 +16,13 @@ fn cleanup(session: &str) {
 
 fn tmux_list_panes(session: &str) -> Vec<String> {
     let output = Command::new("tmux")
-        .args(["list-panes", "-t", session, "-F", "#{pane_index}:#{@amux-title}"])
+        .args([
+            "list-panes",
+            "-t",
+            session,
+            "-F",
+            "#{pane_index}:#{@amux-title}",
+        ])
         .output()
         .expect("list-panes");
     String::from_utf8_lossy(&output.stdout)
@@ -27,8 +33,15 @@ fn tmux_list_panes(session: &str) -> Vec<String> {
 
 fn pane_positions(session: &str) -> Vec<(i32, i32)> {
     let output = std::process::Command::new("tmux")
-        .args(["list-panes", "-t", session, "-F", "#{pane_left} #{pane_top}"])
-        .output().expect("list");
+        .args([
+            "list-panes",
+            "-t",
+            session,
+            "-F",
+            "#{pane_left} #{pane_top}",
+        ])
+        .output()
+        .expect("list");
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|l| !l.is_empty())
@@ -67,7 +80,11 @@ fn config_sets_border_style() {
     let border_status = tmux_option(&session, "pane-border-status");
     assert_eq!(border_status, "top");
     let border_style = tmux_option(&session, "pane-active-border-style");
-    assert!(border_style.contains("colour43"), "active border should be bright teal: {}", border_style);
+    assert!(
+        border_style.contains("colour43"),
+        "active border should be bright teal: {}",
+        border_style
+    );
     cleanup(&session);
 }
 
@@ -89,7 +106,11 @@ fn pane_title_is_set() {
     amux::tmux::create_session(&session).expect("create");
     amux::tmux::set_title(&session, 0, "my-project").expect("title");
     let panes = tmux_list_panes(&session);
-    assert!(panes[0].contains("my-project"), "title should be set: {:?}", panes);
+    assert!(
+        panes[0].contains("my-project"),
+        "title should be set: {:?}",
+        panes
+    );
     cleanup(&session);
 }
 
@@ -342,7 +363,8 @@ fn zoom_level_transitions() {
     assert_eq!(amux::tmux::get_level(&session).expect("get"), 1);
 
     // L1 → L2 via smart_resize
-    amux::tmux::smart_resize(&session, 0, amux::MIN_PANE_COLS, amux::MIN_PANE_ROWS).expect("resize");
+    amux::tmux::smart_resize(&session, 0, amux::MIN_PANE_COLS, amux::MIN_PANE_ROWS)
+        .expect("resize");
     amux::tmux::set_level(&session, 2).expect("set");
     assert_eq!(amux::tmux::get_level(&session).expect("get"), 2);
 
@@ -376,13 +398,19 @@ fn smart_resize_with_many_panes() {
 
     // Select pane 0 and smart resize
     amux::tmux::select_pane(&session, 0).expect("select");
-    amux::tmux::smart_resize(&session, 0, amux::MIN_PANE_COLS, amux::MIN_PANE_ROWS).expect("resize");
+    amux::tmux::smart_resize(&session, 0, amux::MIN_PANE_COLS, amux::MIN_PANE_ROWS)
+        .expect("resize");
 
     // Verify pane 0 is at least close to minimum
     let panes = amux::tmux::list_panes(&session).expect("list");
     let p0 = panes.iter().find(|p| p.index == 0).expect("pane 0");
     // tmux may not achieve exact size due to constraints, but it should be bigger
-    assert!(p0.width > 60, "pane 0 should be enlarged, got {}x{}", p0.width, p0.height);
+    assert!(
+        p0.width > 60,
+        "pane 0 should be enlarged, got {}x{}",
+        p0.width,
+        p0.height
+    );
 
     // Restore tiled — all should be equal again
     amux::tmux::restore_tiled(&session).expect("restore");
@@ -390,7 +418,11 @@ fn smart_resize_with_many_panes() {
     let widths: Vec<u16> = panes.iter().map(|p| p.width).collect();
     let max_w = widths.iter().max().unwrap();
     let min_w = widths.iter().min().unwrap();
-    assert!(max_w - min_w <= 2, "should be roughly equal after restore: {:?}", widths);
+    assert!(
+        max_w - min_w <= 2,
+        "should be roughly equal after restore: {:?}",
+        widths
+    );
 
     cleanup(&session);
 }
@@ -416,8 +448,18 @@ fn smart_resize_preserves_sufficient_dimensions() {
     // Use min_rows much smaller than actual height so only width needs enlarging.
     let min_cols = 60;
     let min_rows = 5;
-    assert!(p0.width < min_cols, "width {} should be below min {}", p0.width, min_cols);
-    assert!(height_before > min_rows, "height {} should be above min {}", height_before, min_rows);
+    assert!(
+        p0.width < min_cols,
+        "width {} should be below min {}",
+        p0.width,
+        min_cols
+    );
+    assert!(
+        height_before > min_rows,
+        "height {} should be above min {}",
+        height_before,
+        min_rows
+    );
 
     amux::tmux::smart_resize(&session, 0, min_cols, min_rows).expect("resize");
 
@@ -425,10 +467,14 @@ fn smart_resize_preserves_sufficient_dimensions() {
     let p0_after = panes.iter().find(|p| p.index == 0).expect("pane 0");
 
     // Height should NOT have shrunk toward min_rows
-    assert!(p0_after.height >= height_before.saturating_sub(1),
+    assert!(
+        p0_after.height >= height_before.saturating_sub(1),
         "smart_resize shrunk height from {} to {} (min was {}). \
          Should only resize dimensions that are below minimum.",
-        height_before, p0_after.height, min_rows);
+        height_before,
+        p0_after.height,
+        min_rows
+    );
 
     cleanup(&session);
 }
@@ -523,10 +569,17 @@ fn layout_two_panes_always_left_right() {
     // Check via tmux that pane tops are the same
     let output = std::process::Command::new("tmux")
         .args(["list-panes", "-t", &session, "-F", "#{pane_top}"])
-        .output().expect("list");
+        .output()
+        .expect("list");
     let tops: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines().map(|l| l.to_string()).collect();
-    assert_eq!(tops[0], tops[1], "2 panes should be side-by-side (same top): {:?}", tops);
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
+    assert_eq!(
+        tops[0], tops[1],
+        "2 panes should be side-by-side (same top): {:?}",
+        tops
+    );
 
     cleanup(&session);
 }
@@ -554,8 +607,12 @@ fn layout_close_preserves_positions() {
     assert_eq!(panes_after.len(), 3);
 
     // Pane 0 should be taller (expanded from half-height in 2x2 to full-height in 3-pane layout)
-    assert!(panes_after[0].height > p0_before.1,
-        "pane 0 should expand: before_h={}, after_h={}", p0_before.1, panes_after[0].height);
+    assert!(
+        panes_after[0].height > p0_before.1,
+        "pane 0 should expand: before_h={}, after_h={}",
+        p0_before.1,
+        panes_after[0].height
+    );
 
     cleanup(&session);
 }
@@ -570,18 +627,32 @@ fn layout_four_panes_is_2x2() {
     }
 
     let output = std::process::Command::new("tmux")
-        .args(["list-panes", "-t", &session, "-F", "#{pane_left} #{pane_top}"])
-        .output().expect("list");
+        .args([
+            "list-panes",
+            "-t",
+            &session,
+            "-F",
+            "#{pane_left} #{pane_top}",
+        ])
+        .output()
+        .expect("list");
     let positions: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect();
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect();
 
     assert_eq!(positions.len(), 4, "should have 4 panes");
 
     // Should have 2 unique x positions (2 columns) and 2 unique y positions (2 rows)
-    let xs: std::collections::HashSet<&str> = positions.iter()
-        .map(|p| p.split(' ').next().unwrap()).collect();
-    let ys: std::collections::HashSet<&str> = positions.iter()
-        .map(|p| p.split(' ').nth(1).unwrap()).collect();
+    let xs: std::collections::HashSet<&str> = positions
+        .iter()
+        .map(|p| p.split(' ').next().unwrap())
+        .collect();
+    let ys: std::collections::HashSet<&str> = positions
+        .iter()
+        .map(|p| p.split(' ').nth(1).unwrap())
+        .collect();
 
     assert_eq!(xs.len(), 2, "should have 2 columns: {:?}", positions);
     assert_eq!(ys.len(), 2, "should have 2 rows: {:?}", positions);
@@ -606,8 +677,11 @@ fn spatial_stickiness_kill_and_recreate() {
 
     // Pane 0 (was top-left) should still be on the left side
     let positions_after_kill = pane_positions(&session);
-    assert!(positions_after_kill[0].0 < 10,
-        "pane 0 should stay on left after kill: {:?}", positions_after_kill);
+    assert!(
+        positions_after_kill[0].0 < 10,
+        "pane 0 should stay on left after kill: {:?}",
+        positions_after_kill
+    );
 
     // Create a new pane — back to 4
     amux::tmux::create_pane(&session, None).expect("new");
@@ -617,7 +691,8 @@ fn spatial_stickiness_kill_and_recreate() {
     let ids_after = amux::tmux::get_pane_ids(&session).expect("ids");
 
     // Find surviving pane IDs (those in both before and after)
-    let survivors: Vec<u32> = ids_before.iter()
+    let survivors: Vec<u32> = ids_before
+        .iter()
         .filter(|id| ids_after.contains(id))
         .copied()
         .collect();
@@ -629,9 +704,16 @@ fn spatial_stickiness_kill_and_recreate() {
         let (bx, by) = positions_before[before_idx];
         let (ax, ay) = positions_after_create[after_idx];
         let dist = ((bx - ax).abs() + (by - ay).abs()) as u32;
-        assert!(dist < 20,
+        assert!(
+            dist < 20,
             "pane %{} moved too far: ({},{}) -> ({},{}), dist={}",
-            surv_id, bx, by, ax, ay, dist);
+            surv_id,
+            bx,
+            by,
+            ax,
+            ay,
+            dist
+        );
     }
 
     cleanup(&session);
@@ -652,7 +734,10 @@ fn apply_layout_twice_preserves_centers() {
     amux::tmux::apply_grid_layout(&session).expect("layout 2");
     let positions_2 = pane_positions(&session);
 
-    assert_eq!(positions_1, positions_2, "layout should be stable on reapply");
+    assert_eq!(
+        positions_1, positions_2,
+        "layout should be stable on reapply"
+    );
 
     cleanup(&session);
 }
@@ -688,8 +773,15 @@ fn stickiness_survives_rapid_changes() {
 
 fn pane_sizes(session: &str) -> Vec<(u16, u16)> {
     let output = std::process::Command::new("tmux")
-        .args(["list-panes", "-t", session, "-F", "#{pane_width} #{pane_height}"])
-        .output().expect("list-panes");
+        .args([
+            "list-panes",
+            "-t",
+            session,
+            "-F",
+            "#{pane_width} #{pane_height}",
+        ])
+        .output()
+        .expect("list-panes");
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|l| !l.is_empty())
@@ -719,9 +811,12 @@ fn four_panes_equal_height_with_border_status() {
     let max_h = *heights.iter().max().unwrap();
     let min_h = *heights.iter().min().unwrap();
 
-    assert!(max_h - min_h <= 1,
+    assert!(
+        max_h - min_h <= 1,
         "all panes should have roughly equal height, got {:?} (diff {})",
-        sizes, max_h - min_h);
+        sizes,
+        max_h - min_h
+    );
 
     cleanup(&session);
 }
@@ -742,9 +837,12 @@ fn three_panes_right_column_equal_with_border_status() {
     assert_eq!(sizes.len(), 3);
 
     let right_diff = (sizes[1].1 as i32 - sizes[2].1 as i32).unsigned_abs() as u16;
-    assert!(right_diff <= 1,
+    assert!(
+        right_diff <= 1,
         "right column panes should have roughly equal height: {:?} (diff {})",
-        sizes, right_diff);
+        sizes,
+        right_diff
+    );
 
     cleanup(&session);
 }
@@ -768,9 +866,12 @@ fn six_panes_equal_height_with_border_status() {
     let max_h = *heights.iter().max().unwrap();
     let min_h = *heights.iter().min().unwrap();
 
-    assert!(max_h - min_h <= 1,
+    assert!(
+        max_h - min_h <= 1,
         "all panes should have roughly equal height, got {:?} (diff {})",
-        sizes, max_h - min_h);
+        sizes,
+        max_h - min_h
+    );
 
     cleanup(&session);
 }

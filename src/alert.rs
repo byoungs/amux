@@ -14,11 +14,7 @@ pub enum LandingTarget {
 }
 
 /// Decide where to land when entering a space from the picker.
-pub fn smart_landing(
-    alert_states: &[bool],
-    prev_level: u8,
-    prev_pane: usize,
-) -> LandingTarget {
+pub fn smart_landing(alert_states: &[bool], prev_level: u8, prev_pane: usize) -> LandingTarget {
     let alert_count = count_alerts(alert_states);
 
     if alert_count == 1 {
@@ -26,6 +22,9 @@ pub fn smart_landing(
         LandingTarget::FocusPane { index, level: 2 }
     } else {
         let capped_level = if prev_level >= 3 { 2 } else { prev_level };
-        LandingTarget::Resume { level: capped_level, pane: prev_pane }
+        LandingTarget::Resume {
+            level: capped_level,
+            pane: prev_pane,
+        }
     }
 }

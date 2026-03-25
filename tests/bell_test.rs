@@ -78,7 +78,11 @@ fn state_carries_across_chunks() {
     let mut state = ScanState::new();
     let count1 = scan_bytes(&mut state, b"\x1b]0;ti");
     let count2 = scan_bytes(&mut state, b"tle\x07");
-    assert_eq!(count1 + count2, 0, "BEL terminating split OSC should not count");
+    assert_eq!(
+        count1 + count2,
+        0,
+        "BEL terminating split OSC should not count"
+    );
 }
 
 #[test]

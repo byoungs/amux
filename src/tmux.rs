@@ -30,7 +30,10 @@ pub fn create_session(session: &str) -> Result<()> {
         .output()
         .context("failed to create tmux session")?;
     if !output.status.success() {
-        bail!("tmux new-session failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "tmux new-session failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     Ok(())
 }
@@ -50,7 +53,10 @@ pub fn create_pane(session: &str, cwd: Option<&str>) -> Result<usize> {
         .output()
         .context("failed to create temp window")?;
     if !output.status.success() {
-        bail!("tmux new-window failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "tmux new-window failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     let new_pane_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
@@ -61,17 +67,23 @@ pub fn create_pane(session: &str, cwd: Option<&str>) -> Result<usize> {
         .output()
         .context("failed to join pane")?;
     if !output.status.success() {
-        bail!("tmux join-pane failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "tmux join-pane failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     // Apply clean grid layout
     let _ = apply_grid_layout(session);
     let panes = list_panes(session)?;
-    let active = panes.iter().find(|p| p.active).map(|p| p.index).unwrap_or(0);
+    let active = panes
+        .iter()
+        .find(|p| p.active)
+        .map(|p| p.index)
+        .unwrap_or(0);
     let _ = setup_bell_watch(session, active);
     Ok(active)
 }
-
 
 pub fn list_panes(session: &str) -> Result<Vec<PaneInfo>> {
     let output = Command::new("tmux")
@@ -90,7 +102,9 @@ pub fn list_panes(session: &str) -> Result<Vec<PaneInfo>> {
         .filter(|l| !l.is_empty())
         .filter_map(|line| {
             let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() < 5 { return None; }
+            if parts.len() < 5 {
+                return None;
+            }
             Some(PaneInfo {
                 index: parts[0].parse().ok()?,
                 title: parts[1].to_string(),
@@ -122,7 +136,9 @@ pub fn list_panes_in_window(session: &str, window: usize) -> Result<Vec<PaneInfo
         .filter(|l| !l.is_empty())
         .filter_map(|line| {
             let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() < 5 { return None; }
+            if parts.len() < 5 {
+                return None;
+            }
             Some(PaneInfo {
                 index: parts[0].parse().ok()?,
                 title: parts[1].to_string(),
@@ -157,12 +173,18 @@ pub fn set_title(session: &str, pane_index: usize, title: &str) -> Result<()> {
         .output()
         .context("failed to set @amux-title")?;
     if !output.status.success() {
-        bail!("tmux set-option @amux-title failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "tmux set-option @amux-title failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     Ok(())
 }
 
 /// Set or clear the alert flag on a pane.
+/// Sets explicit "1" or "0" values. The pane-border-format uses
+/// #{==:#{@amux-alert},1} (explicit comparison) to avoid tmux's truthy
+/// behavior where any non-empty value — including "0" — is true.
 pub fn set_alert(session: &str, pane_index: usize, alert: bool) -> Result<()> {
     let target = format!("{}:.{}", session, pane_index);
     let value = if alert { "1" } else { "0" };
@@ -171,7 +193,10 @@ pub fn set_alert(session: &str, pane_index: usize, alert: bool) -> Result<()> {
         .output()
         .context("failed to set @amux-alert")?;
     if !output.status.success() {
-        bail!("tmux set @amux-alert failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "tmux set @amux-alert failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     Ok(())
 }
@@ -195,7 +220,13 @@ pub fn alert_states(session: &str) -> Result<Vec<bool>> {
 /// Update the @amux-alert-count session option.
 pub fn set_alert_count(session: &str, count: usize) -> Result<()> {
     let _ = Command::new("tmux")
-        .args(["set-option", "-t", session, "@amux-alert-count", &count.to_string()])
+        .args([
+            "set-option",
+            "-t",
+            session,
+            "@amux-alert-count",
+            &count.to_string(),
+        ])
         .output();
     Ok(())
 }
@@ -231,14 +262,23 @@ pub fn toggle_zoom(session: &str) -> Result<()> {
         .output()
         .context("failed to toggle zoom")?;
     if !output.status.success() {
-        bail!("tmux resize-pane -Z failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "tmux resize-pane -Z failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     Ok(())
 }
 
 pub fn is_zoomed(session: &str) -> Result<bool> {
     let output = Command::new("tmux")
-        .args(["display-message", "-t", session, "-p", "#{window_zoomed_flag}"])
+        .args([
+            "display-message",
+            "-t",
+            session,
+            "-p",
+            "#{window_zoomed_flag}",
+        ])
         .output()
         .context("failed to check zoom state")?;
     Ok(String::from_utf8_lossy(&output.stdout).trim() == "1")
@@ -259,14 +299,12 @@ pub fn select_pane(session: &str, pane_index: usize) -> Result<()> {
 /// Get ordered list of tmux pane IDs (numeric, like 5, 268).
 pub fn get_pane_ids(session: &str) -> Result<Vec<u32>> {
     let output = Command::new("tmux")
-        .args([
-            "list-panes", "-t", session,
-            "-F", "#{pane_id}",
-        ])
+        .args(["list-panes", "-t", session, "-F", "#{pane_id}"])
         .output()
         .context("failed to list pane ids")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.lines()
+    Ok(stdout
+        .lines()
         .filter(|l| !l.is_empty())
         .filter_map(|l| l.trim_start_matches('%').parse().ok())
         .collect())
@@ -275,7 +313,13 @@ pub fn get_pane_ids(session: &str) -> Result<Vec<u32>> {
 /// Get the window dimensions.
 pub fn window_size(session: &str) -> Result<(u16, u16)> {
     let output = Command::new("tmux")
-        .args(["display-message", "-t", session, "-p", "#{window_width} #{window_height}"])
+        .args([
+            "display-message",
+            "-t",
+            session,
+            "-p",
+            "#{window_width} #{window_height}",
+        ])
         .output()
         .context("failed to get window size")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -289,10 +333,16 @@ pub fn window_size(session: &str) -> Result<(u16, u16)> {
 /// First resets to tiled (cleans tmux's split tree), then applies our layout.
 pub fn apply_grid_layout(session: &str) -> Result<()> {
     let ids = get_pane_ids(session)?;
-    if ids.is_empty() { return Ok(()); }
+    if ids.is_empty() {
+        return Ok(());
+    }
 
     let (w, h) = window_size(session)?;
-    let border_top = if has_pane_border_status(session) { 1u16 } else { 0 };
+    let border_top = if has_pane_border_status(session) {
+        1u16
+    } else {
+        0
+    };
     // Use effective height (minus border) for grid positions so slot centers
     // reflect the actual visible pane content area.
     let effective_h = h.saturating_sub(border_top);
@@ -324,7 +374,8 @@ pub fn apply_grid_layout(session: &str) -> Result<()> {
     // This prevents panes from shuffling during L2→L2 navigation.
     if count_changed {
         let rects = crate::layout::grid_positions(ids.len(), w, effective_h);
-        let slot_centers: Vec<crate::sticky::SlotCenter> = rects.iter()
+        let slot_centers: Vec<crate::sticky::SlotCenter> = rects
+            .iter()
             .map(|r| {
                 let (cx, cy) = crate::sticky::rect_center(r.x, r.y, r.w, r.h);
                 crate::sticky::SlotCenter { cx, cy }
@@ -336,9 +387,11 @@ pub fn apply_grid_layout(session: &str) -> Result<()> {
 
         // Build matching input — only include panes that have saved center data.
         // New panes (no center data) are excluded and fill leftover slots.
-        let match_input: Vec<crate::sticky::PaneCenter> = ids.iter()
+        let match_input: Vec<crate::sticky::PaneCenter> = ids
+            .iter()
             .filter_map(|&id| {
-                pane_centers.iter()
+                pane_centers
+                    .iter()
                     .find(|p| p.id == id)
                     .filter(|p| p.cx != 0 || p.cy != 0 || p.prev_cx.is_some())
                     .cloned()
@@ -347,14 +400,22 @@ pub fn apply_grid_layout(session: &str) -> Result<()> {
 
         // When adding panes, reserve the last N slots for new panes so they
         // always appear at the end of the display order.
-        let new_count = if going_up { ids.len() - match_input.len() } else { 0 };
+        let new_count = if going_up {
+            ids.len() - match_input.len()
+        } else {
+            0
+        };
         let available_slots = slot_centers.len().saturating_sub(new_count);
         let matched = crate::sticky::match_panes_to_slots(
-            &match_input, &slot_centers[..available_slots], going_up);
+            &match_input,
+            &slot_centers[..available_slots],
+            going_up,
+        );
 
         let matched_ids: Vec<u32> = matched.iter().filter_map(|&id| id).collect();
         let mut unmatched_iter = ids.iter().filter(|id| !matched_ids.contains(id));
-        let mut ordered_ids: Vec<u32> = matched.iter()
+        let mut ordered_ids: Vec<u32> = matched
+            .iter()
             .map(|opt| match opt {
                 Some(id) => *id,
                 None => *unmatched_iter.next().unwrap_or(&ids[0]),
@@ -387,8 +448,11 @@ pub fn apply_grid_layout(session: &str) -> Result<()> {
 fn save_pane_centers_from_positions(session: &str) -> Result<()> {
     let output = Command::new("tmux")
         .args([
-            "list-panes", "-t", session,
-            "-F", "#{pane_index}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}",
+            "list-panes",
+            "-t",
+            session,
+            "-F",
+            "#{pane_index}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}",
         ])
         .output()
         .context("failed to read pane positions")?;
@@ -396,7 +460,9 @@ fn save_pane_centers_from_positions(session: &str) -> Result<()> {
 
     for line in stdout.lines().filter(|l| !l.is_empty()) {
         let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 5 { continue; }
+        if parts.len() < 5 {
+            continue;
+        }
         let idx: usize = parts[0].parse().unwrap_or(0);
         let x: u16 = parts[1].parse().unwrap_or(0);
         let y: u16 = parts[2].parse().unwrap_or(0);
@@ -413,12 +479,14 @@ fn get_prev_pane_count(session: &str) -> i32 {
         .args(["show-environment", "-t", session, "AMUX_PANE_COUNT"])
         .output()
         .ok();
-    output.and_then(|o| {
-        String::from_utf8_lossy(&o.stdout)
-            .trim()
-            .strip_prefix("AMUX_PANE_COUNT=")
-            .and_then(|v| v.parse().ok())
-    }).unwrap_or(0)
+    output
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .strip_prefix("AMUX_PANE_COUNT=")
+                .and_then(|v| v.parse().ok())
+        })
+        .unwrap_or(0)
 }
 
 /// Check if pane-border-status is "top" (which steals a row from the top).
@@ -438,7 +506,13 @@ fn has_pane_border_status(session: &str) -> bool {
 
 fn set_prev_pane_count(session: &str, count: usize) {
     let _ = Command::new("tmux")
-        .args(["set-environment", "-t", session, "AMUX_PANE_COUNT", &count.to_string()])
+        .args([
+            "set-environment",
+            "-t",
+            session,
+            "AMUX_PANE_COUNT",
+            &count.to_string(),
+        ])
         .output();
 }
 
@@ -498,7 +572,13 @@ pub fn set_last_notification_time(session: &str) -> Result<()> {
         .unwrap_or_default()
         .as_secs();
     let _ = Command::new("tmux")
-        .args(["set-environment", "-t", session, "AMUX_LAST_NOTIFY", &now.to_string()])
+        .args([
+            "set-environment",
+            "-t",
+            session,
+            "AMUX_LAST_NOTIFY",
+            &now.to_string(),
+        ])
         .output();
     Ok(())
 }
@@ -545,7 +625,13 @@ pub fn window_count(session: &str) -> Result<usize> {
 pub fn pane_cwd(session: &str, pane_index: usize) -> Result<String> {
     let target = format!("{}:.{}", session, pane_index);
     let output = Command::new("tmux")
-        .args(["display-message", "-t", &target, "-p", "#{pane_current_path}"])
+        .args([
+            "display-message",
+            "-t",
+            &target,
+            "-p",
+            "#{pane_current_path}",
+        ])
         .output()
         .context("failed to get pane cwd")?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -557,14 +643,9 @@ pub fn check_version() -> Result<()> {
         .output()
         .context("tmux not found — is it installed?")?;
     let version_str = String::from_utf8_lossy(&output.stdout);
-    let after_tmux = version_str
-        .trim()
-        .strip_prefix("tmux ")
-        .unwrap_or("");
+    let after_tmux = version_str.trim().strip_prefix("tmux ").unwrap_or("");
     // Handle "next-3.7" style versions from HEAD builds
-    let version_part = after_tmux
-        .strip_prefix("next-")
-        .unwrap_or(after_tmux);
+    let version_part = after_tmux.strip_prefix("next-").unwrap_or(after_tmux);
     let numeric: String = version_part
         .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.')
@@ -581,8 +662,11 @@ pub fn check_version() -> Result<()> {
 fn pane_id_at(session: &str, index: usize) -> Result<String> {
     let output = Command::new("tmux")
         .args([
-            "display-message", "-t", &format!("{}:.{}", session, index),
-            "-p", "#{pane_id}",
+            "display-message",
+            "-t",
+            &format!("{}:.{}", session, index),
+            "-p",
+            "#{pane_id}",
         ])
         .output()
         .context("failed to get pane id")?;
@@ -592,8 +676,11 @@ fn pane_id_at(session: &str, index: usize) -> Result<String> {
 fn pane_id_at_window(session: &str, window: &str, pane: usize) -> Result<String> {
     let output = Command::new("tmux")
         .args([
-            "display-message", "-t", &format!("{}:{}.{}", session, window, pane),
-            "-p", "#{pane_id}",
+            "display-message",
+            "-t",
+            &format!("{}:{}.{}", session, window, pane),
+            "-p",
+            "#{pane_id}",
         ])
         .output()
         .context("failed to get pane id")?;
@@ -610,11 +697,22 @@ pub fn enter_split(session: &str, pane_a: usize, pane_b: usize) -> Result<()> {
 
     // Create a new window for the split view, capturing the actual window index
     let output = Command::new("tmux")
-        .args(["new-window", "-t", session, "-d", "-P", "-F", "#{window_index}"])
+        .args([
+            "new-window",
+            "-t",
+            session,
+            "-d",
+            "-P",
+            "-F",
+            "#{window_index}",
+        ])
         .output()
         .context("failed to create split window")?;
     if !output.status.success() {
-        bail!("tmux new-window failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "tmux new-window failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     let split_window_idx = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
@@ -676,14 +774,17 @@ pub fn exit_split(session: &str) -> Result<()> {
         .output()
         .context("failed to list windows")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let split_idx = stdout.lines()
+    let split_idx = stdout
+        .lines()
         .find(|l| !l.is_empty() && l.trim() != "0")
         .unwrap_or("1");
 
     // Move all panes from split window back to grid
     let mut safety = 0;
     loop {
-        if safety > 20 { break; }
+        if safety > 20 {
+            break;
+        }
         safety += 1;
         let split_panes = list_panes_in_window(session, split_idx.parse().unwrap_or(1));
         match split_panes {
@@ -728,7 +829,13 @@ pub fn get_level(session: &str) -> Result<u8> {
 /// Set the current zoom level.
 pub fn set_level(session: &str, level: u8) -> Result<()> {
     let output = Command::new("tmux")
-        .args(["set-environment", "-t", session, "AMUX_LEVEL", &level.to_string()])
+        .args([
+            "set-environment",
+            "-t",
+            session,
+            "AMUX_LEVEL",
+            &level.to_string(),
+        ])
         .output()
         .context("failed to set AMUX_LEVEL")?;
     if !output.status.success() {
@@ -743,14 +850,25 @@ pub fn active_pane_index(session: &str) -> Result<usize> {
         .args(["display-message", "-t", session, "-p", "#{pane_index}"])
         .output()
         .context("failed to get active pane index")?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().parse().unwrap_or(0))
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0))
 }
 
 /// Resize a specific pane to the given dimensions.
 pub fn resize_pane(session: &str, pane_index: usize, cols: u16, rows: u16) -> Result<()> {
     let target = format!("{}:.{}", session, pane_index);
     let _ = Command::new("tmux")
-        .args(["resize-pane", "-t", &target, "-x", &cols.to_string(), "-y", &rows.to_string()])
+        .args([
+            "resize-pane",
+            "-t",
+            &target,
+            "-x",
+            &cols.to_string(),
+            "-y",
+            &rows.to_string(),
+        ])
         .output();
     Ok(())
 }
@@ -797,7 +915,8 @@ pub fn list_sessions() -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.lines()
+    Ok(stdout
+        .lines()
         .filter(|l| !l.is_empty())
         .map(|l| l.to_string())
         .collect())
@@ -836,7 +955,10 @@ pub fn switch_session(session: &str) -> Result<()> {
         .output()
         .context("failed to switch session")?;
     if !output.status.success() {
-        bail!("tmux switch-client failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "tmux switch-client failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     Ok(())
 }
@@ -857,7 +979,10 @@ pub fn send_pane_to_session(from_session: &str, to_session: &str) -> Result<()> 
         .output()
         .context("failed to move pane")?;
     if !output.status.success() {
-        bail!("tmux join-pane failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "tmux join-pane failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     // Retile both sessions
@@ -882,8 +1007,13 @@ pub fn setup_bell_watch(session: &str, pane_index: usize) -> Result<()> {
     let target = format!("{}:.{}", session, pane_index);
     let _ = Command::new("tmux")
         .args([
-            "pipe-pane", "-t", &target,
-            &format!("exec {} bell-watch --session {} {}", bin, session, pane_index),
+            "pipe-pane",
+            "-t",
+            &target,
+            &format!(
+                "exec {} bell-watch --session {} {}",
+                bin, session, pane_index
+            ),
         ])
         .output();
     Ok(())
@@ -903,7 +1033,10 @@ mod tests {
     use super::*;
 
     fn test_session_name() -> String {
-        format!("amux-unit-{}", std::process::id())
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        format!("amux-unit-{}-{}", std::process::id(), id)
     }
 
     fn cleanup(session: &str) {
@@ -955,7 +1088,14 @@ mod tests {
         set_title(&name, 0, "my-project").expect("title");
         // Verify via tmux show-options that @amux-title was set
         let output = Command::new("tmux")
-            .args(["show-options", "-p", "-t", &format!("{}:.0", name), "-v", "@amux-title"])
+            .args([
+                "show-options",
+                "-p",
+                "-t",
+                &format!("{}:.0", name),
+                "-v",
+                "@amux-title",
+            ])
             .output()
             .expect("show-options");
         let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1016,7 +1156,7 @@ mod tests {
         create_session(&name).expect("create");
 
         let idx = active_pane_index(&name).expect("get");
-        assert_eq!(idx, 0);  // first pane is active
+        assert_eq!(idx, 0); // first pane is active
 
         create_pane(&name, None).expect("pane");
         let idx = active_pane_index(&name).expect("get");
@@ -1066,8 +1206,12 @@ mod tests {
         if let Some(p) = active {
             // Should be at least close to the minimum
             // (tmux may not achieve exactly 120 due to other pane constraints)
-            assert!(p.width > panes_before[0].width,
-                "pane should be enlarged: before={}, after={}", panes_before[0].width, p.width);
+            assert!(
+                p.width > panes_before[0].width,
+                "pane should be enlarged: before={}, after={}",
+                panes_before[0].width,
+                p.width
+            );
         }
 
         cleanup(&name);
@@ -1107,7 +1251,11 @@ mod tests {
         let min_w = widths.iter().min().unwrap();
         // tmux tiled layout with 3 panes creates a 2+1 arrangement
         // where one pane may be ~double the width of others, so allow generous tolerance
-        assert!(max_w - min_w <= max_w / 2 + 2, "panes should be tiled: {:?}", widths);
+        assert!(
+            max_w - min_w <= max_w / 2 + 2,
+            "panes should be tiled: {:?}",
+            widths
+        );
 
         cleanup(&name);
     }

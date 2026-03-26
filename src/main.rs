@@ -364,6 +364,14 @@ fn dismiss_on_focus(session: &str, pane_index: usize) {
 /// Context-aware zoom: Ctrl-N behavior
 fn cmd_zoom(target_pane: usize) -> Result<()> {
     let session = session_name();
+    let count = tmux::pane_count(&session)?;
+    if target_pane >= count {
+        tmux::display_message(
+            &session,
+            &format!("Pane {} does not exist (have {})", target_pane + 1, count),
+        );
+        return Ok(());
+    }
     let level = tmux::get_level(&session)?;
     let current = tmux::active_pane_index(&session)?;
     let same_pane = current == target_pane;

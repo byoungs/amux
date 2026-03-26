@@ -883,6 +883,13 @@ pub fn active_pane_index(session: &str) -> Result<usize> {
         .unwrap_or(0))
 }
 
+/// Display a message in the tmux status bar.
+pub fn display_message(session: &str, msg: &str) {
+    let _ = Command::new("tmux")
+        .args(["display-message", "-t", session, msg])
+        .output();
+}
+
 /// Resize a specific pane to the given dimensions.
 pub fn resize_pane(session: &str, pane_index: usize, cols: u16, rows: u16) -> Result<()> {
     let target = format!("{}:.{}", session, pane_index);

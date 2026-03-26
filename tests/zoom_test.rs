@@ -261,3 +261,47 @@ fn level_and_zoom_flag_stay_in_sync_through_rapid_transitions() {
 
     cleanup(&session);
 }
+
+// ============================================================
+// Zoom to nonexistent pane
+// ============================================================
+
+#[test]
+fn zoom_nonexistent_pane_at_working_is_noop() {
+    let session = session_name();
+    cleanup(&session);
+    setup_session(&session, 3); // panes 0, 1, 2
+    amux::tmux::set_level(&session, 2).expect("set L2");
+    amux::tmux::select_pane(&session, 0).expect("select pane 0");
+
+    // Ctrl-7 (pane index 6) — doesn't exist
+    let output = amux_cmd(&session, &["zoom", "6"]);
+    assert!(
+        output.status.success(),
+        "command should succeed (not error)"
+    );
+    assert_eq!(get_level(&session), 2, "level should stay L2");
+    assert_eq!(active_pane(&session), 0, "active pane should not change");
+    assert!(!is_zoomed(&session), "should not be zoomed");
+
+    cleanup(&session);
+}
+
+#[test]
+fn zoom_nonexistent_pane_at_fullscreen_preserves_zoom() {
+    let session = session_name();
+    cleanup(&session);
+    setup_session(&session, 3);
+    amux::tmux::select_pane(&session, 0).expect("select");
+    amux::tmux::toggle_zoom(&session).expect("zoom");
+    amux::tmux::set_level(&session, 3).expect("set L3");
+
+    // Ctrl-7 (pane index 6) — doesn't exist, should NOT unzoom
+    let output = amux_cmd(&session, &["zoom", "6"]);
+    assert!(output.status.success(), "command should succeed");
+    assert_eq!(get_level(&session), 3, "level should stay L3");
+    assert!(is_zoomed(&session), "should remain tmux-zoomed");
+    assert_eq!(active_pane(&session), 0, "active pane should not change");
+
+    cleanup(&session);
+}

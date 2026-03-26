@@ -4,8 +4,8 @@
 
 ```
 make dev       # Build release binary — live on next tmux keypress
-make test      # Run all tests (unit + integration)
-make check     # Lint + test + build — pre-merge gate
+make test      # Lint + fast tests + release build — runs anywhere, no tmux needed
+make validate  # Full test suite in Docker (includes tmux integration tests)
 make fmt       # Auto-format code
 make lint      # clippy + format check
 make refresh   # Re-apply tmux config (border formats, keybindings, status bar)
@@ -77,9 +77,8 @@ handles CLI commands invoked by tmux key bindings and hooks.
 
 ## Testing
 
-`cargo test` runs all tests. Tests in `tests/` that need a live tmux
-session (tmux integration tests) may fail outside of tmux. Unit tests
-and pure logic tests always work.
+- `make test` — lint + fast tests + release build. Runs anywhere, no tmux needed.
+- `make validate` — full suite in Docker with tmux HEAD. Reliable, isolated.
 
 ## Conventions
 

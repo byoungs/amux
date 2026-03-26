@@ -672,7 +672,7 @@ fn cmd_spaces() -> Result<()> {
 
                 let alert_count = tmux::get_alert_count(s).unwrap_or(0);
                 let alert_dots = if alert_count > 0 {
-                    format!(" \x1b[38;5;214m{}\x1b[0m", "⬤".repeat(alert_count.min(5)))
+                    format!(" \x1b[38;5;214m{}\x1b[0m", "●".repeat(alert_count.min(5)))
                 } else {
                     String::new()
                 };

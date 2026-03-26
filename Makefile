@@ -2,8 +2,8 @@
 #
 # make setup    Full environment setup (idempotent, safe to re-run)
 # make dev      Build release binary — live on next tmux keypress
-# make test     Run tests (unit + integration)
-# make check    Lint + test + build — pre-merge gate (safe: tests before release build)
+# make test     Lint + fast tests + release build — runs anywhere, no tmux needed
+# make validate Full test suite in Docker (includes tmux integration tests)
 # make fmt      Auto-format code
 # make lint     Run clippy + format check
 # make refresh  Re-apply tmux config (after changing format strings/keybindings)
@@ -18,7 +18,7 @@ SYMLINK := $(HOME)/.cargo/bin/amux
 BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 SHORT_SHA := $(shell git rev-parse --short HEAD)
 
-.PHONY: dev test check fmt lint refresh clean setup setup-rust setup-tmux setup-symlink setup-hook
+.PHONY: dev test validate fmt lint refresh clean setup setup-rust setup-tmux setup-hook
 
 # ── Build ──────────────────────────────────────────────
 
@@ -38,17 +38,20 @@ dev:
 	cargo build --release
 	@echo "✓ Built amux from $(BRANCH) ($(SHORT_SHA)) — live on next keypress"
 
-test:
-	cargo test
-
-# check: pre-merge gate. Tests run against debug build (cargo test uses debug),
-# so the live release binary is never touched until all checks pass.
-# Skips tmux::tests (need live tmux session) — run 'make test' locally for those.
-check: lint
+# test: lint + fast tests + release build. Runs anywhere, no tmux needed.
+# Tests run against debug build (cargo test uses debug), so the live
+# release binary is never touched until all checks pass.
+test: lint
 	cargo test --lib -- --skip tmux::tests
 	cargo test --test config_test --test alert_test --test bell_test --test sticky_test --test notify_test
 	cargo build --release
-	@echo "✓ All checks passed"
+	@echo "✓ Tests passed"
+
+# validate: full test suite inside Docker (tmux integration tests included)
+validate:
+	docker build -f Dockerfile.test -t amux-test .
+	docker run --rm amux-test
+	@echo "✓ Validation passed (all tests including tmux integration)"
 
 fmt:
 	cargo fmt

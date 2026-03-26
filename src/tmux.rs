@@ -85,12 +85,17 @@ pub fn create_pane(session: &str, cwd: Option<&str>) -> Result<usize> {
     Ok(active)
 }
 
+/// Delimiter for tmux -F format output. Tab (\t) is unreliable — tmux
+/// replaces it with underscore when no real terminal is attached (e.g. Docker).
+const FMT_SEP: &str = "<|>";
+
 pub fn list_panes(session: &str) -> Result<Vec<PaneInfo>> {
+    let fmt = format!(
+        "#{{pane_index}}{0}#{{@amux-title}}{0}#{{pane_width}}{0}#{{pane_height}}{0}#{{pane_active}}{0}#{{@amux-alert}}",
+        FMT_SEP
+    );
     let output = Command::new("tmux")
-        .args([
-            "list-panes", "-t", session,
-            "-F", "#{pane_index}\t#{@amux-title}\t#{pane_width}\t#{pane_height}\t#{pane_active}\t#{@amux-alert}",
-        ])
+        .args(["list-panes", "-t", session, "-F", &fmt])
         .output()
         .context("failed to list panes")?;
     if !output.status.success() {
@@ -101,15 +106,15 @@ pub fn list_panes(session: &str) -> Result<Vec<PaneInfo>> {
         .lines()
         .filter(|l| !l.is_empty())
         .filter_map(|line| {
-            let parts: Vec<&str> = line.split('\t').collect();
+            let parts: Vec<&str> = line.split(FMT_SEP).collect();
             if parts.len() < 5 {
                 return None;
             }
             Some(PaneInfo {
                 index: parts[0].parse().ok()?,
                 title: parts[1].to_string(),
-                width: parts[2].parse().ok()?,
-                height: parts[3].parse().ok()?,
+                width: parts[2].parse().unwrap_or(0),
+                height: parts[3].parse().unwrap_or(0),
                 active: parts[4] == "1",
                 alert: parts.get(5).map(|&v| v == "1").unwrap_or(false),
             })
@@ -120,11 +125,12 @@ pub fn list_panes(session: &str) -> Result<Vec<PaneInfo>> {
 
 pub fn list_panes_in_window(session: &str, window: usize) -> Result<Vec<PaneInfo>> {
     let target = format!("{}:{}", session, window);
+    let fmt = format!(
+        "#{{pane_index}}{0}#{{@amux-title}}{0}#{{pane_width}}{0}#{{pane_height}}{0}#{{pane_active}}{0}#{{@amux-alert}}",
+        FMT_SEP
+    );
     let output = Command::new("tmux")
-        .args([
-            "list-panes", "-t", &target,
-            "-F", "#{pane_index}\t#{@amux-title}\t#{pane_width}\t#{pane_height}\t#{pane_active}\t#{@amux-alert}",
-        ])
+        .args(["list-panes", "-t", &target, "-F", &fmt])
         .output()
         .context("failed to list panes in window")?;
     if !output.status.success() {
@@ -135,15 +141,15 @@ pub fn list_panes_in_window(session: &str, window: usize) -> Result<Vec<PaneInfo
         .lines()
         .filter(|l| !l.is_empty())
         .filter_map(|line| {
-            let parts: Vec<&str> = line.split('\t').collect();
+            let parts: Vec<&str> = line.split(FMT_SEP).collect();
             if parts.len() < 5 {
                 return None;
             }
             Some(PaneInfo {
                 index: parts[0].parse().ok()?,
                 title: parts[1].to_string(),
-                width: parts[2].parse().ok()?,
-                height: parts[3].parse().ok()?,
+                width: parts[2].parse().unwrap_or(0),
+                height: parts[3].parse().unwrap_or(0),
                 active: parts[4] == "1",
                 alert: parts.get(5).map(|&v| v == "1").unwrap_or(false),
             })

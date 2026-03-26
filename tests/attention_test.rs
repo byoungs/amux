@@ -96,7 +96,7 @@ fn status_bar_includes_alert_badge() {
     let status = String::from_utf8_lossy(&output.stdout);
 
     assert!(
-        status.contains("amux-alert-count") || status.contains("⬤"),
+        status.contains("amux-alert-count") || status.contains("●"),
         "status-right should include alert badge logic: {}",
         status
     );

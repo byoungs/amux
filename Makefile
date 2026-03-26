@@ -3,7 +3,7 @@
 # make setup    Full environment setup (idempotent, safe to re-run)
 # make dev      Build release binary — live on next tmux keypress
 # make test     Lint + fast tests + release build — runs anywhere, no tmux needed
-# make validate Full test suite in Docker (includes tmux integration tests)
+# make validate Full test suite including tmux integration tests (parallel-safe)
 # make fmt      Auto-format code
 # make lint     Run clippy + format check
 # make refresh  Re-apply tmux config (after changing format strings/keybindings)
@@ -47,10 +47,13 @@ test: lint
 	cargo build --release
 	@echo "✓ Tests passed"
 
-# validate: full test suite inside Docker (tmux integration tests included)
+# validate: full test suite including tmux integration tests.
+# Tests use unique session names (amux-test-*) so they run in parallel
+# without colliding with each other or your live amux sessions.
+# Clean first to avoid stale test binaries from shared CARGO_TARGET_DIR.
 validate:
-	docker build -f Dockerfile.test -t amux-test .
-	docker run --rm amux-test
+	cargo clean -p amux
+	cargo test
 	@echo "✓ Validation passed (all tests including tmux integration)"
 
 fmt:

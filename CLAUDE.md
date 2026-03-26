@@ -5,7 +5,7 @@
 ```
 make dev       # Build release binary — live on next tmux keypress
 make test      # Lint + fast tests + release build — runs anywhere, no tmux needed
-make validate  # Full test suite in Docker (includes tmux integration tests)
+make validate  # Full test suite including tmux integration tests (parallel-safe)
 make fmt       # Auto-format code
 make lint      # clippy + format check
 make refresh   # Re-apply tmux config (border formats, keybindings, status bar)
@@ -78,7 +78,7 @@ handles CLI commands invoked by tmux key bindings and hooks.
 ## Testing
 
 - `make test` — lint + fast tests + release build. Runs anywhere, no tmux needed.
-- `make validate` — full suite in Docker with tmux HEAD. Reliable, isolated.
+- `make validate` — full suite including tmux integration tests. Parallel-safe via unique session names.
 
 ## Conventions
 

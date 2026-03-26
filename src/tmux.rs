@@ -1066,67 +1066,73 @@ pub fn setup_all_bell_watches(session: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn test_session_name() -> String {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        format!("amux-unit-{}-{}", std::process::id(), id)
+    struct TestGuard {
+        name: String,
     }
 
-    fn cleanup(session: &str) {
-        let _ = Command::new("tmux")
-            .args(["kill-session", "-t", session])
-            .output();
+    impl TestGuard {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+            let name = format!("amux-test-{}-{}", std::process::id(), id);
+            // Pre-cleanup in case of stale session
+            let _ = Command::new("tmux")
+                .args(["kill-session", "-t", &name])
+                .output();
+            TestGuard { name }
+        }
+    }
+
+    impl Drop for TestGuard {
+        fn drop(&mut self) {
+            let _ = Command::new("tmux")
+                .args(["kill-session", "-t", &self.name])
+                .output();
+        }
     }
 
     #[test]
     fn create_and_list_session() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
-        let panes = list_panes(&name).expect("list");
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
+        let panes = list_panes(&guard.name).expect("list");
         assert_eq!(panes.len(), 1);
-        cleanup(&name);
     }
 
     #[test]
     fn create_pane_and_count() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
-        create_pane(&name, None).expect("pane");
-        let panes = list_panes(&name).expect("list");
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
+        create_pane(&guard.name, None).expect("pane");
+        let panes = list_panes(&guard.name).expect("list");
         assert_eq!(panes.len(), 2);
-        cleanup(&name);
     }
 
     #[test]
     fn zoom_toggle() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
-        create_pane(&name, None).expect("pane");
-        assert!(!is_zoomed(&name).expect("check"));
-        toggle_zoom(&name).expect("zoom");
-        assert!(is_zoomed(&name).expect("check"));
-        toggle_zoom(&name).expect("unzoom");
-        assert!(!is_zoomed(&name).expect("check"));
-        cleanup(&name);
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
+        create_pane(&guard.name, None).expect("pane");
+        assert!(!is_zoomed(&guard.name).expect("check"));
+        toggle_zoom(&guard.name).expect("zoom");
+        assert!(is_zoomed(&guard.name).expect("check"));
+        toggle_zoom(&guard.name).expect("unzoom");
+        assert!(!is_zoomed(&guard.name).expect("check"));
     }
 
     #[test]
     fn set_pane_title() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
-        set_title(&name, 0, "my-project").expect("title");
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
+        set_title(&guard.name, 0, "my-project").expect("title");
         // Verify via tmux show-options that @amux-title was set
         let output = Command::new("tmux")
             .args([
                 "show-options",
                 "-p",
                 "-t",
-                &format!("{}:.0", name),
+                &format!("{}:.0", guard.name),
                 "-v",
                 "@amux-title",
             ])
@@ -1134,108 +1140,93 @@ mod tests {
             .expect("show-options");
         let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
         assert_eq!(title, "my-project");
-        cleanup(&name);
     }
 
     #[test]
     fn enter_and_exit_split_view() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
-        create_pane(&name, None).expect("pane 2");
-        create_pane(&name, None).expect("pane 3");
-        assert_eq!(pane_count(&name).expect("count"), 3);
-        enter_split(&name, 0, 1).expect("enter split");
-        assert_eq!(window_count(&name).expect("windows"), 2);
-        exit_split(&name).expect("exit split");
-        assert_eq!(window_count(&name).expect("windows"), 1);
-        assert_eq!(pane_count(&name).expect("count"), 3);
-        cleanup(&name);
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
+        create_pane(&guard.name, None).expect("pane 2");
+        create_pane(&guard.name, None).expect("pane 3");
+        assert_eq!(pane_count(&guard.name).expect("count"), 3);
+        enter_split(&guard.name, 0, 1).expect("enter split");
+        assert_eq!(window_count(&guard.name).expect("windows"), 2);
+        exit_split(&guard.name).expect("exit split");
+        assert_eq!(window_count(&guard.name).expect("windows"), 1);
+        assert_eq!(pane_count(&guard.name).expect("count"), 3);
     }
 
     #[test]
     fn split_requires_at_least_three_panes() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
-        create_pane(&name, None).expect("pane 2");
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
+        create_pane(&guard.name, None).expect("pane 2");
         // Only 2 panes — split should fail
-        let result = enter_split(&name, 0, 1);
+        let result = enter_split(&guard.name, 0, 1);
         assert!(result.is_err(), "split should require at least 3 panes");
-        cleanup(&name);
     }
 
     #[test]
     fn get_set_level() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
 
         // Default level is 2
-        assert_eq!(get_level(&name).expect("get"), 2);
+        assert_eq!(get_level(&guard.name).expect("get"), 2);
 
-        set_level(&name, 1).expect("set");
-        assert_eq!(get_level(&name).expect("get"), 1);
+        set_level(&guard.name, 1).expect("set");
+        assert_eq!(get_level(&guard.name).expect("get"), 1);
 
-        set_level(&name, 3).expect("set");
-        assert_eq!(get_level(&name).expect("get"), 3);
-
-        cleanup(&name);
+        set_level(&guard.name, 3).expect("set");
+        assert_eq!(get_level(&guard.name).expect("get"), 3);
     }
 
     #[test]
     fn active_pane_index_works() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
 
-        let idx = active_pane_index(&name).expect("get");
+        let idx = active_pane_index(&guard.name).expect("get");
         assert_eq!(idx, 0); // first pane is active
 
-        create_pane(&name, None).expect("pane");
-        let idx = active_pane_index(&name).expect("get");
+        create_pane(&guard.name, None).expect("pane");
+        let idx = active_pane_index(&guard.name).expect("get");
         // After split, the new pane is active
         assert!(idx <= 1);
-
-        cleanup(&name);
     }
 
     #[test]
     fn smart_resize_no_change_when_big_enough() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
 
-        let panes_before = list_panes(&name).expect("list");
+        let panes_before = list_panes(&guard.name).expect("list");
         let w_before = panes_before[0].width;
 
         // With 1 pane, it's already bigger than the minimum
-        smart_resize(&name, 0, 120, 24).expect("resize");
+        smart_resize(&guard.name, 0, 120, 24).expect("resize");
 
-        let panes_after = list_panes(&name).expect("list");
+        let panes_after = list_panes(&guard.name).expect("list");
         // Size should be unchanged (or very close)
         assert!(panes_after[0].width >= w_before - 1);
-
-        cleanup(&name);
     }
 
     #[test]
     fn smart_resize_enlarges_small_pane() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
         // Create enough panes to make them small
         for _ in 0..5 {
-            create_pane(&name, None).expect("pane");
+            create_pane(&guard.name, None).expect("pane");
         }
 
-        let panes_before = list_panes(&name).expect("list");
+        let panes_before = list_panes(&guard.name).expect("list");
 
         // Smart resize pane 0
-        select_pane(&name, 0).expect("select");
-        smart_resize(&name, 0, 120, 24).expect("resize");
+        select_pane(&guard.name, 0).expect("select");
+        smart_resize(&guard.name, 0, 120, 24).expect("resize");
 
-        let panes_after = list_panes(&name).expect("list");
+        let panes_after = list_panes(&guard.name).expect("list");
         let active = panes_after.iter().find(|p| p.index == 0);
         if let Some(p) = active {
             // Should be at least close to the minimum
@@ -1247,38 +1238,32 @@ mod tests {
                 p.width
             );
         }
-
-        cleanup(&name);
     }
 
     #[test]
     fn save_and_load_pane_centers() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
 
-        crate::sticky::save_pane_center(&name, 0, 100, 50).expect("save");
-        let (cx, cy) = crate::sticky::load_pane_center(&name, 0).expect("load");
+        crate::sticky::save_pane_center(&guard.name, 0, 100, 50).expect("save");
+        let (cx, cy) = crate::sticky::load_pane_center(&guard.name, 0).expect("load");
         assert_eq!((cx, cy), (100, 50));
-
-        cleanup(&name);
     }
 
     #[test]
     fn restore_tiled_resets_layout() {
-        let name = test_session_name();
-        cleanup(&name);
-        create_session(&name).expect("create");
-        create_pane(&name, None).expect("pane");
-        create_pane(&name, None).expect("pane");
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
+        create_pane(&guard.name, None).expect("pane");
+        create_pane(&guard.name, None).expect("pane");
 
         // Resize one pane to be different
-        smart_resize(&name, 0, 120, 24).expect("resize");
+        smart_resize(&guard.name, 0, 120, 24).expect("resize");
 
         // Restore tiled — all panes should be roughly equal
-        restore_tiled(&name).expect("restore");
+        restore_tiled(&guard.name).expect("restore");
 
-        let panes = list_panes(&name).expect("list");
+        let panes = list_panes(&guard.name).expect("list");
         let widths: Vec<u16> = panes.iter().map(|p| p.width).collect();
         // All widths should be within 2 of each other
         let max_w = widths.iter().max().unwrap();
@@ -1290,7 +1275,5 @@ mod tests {
             "panes should be tiled: {:?}",
             widths
         );
-
-        cleanup(&name);
     }
 }

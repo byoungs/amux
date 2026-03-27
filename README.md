@@ -114,21 +114,24 @@ The system respects your attention level:
 
 ### Pane Layout
 
-Panes arrange in a consistent grid:
+Panes arrange in an alternating grid pattern — balanced grids for even
+counts, balanced + full-height right column for odd counts:
 
 ```
-2 panes         3 panes         4 panes         5 panes         6 panes
-┌─────┬─────┐   ┌────┬────┐    ┌────┬────┐     ┌────┬────┐     ┌───┬───┬───┐
-│     │     │   │    │ 2  │    │ 1  │ 2  │     │  1 │  2 │     │ 1 │ 2 │ 3 │
-│  1  │  2  │   │ 1  ├────┤    ├────┼────┤     ├───┬┴┬───┤     ├───┼───┼───┤
-│     │     │   │    │ 3  │    │ 3  │ 4  │     │ 3 │4│ 5 │     │ 4 │ 5 │ 6 │
-└─────┴─────┘   └────┴────┘    └────┴────┘     └───┴─┴───┘     └───┴───┴───┘
+2 panes       3 panes       4 panes     5 panes        6 panes
+┌────┬────┐   ┌────┬────┐   ┌──┬──┐    ┌──┬──┬───┐    ┌──┬──┬──┐
+│    │    │   │    │ 2  │   │1 │2 │    │1 │2 │   │    │1 │2 │3 │
+│ 1  │ 2  │   │ 1  ├────┤   ├──┼──┤    ├──┼──┤ 5 │    ├──┼──┼──┤
+│    │    │   │    │ 3  │   │3 │4 │    │3 │4 │   │    │4 │5 │6 │
+└────┴────┘   └────┴────┘   └──┴──┘    └──┴──┴───┘    └──┴──┴──┘
 ```
 
-**Spatial stickiness:** When you close a pane, neighbors expand to fill the gap —
-other panes stay where they are. When you create a new pane, it fills the vacancy.
-Close pane 2 from a 2x2, then create a new pane — the three surviving panes snap
-back to their original corners and the new pane takes the empty slot.
+**Sticky panes:** When you add a pane, existing panes stay in place and
+the new pane fills the next available slot. When you remove a pane, its
+column-mate expands to fill the gap. The result is minimal visual
+disruption — panes don't shuffle around unexpectedly.
+
+See [docs/sticky-panes.md](docs/sticky-panes.md) for the full design.
 
 ### Spaces
 

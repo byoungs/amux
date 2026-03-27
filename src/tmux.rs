@@ -85,17 +85,12 @@ pub fn create_pane(session: &str, cwd: Option<&str>) -> Result<usize> {
     Ok(active)
 }
 
-/// Delimiter for tmux -F format output. Tab (\t) is unreliable — tmux
-/// replaces it with underscore when no real terminal is attached (e.g. Docker).
-const FMT_SEP: &str = "<|>";
-
 pub fn list_panes(session: &str) -> Result<Vec<PaneInfo>> {
-    let fmt = format!(
-        "#{{pane_index}}{0}#{{@amux-title}}{0}#{{pane_width}}{0}#{{pane_height}}{0}#{{pane_active}}{0}#{{@amux-alert}}",
-        FMT_SEP
-    );
     let output = Command::new("tmux")
-        .args(["list-panes", "-t", session, "-F", &fmt])
+        .args([
+            "list-panes", "-t", session,
+            "-F", "#{pane_index}\t#{@amux-title}\t#{pane_width}\t#{pane_height}\t#{pane_active}\t#{@amux-alert}",
+        ])
         .output()
         .context("failed to list panes")?;
     if !output.status.success() {
@@ -106,15 +101,15 @@ pub fn list_panes(session: &str) -> Result<Vec<PaneInfo>> {
         .lines()
         .filter(|l| !l.is_empty())
         .filter_map(|line| {
-            let parts: Vec<&str> = line.split(FMT_SEP).collect();
+            let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() < 5 {
                 return None;
             }
             Some(PaneInfo {
                 index: parts[0].parse().ok()?,
                 title: parts[1].to_string(),
-                width: parts[2].parse().unwrap_or(0),
-                height: parts[3].parse().unwrap_or(0),
+                width: parts[2].parse().ok()?,
+                height: parts[3].parse().ok()?,
                 active: parts[4] == "1",
                 alert: parts.get(5).map(|&v| v == "1").unwrap_or(false),
             })
@@ -125,12 +120,11 @@ pub fn list_panes(session: &str) -> Result<Vec<PaneInfo>> {
 
 pub fn list_panes_in_window(session: &str, window: usize) -> Result<Vec<PaneInfo>> {
     let target = format!("{}:{}", session, window);
-    let fmt = format!(
-        "#{{pane_index}}{0}#{{@amux-title}}{0}#{{pane_width}}{0}#{{pane_height}}{0}#{{pane_active}}{0}#{{@amux-alert}}",
-        FMT_SEP
-    );
     let output = Command::new("tmux")
-        .args(["list-panes", "-t", &target, "-F", &fmt])
+        .args([
+            "list-panes", "-t", &target,
+            "-F", "#{pane_index}\t#{@amux-title}\t#{pane_width}\t#{pane_height}\t#{pane_active}\t#{@amux-alert}",
+        ])
         .output()
         .context("failed to list panes in window")?;
     if !output.status.success() {
@@ -141,15 +135,15 @@ pub fn list_panes_in_window(session: &str, window: usize) -> Result<Vec<PaneInfo
         .lines()
         .filter(|l| !l.is_empty())
         .filter_map(|line| {
-            let parts: Vec<&str> = line.split(FMT_SEP).collect();
+            let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() < 5 {
                 return None;
             }
             Some(PaneInfo {
                 index: parts[0].parse().ok()?,
                 title: parts[1].to_string(),
-                width: parts[2].parse().unwrap_or(0),
-                height: parts[3].parse().unwrap_or(0),
+                width: parts[2].parse().ok()?,
+                height: parts[3].parse().ok()?,
                 active: parts[4] == "1",
                 alert: parts.get(5).map(|&v| v == "1").unwrap_or(false),
             })
@@ -423,19 +417,26 @@ pub fn apply_grid_layout(session: &str) -> Result<()> {
             })
             .collect();
 
-        // When adding panes, reserve the last N slots for new panes so they
-        // always appear at the end of the display order.
-        let new_count = if going_up {
-            ids.len() - match_input.len()
+        // Use structural matching for removal transitions and geometric
+        // matching with prev-center snap-back for addition transitions.
+        let matched = if going_up {
+            // When adding panes, reserve the last N slots for new panes so
+            // they always appear at the end of the display order.
+            let new_count = ids.len() - match_input.len();
+            let available_slots = slot_centers.len().saturating_sub(new_count);
+            crate::sticky::match_panes_to_slots(
+                &match_input,
+                &slot_centers[..available_slots],
+                true, // use prev centers for snap-back
+            )
         } else {
-            0
+            crate::sticky::match_panes_structural(
+                &match_input,
+                &slot_centers,
+                prev_count as usize,
+                ids.len(),
+            )
         };
-        let available_slots = slot_centers.len().saturating_sub(new_count);
-        let matched = crate::sticky::match_panes_to_slots(
-            &match_input,
-            &slot_centers[..available_slots],
-            going_up,
-        );
 
         let matched_ids: Vec<u32> = matched.iter().filter_map(|&id| id).collect();
         let mut unmatched_iter = ids.iter().filter(|id| !matched_ids.contains(id));
@@ -446,16 +447,15 @@ pub fn apply_grid_layout(session: &str) -> Result<()> {
                 None => *unmatched_iter.next().unwrap_or(&ids[0]),
             })
             .collect();
-        // Append new panes to reserved slots at the end
+        // Append any remaining unmatched panes (new panes fill leftover slots)
         for &id in unmatched_iter {
             ordered_ids.push(id);
         }
 
-        // Only swap when going up (snap-back). When going down, panes stay
-        // in index order — the grid shape change is enough.
-        let has_spatial_history = match_input.iter().any(|p| p.prev_cx.is_some());
-        let should_swap = going_up && has_spatial_history && ordered_ids != ids;
-        if should_swap {
+        // Swap panes when the ordering differs from tmux's index order.
+        // Runs for BOTH going_up and going_down.
+        let has_spatial_history = match_input.iter().any(|p| p.prev_cx.is_some()) || !going_up;
+        if has_spatial_history && ordered_ids != ids {
             swap_panes_to_order(session, &ids, &ordered_ids)?;
         }
     }

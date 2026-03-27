@@ -12,14 +12,18 @@ pub struct Rect {
 /// Calculate grid positions for N panes in a WxH terminal.
 /// Returns a Vec of Rect, one per pane, in slot order.
 ///
-/// Grid rules:
+/// Grid rules (alternating balanced / balanced+column):
 /// - 1 pane: full screen
 /// - 2 panes: left/right split (never top/bottom)
-/// - 3 panes: left full + right split vertically
-/// - 4 panes: 2x2
-/// - 5 panes: 2 top + 3 bottom
-/// - 6 panes: 3x2 (3 columns, 2 rows)
-/// - 7+: 2 rows, ceil(n/2) columns
+/// - 3 panes: left full-height + right split vertically
+/// - 4 panes: 2x2 (balanced)
+/// - 5 panes: 2x2 + full-height right column
+/// - 6 panes: 3x2 (balanced)
+/// - 7 panes: 3x2 + full-height right column
+/// - 8 panes: 4x2 (balanced)
+/// - 9 panes: 4x2 + full-height right column
+///
+/// See docs/sticky-panes.md for the design rationale.
 pub fn grid_positions(count: usize, width: u16, height: u16) -> Vec<Rect> {
     match count {
         0 => vec![],
@@ -59,48 +63,69 @@ pub fn grid_positions(count: usize, width: u16, height: u16) -> Vec<Rect> {
             ]
         }
         4 => layout_grid(2, 2, width, height),
-        5 => {
-            // 2 top, 3 bottom
-            let th = (height - 1) / 2;
-            let bh = height - 1 - th;
-            let bot_y = th + 1;
-            // Top: 2 columns
-            let top_rects = layout_columns(2, width, th);
-            // Bottom: 3 columns
-            let bot_rects = layout_columns(3, width, bh);
-            vec![
-                top_rects[0].clone(), // 1: top-left
-                top_rects[1].clone(), // 2: top-right
-                Rect {
-                    x: bot_rects[0].x,
-                    y: bot_y,
-                    w: bot_rects[0].w,
-                    h: bh,
-                }, // 3: bottom-left
-                Rect {
-                    x: bot_rects[1].x,
-                    y: bot_y,
-                    w: bot_rects[1].w,
-                    h: bh,
-                }, // 4: bottom-mid
-                Rect {
-                    x: bot_rects[2].x,
-                    y: bot_y,
-                    w: bot_rects[2].w,
-                    h: bh,
-                }, // 5: bottom-right
-            ]
+        _ if count.is_multiple_of(2) => {
+            // Even counts >= 6: balanced grid (2 rows, count/2 columns)
+            layout_grid(2, count / 2, width, height)
         }
-        6 => layout_grid(2, 3, width, height),
         _ => {
-            // 7+: 2 rows, ceil(n/2) columns
-            let cols = count.div_ceil(2);
-            layout_grid(2, cols, width, height)
-                .into_iter()
-                .take(count)
-                .collect()
+            // Odd counts >= 5: balanced grid + full-height right column
+            // 5 = 2x2 + col, 7 = 3x2 + col, 9 = 4x2 + col
+            let balanced_cols = (count - 1) / 2;
+            layout_balanced_plus_column(balanced_cols, width, height)
         }
     }
+}
+
+/// Layout a balanced grid (cols x 2) plus a full-height right column.
+/// Slot order: top row L→R, bottom row L→R, then right column.
+fn layout_balanced_plus_column(balanced_cols: usize, width: u16, height: u16) -> Vec<Rect> {
+    let total_cols = balanced_cols + 1;
+    let col_dividers = (total_cols as u16).saturating_sub(1);
+    let available_w = width.saturating_sub(col_dividers);
+    let col_w = available_w / total_cols as u16;
+
+    let row_available = height.saturating_sub(1);
+    let top_h = row_available / 2;
+    let bot_h = row_available - top_h;
+    let bot_y = top_h + 1;
+
+    let mut rects = Vec::new();
+
+    // Top row of balanced grid
+    let mut cx = 0u16;
+    for _ in 0..balanced_cols {
+        rects.push(Rect {
+            x: cx,
+            y: 0,
+            w: col_w,
+            h: top_h,
+        });
+        cx += col_w + 1;
+    }
+
+    // Bottom row of balanced grid
+    cx = 0;
+    for _ in 0..balanced_cols {
+        rects.push(Rect {
+            x: cx,
+            y: bot_y,
+            w: col_w,
+            h: bot_h,
+        });
+        cx += col_w + 1;
+    }
+
+    // Full-height right column
+    let right_x = (col_w + 1) * balanced_cols as u16;
+    let right_w = width - right_x;
+    rects.push(Rect {
+        x: right_x,
+        y: 0,
+        w: right_w,
+        h: height,
+    });
+
+    rects
 }
 
 /// Layout N equal columns, each full height.
@@ -244,27 +269,43 @@ pub fn build_layout_string_direct(
                 lw, bh, by, pane_ids[2],
                 rw, bh, rx, by, pane_ids[3])
         }
-        5 => {
-            // 2 top, 3 bottom
+        _ if n.is_multiple_of(2) => {
+            // Even counts >= 6: balanced grid (2 rows, n/2 columns per row)
+            let cols = n / 2;
             let (th, bh) = split_two_rows(height, border_top);
             let by = th + 1;
 
-            let top_row = layout_row_string(&pane_ids[..2], 0, 0, width, th);
-            let bot_row = layout_row_string(&pane_ids[2..], 0, by, width, bh);
+            let top_row = layout_row_string(&pane_ids[..cols], 0, 0, width, th);
+            let bot_row = layout_row_string(&pane_ids[cols..], 0, by, width, bh);
 
             format!("{}x{},0,0[{},{}]", width, height, top_row, bot_row)
         }
         _ => {
-            // For 6+, use 2 rows with ceil(n/2) columns per row
-            let cols = n.div_ceil(2);
-            let top_count = cols;
+            // Odd counts >= 5: balanced grid + full-height right column
+            let balanced_cols = (n - 1) / 2;
+            let total_cols = balanced_cols + 1;
+            let col_dividers = (total_cols as u16) - 1;
+            let available = width - col_dividers;
+            let col_w = available / total_cols as u16;
+
+            let left_w = col_w * balanced_cols as u16 + (balanced_cols as u16).saturating_sub(1);
+            let right_x = left_w + 1;
+            let right_w = width - right_x;
+
             let (th, bh) = split_two_rows(height, border_top);
             let by = th + 1;
 
-            let top_row = layout_row_string(&pane_ids[..top_count], 0, 0, width, th);
-            let bot_row = layout_row_string(&pane_ids[top_count..], 0, by, width, bh);
+            let top_ids = &pane_ids[..balanced_cols];
+            let bot_ids = &pane_ids[balanced_cols..2 * balanced_cols];
+            let right_id = pane_ids[2 * balanced_cols];
 
-            format!("{}x{},0,0[{},{}]", width, height, top_row, bot_row)
+            let top_row = layout_row_string(top_ids, 0, 0, left_w, th);
+            let bot_row = layout_row_string(bot_ids, 0, by, left_w, bh);
+
+            format!(
+                "{}x{},0,0{{{}x{},0,0[{},{}],{}x{},{},0,{}}}",
+                width, height, left_w, height, top_row, bot_row, right_w, height, right_x, right_id
+            )
         }
     };
 
@@ -409,6 +450,26 @@ mod tests {
     }
 
     #[test]
+    fn five_panes_2x2_plus_column() {
+        let rects = grid_positions(5, 280, 80);
+        assert_eq!(rects.len(), 5);
+        // 2x2 part: slots 0-3
+        assert_eq!(rects[0].y, 0); // TL
+        assert_eq!(rects[1].y, 0); // TR
+        assert!(rects[2].y > 0); // BL
+        assert!(rects[3].y > 0); // BR
+                                 // TL and BL share x=0
+        assert_eq!(rects[0].x, 0);
+        assert_eq!(rects[2].x, 0);
+        // TR and BR share same x
+        assert_eq!(rects[1].x, rects[3].x);
+        // Right column: slot 4, full height
+        assert_eq!(rects[4].y, 0);
+        assert_eq!(rects[4].h, 80);
+        assert!(rects[4].x > rects[1].x);
+    }
+
+    #[test]
     fn six_panes_3x2() {
         let rects = grid_positions(6, 282, 80);
         assert_eq!(rects.len(), 6);
@@ -423,6 +484,25 @@ mod tests {
         // 3 columns
         assert!(rects[0].x < rects[1].x);
         assert!(rects[1].x < rects[2].x);
+    }
+
+    #[test]
+    fn seven_panes_3x2_plus_column() {
+        let rects = grid_positions(7, 280, 80);
+        assert_eq!(rects.len(), 7);
+        // 3x2 part: slots 0-5
+        // Top row: 0,1,2
+        assert_eq!(rects[0].y, 0);
+        assert_eq!(rects[1].y, 0);
+        assert_eq!(rects[2].y, 0);
+        // Bottom row: 3,4,5
+        assert!(rects[3].y > 0);
+        assert!(rects[4].y > 0);
+        assert!(rects[5].y > 0);
+        // Right column: slot 6, full height
+        assert_eq!(rects[6].y, 0);
+        assert_eq!(rects[6].h, 80);
+        assert!(rects[6].x > rects[2].x);
     }
 
     #[test]

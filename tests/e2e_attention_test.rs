@@ -304,6 +304,101 @@ fn pipe_pane_active_on_newly_created_pane() {
 }
 
 // ============================================================
+// Alert isolation and lifecycle (behavior-driven)
+// ============================================================
+
+#[test]
+fn alert_on_one_pane_does_not_affect_other_panes() {
+    let ts = common::TestSession::new(3);
+
+    amux::tmux::set_alert(&ts.name, 1, true).expect("set alert");
+    amux::tmux::set_alert_count(&ts.name, 1).expect("set count");
+
+    assert!(get_alert(&ts.name, 1), "pane 1 should be alerted");
+    assert!(!get_alert(&ts.name, 0), "pane 0 should remain clear");
+    assert!(!get_alert(&ts.name, 2), "pane 2 should remain clear");
+}
+
+#[test]
+fn alert_count_tracks_alerted_panes_accurately() {
+    let ts = common::TestSession::new(3);
+
+    // Alert two panes
+    amux::tmux::set_alert(&ts.name, 0, true).expect("alert 0");
+    amux::tmux::set_alert_count(&ts.name, 1).expect("count 1");
+    amux::tmux::set_alert(&ts.name, 2, true).expect("alert 2");
+    amux::tmux::set_alert_count(&ts.name, 2).expect("count 2");
+    assert_eq!(get_alert_count(&ts.name), 2, "two panes alerted");
+
+    // Dismiss one
+    amux::tmux::dismiss_alert(&ts.name, 0).expect("dismiss 0");
+    assert_eq!(get_alert_count(&ts.name), 1, "one pane dismissed");
+
+    // Dismiss the other
+    amux::tmux::dismiss_alert(&ts.name, 2).expect("dismiss 2");
+    assert_eq!(get_alert_count(&ts.name), 0, "all panes dismissed");
+}
+
+#[test]
+fn dismiss_only_clears_the_targeted_pane() {
+    let ts = common::TestSession::new(3);
+
+    // Alert panes 0 and 2
+    amux::tmux::set_alert(&ts.name, 0, true).expect("alert 0");
+    amux::tmux::set_alert(&ts.name, 2, true).expect("alert 2");
+    amux::tmux::set_alert_count(&ts.name, 2).expect("count");
+
+    // Dismiss only pane 0
+    amux::tmux::dismiss_alert(&ts.name, 0).expect("dismiss 0");
+
+    assert!(!get_alert(&ts.name, 0), "pane 0 should be cleared");
+    assert!(!get_alert(&ts.name, 1), "pane 1 was never alerted");
+    assert!(get_alert(&ts.name, 2), "pane 2 should still be alerted");
+}
+
+#[test]
+fn alert_on_already_alerted_pane_is_idempotent() {
+    let ts = common::TestSession::new(3);
+
+    amux::tmux::set_alert(&ts.name, 1, true).expect("first alert");
+    amux::tmux::set_alert_count(&ts.name, 1).expect("count");
+
+    // Alert the same pane again
+    amux::tmux::set_alert(&ts.name, 1, true).expect("second alert");
+    // Count should NOT increment — caller must check before incrementing,
+    // but the pane flag itself should remain 1
+    assert!(get_alert(&ts.name, 1), "pane 1 still alerted");
+    assert_eq!(
+        get_alert_count(&ts.name),
+        1,
+        "count should not double from re-alerting same pane"
+    );
+}
+
+#[test]
+fn rapid_alert_dismiss_cycle_returns_to_clean_state() {
+    let ts = common::TestSession::new(3);
+
+    // Rapid cycle: alert, dismiss, alert, dismiss
+    amux::tmux::set_alert(&ts.name, 0, true).expect("alert 1");
+    amux::tmux::set_alert_count(&ts.name, 1).expect("count 1");
+    amux::tmux::dismiss_alert(&ts.name, 0).expect("dismiss 1");
+    amux::tmux::set_alert(&ts.name, 0, true).expect("alert 2");
+    amux::tmux::set_alert_count(&ts.name, 1).expect("count 2");
+    amux::tmux::dismiss_alert(&ts.name, 0).expect("dismiss 2");
+
+    assert!(
+        !get_alert(&ts.name, 0),
+        "pane 0 should be clear after cycle"
+    );
+    assert_eq!(
+        get_alert_count(&ts.name),
+        0,
+        "count should be zero after full cycle"
+    );
+}
+
+// ============================================================
 // Config correctness
 // ============================================================
 

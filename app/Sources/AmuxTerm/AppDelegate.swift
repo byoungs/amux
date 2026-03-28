@@ -29,12 +29,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
 
-        // Find the amux binary (installed by make dev)
+        // Find binaries — check next to our own executable first (works for
+        // both .app bundle and bare binary), then fall back to common paths.
+        let execDir = Bundle.main.executableURL?.deletingLastPathComponent().path
+            ?? ProcessInfo.processInfo.arguments[0]
+                .split(separator: "/").dropLast().joined(separator: "/")
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let amuxPath = "\(home)/.cargo/bin/amux"
-        guard FileManager.default.fileExists(atPath: amuxPath) else {
-            fatalError("amux not found at \(amuxPath). Run: make dev")
-        }
+        let amuxPath = findBinary("amux", searchDirs: [
+            execDir,                         // next to amux-app (inside .app or dev build)
+            "\(home)/.cargo/bin",             // dev install
+            "\(home)/.local/bin",             // user install
+            "/usr/local/bin",
+        ])
+        let tmuxPath = findBinary("tmux", searchDirs: [
+            execDir,                         // bundled tmux (inside .app)
+            "/opt/homebrew/bin",              // Homebrew ARM
+            "/usr/local/bin",                 // Homebrew Intel
+        ])
+
+        // Install symlinks to ~/.local/bin so:
+        // - tmux's run-shell can find amux (via PATH)
+        // - amux can find tmux (via PATH)
+        installCLISymlink(name: "amux", targetPath: amuxPath)
+        installCLISymlink(name: "tmux", targetPath: tmuxPath)
+
+        // Ensure PATH includes the bundle dir and ~/.local/bin so both the
+        // amux Rust binary and tmux's run-shell commands can find each other.
+        let currentPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        let enhancedPath = "\(execDir):\(home)/.local/bin:\(currentPath)"
+        setenv("PATH", enhancedPath, 1)
 
         let rows: UInt16 = 40
         let cols: UInt16 = 120
@@ -129,5 +152,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return true
+    }
+
+    /// Find a binary by name, checking directories in order.
+    private func findBinary(_ name: String, searchDirs: [String]) -> String {
+        for dir in searchDirs {
+            let path = "\(dir)/\(name)"
+            if FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        }
+        fatalError("\(name) not found. Searched: \(searchDirs.joined(separator: ", "))")
+    }
+
+    /// Symlink a binary to ~/.local/bin. Idempotent — updates if it already exists.
+    private func installCLISymlink(name: String, targetPath: String) {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let binDir = "\(home)/.local/bin"
+        let symlinkPath = "\(binDir)/\(name)"
+
+        try? FileManager.default.createDirectory(atPath: binDir, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(atPath: symlinkPath)
+        try? FileManager.default.createSymbolicLink(atPath: symlinkPath, withDestinationPath: targetPath)
     }
 }

@@ -18,7 +18,7 @@ SYMLINK := $(HOME)/.cargo/bin/amux
 BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 SHORT_SHA := $(shell git rev-parse --short HEAD)
 
-.PHONY: dev test validate fmt lint refresh clean setup setup-rust setup-tmux setup-hook app app-dev app-test app-clean
+.PHONY: dev test validate fmt lint refresh clean setup setup-rust setup-tmux setup-hook app app-dev app-test app-clean tmux-bundle dmg
 
 # ── Build ──────────────────────────────────────────────
 
@@ -117,6 +117,30 @@ app-test: app-dev
 
 app-clean:
 	cd app && swift package clean
+
+# Build tmux from HEAD with static deps (for bundling)
+tmux-bundle:
+	./scripts/build-tmux.sh
+
+# Create amux.app bundle and DMG installer
+dmg: app tmux-bundle
+	@echo "=== Creating amux.app bundle ==="
+	rm -rf build/amux.app build/dmg-staging
+	mkdir -p build/amux.app/Contents/MacOS
+	mkdir -p build/amux.app/Contents/Resources
+	cp app/Resources/Info.plist build/amux.app/Contents/
+	cp app/.build/release/amux-app build/amux.app/Contents/MacOS/
+	cp $(RELEASE_BIN) build/amux.app/Contents/MacOS/amux
+	cp build/tmux-bundle/tmux build/amux.app/Contents/MacOS/
+	cp build/tmux-bundle/LICENSE-tmux.txt build/amux.app/Contents/Resources/
+	cp app/Resources/amux.icns build/amux.app/Contents/Resources/
+	@echo "=== Creating DMG ==="
+	mkdir -p build/dmg-staging
+	cp -R build/amux.app build/dmg-staging/
+	ln -s /Applications build/dmg-staging/Applications
+	hdiutil create -volname "amux" -srcfolder build/dmg-staging -ov -format UDZO build/amux.dmg
+	rm -rf build/dmg-staging
+	@echo "✓ DMG created: build/amux.dmg"
 
 # ── Convenience ────────────────────────────────────────
 

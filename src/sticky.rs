@@ -200,7 +200,7 @@ pub fn match_panes_structural(
     let prev_balanced = prev_count >= 4 && prev_count.is_multiple_of(2);
     let new_balanced = new_count >= 4 && new_count.is_multiple_of(2);
     let prev_has_column = prev_count >= 3 && prev_count % 2 == 1;
-    let new_has_column = new_count >= 5 && new_count % 2 == 1;
+    let new_has_column = new_count >= 3 && new_count % 2 == 1;
 
     // Adding: balanced+column → balanced (3→4, 5→6, 7→8)
     // The lone column pane goes to top of its column, new pane fills bottom.
@@ -407,17 +407,23 @@ fn match_substitute_fills_gap(
     }
 }
 
-/// The column-mate of the removed pane takes the full-height right column.
-/// The remaining panes fill the balanced part.
+/// The column-mate of the removed pane takes the full-height column slot.
+/// The remaining panes fill the split slots.
+///
+/// The full-height slot is identified by finding the slot that is alone in
+/// its column (no other slot shares a similar cx). This works for both
+/// 3-pane (full-height LEFT) and 5+pane (full-height RIGHT) layouts.
 fn match_column_mate_expands(
     panes: &[PaneCenter],
     slots: &[SlotCenter],
     _prev_count: usize,
 ) -> Vec<Option<u32>> {
     let column_mate_idx = find_lone_column_pane(panes);
-    let right_col_slot = slots.len() - 1;
 
-    if let Some(mate_idx) = column_mate_idx {
+    // Find the full-height slot — the one alone in its column
+    let full_height_slot = find_lone_column_slot(slots);
+
+    if let (Some(mate_idx), Some(fh_slot)) = (column_mate_idx, full_height_slot) {
         let others: Vec<PaneCenter> = panes
             .iter()
             .enumerate()
@@ -425,13 +431,47 @@ fn match_column_mate_expands(
             .map(|(_, p)| p.clone())
             .collect();
 
-        let other_slots = &slots[..right_col_slot];
-        let mut result = match_panes_to_slots(&others, other_slots, false);
-        result.push(Some(panes[mate_idx].id));
+        let other_slots: Vec<SlotCenter> = slots
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != fh_slot)
+            .map(|(_, s)| s.clone())
+            .collect();
+
+        let other_matched = match_panes_to_slots(&others, &other_slots, false);
+
+        // Reconstruct full result with column-mate at the full-height slot
+        let mut result: Vec<Option<u32>> = vec![None; slots.len()];
+        result[fh_slot] = Some(panes[mate_idx].id);
+
+        let mut other_idx = 0;
+        for (si, slot) in result.iter_mut().enumerate() {
+            if si == fh_slot {
+                continue;
+            }
+            if other_idx < other_matched.len() {
+                *slot = other_matched[other_idx];
+                other_idx += 1;
+            }
+        }
         result
     } else {
         match_panes_to_slots(panes, slots, false)
     }
+}
+
+/// Find the slot that is alone in its column (no other slot shares a similar cx).
+fn find_lone_column_slot(slots: &[SlotCenter]) -> Option<usize> {
+    for (i, s) in slots.iter().enumerate() {
+        let has_partner = slots
+            .iter()
+            .enumerate()
+            .any(|(j, other)| j != i && (s.cx - other.cx).abs() < 10);
+        if !has_partner {
+            return Some(i);
+        }
+    }
+    None
 }
 
 /// Find the pane that is alone in its column (no other pane shares a similar cx).
@@ -446,6 +486,92 @@ fn find_lone_column_pane(panes: &[PaneCenter]) -> Option<usize> {
         }
     }
     None
+}
+
+/// Result of compute_pane_order: the desired pane ordering plus which
+/// layout variant to use for the tmux layout string.
+pub struct PaneLayout {
+    pub ordered_ids: Vec<u32>,
+    /// True when the 3-pane layout should use full-height RIGHT column
+    /// instead of the standard full-height LEFT.
+    pub three_pane_right_full: bool,
+}
+
+/// Pure state transformation: given the current pane IDs, their saved centers,
+/// the previous pane count, and window dimensions, compute the desired pane
+/// ordering. This is the functional core extracted from apply_grid_layout —
+/// both production and tests call this same function.
+pub fn compute_pane_order(
+    ids: &[u32],
+    pane_centers: &[PaneCenter],
+    prev_count: usize,
+    w: u16,
+    h: u16,
+) -> PaneLayout {
+    // Build matching input — only include panes that have saved center data.
+    // New panes (no center data) are excluded and fill leftover slots.
+    let match_input: Vec<PaneCenter> = ids
+        .iter()
+        .filter_map(|&id| {
+            pane_centers
+                .iter()
+                .find(|p| p.id == id)
+                .filter(|p| p.cx != 0 || p.cy != 0 || p.prev_cx.is_some())
+                .cloned()
+        })
+        .collect();
+
+    // For 4→3 transitions, detect which side the lone pane is on.
+    // If the lone pane (column-mate) is on the right, use a right-full layout
+    // so it expands in place instead of jumping to the left side.
+    let right_full_3 = ids.len() == 3
+        && prev_count == 4
+        && find_lone_column_pane(&match_input)
+            .map(|i| {
+                let lone_cx = match_input[i].cx;
+                let avg_cx =
+                    match_input.iter().map(|p| p.cx as i64).sum::<i64>() / match_input.len() as i64;
+                lone_cx as i64 > avg_cx
+            })
+            .unwrap_or(false);
+
+    let rects = if right_full_3 {
+        crate::layout::grid_positions_3_right(w, h)
+    } else {
+        crate::layout::grid_positions(ids.len(), w, h)
+    };
+
+    let slot_centers: Vec<SlotCenter> = rects
+        .iter()
+        .map(|r| {
+            let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
+            SlotCenter { cx, cy }
+        })
+        .collect();
+
+    // Structural matching handles both adding and removing transitions.
+    // It detects layout shape changes (balanced ↔ balanced+column) and
+    // uses column-aware rules. Falls back to geometric matching for
+    // unrecognized patterns.
+    let matched = match_panes_structural(&match_input, &slot_centers, prev_count, ids.len());
+
+    let matched_ids: Vec<u32> = matched.iter().filter_map(|&id| id).collect();
+    let mut unmatched_iter = ids.iter().filter(|id| !matched_ids.contains(id));
+    let mut ordered: Vec<u32> = matched
+        .iter()
+        .map(|opt| match opt {
+            Some(id) => *id,
+            None => *unmatched_iter.next().unwrap_or(&ids[0]),
+        })
+        .collect();
+    for &id in unmatched_iter {
+        ordered.push(id);
+    }
+
+    PaneLayout {
+        ordered_ids: ordered,
+        three_pane_right_full: right_full_3,
+    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -469,21 +595,14 @@ fn find_lone_column_pane(panes: &[PaneCenter]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{grid_positions, Rect};
+    use crate::layout::grid_positions;
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    fn centers_from_rects(rects: &[Rect]) -> Vec<SlotCenter> {
-        rects
-            .iter()
-            .map(|r| {
-                let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
-                SlotCenter { cx, cy }
-            })
-            .collect()
-    }
-
-    fn pane_centers_from_rects(rects: &[Rect], ids: &[u32]) -> Vec<PaneCenter> {
+    /// Build PaneCenter state from grid_positions — simulates what tmux
+    /// would report for panes sitting in an N-pane layout.
+    fn state(count: usize, ids: &[u32], w: u16, h: u16) -> Vec<PaneCenter> {
+        let rects = grid_positions(count, w, h);
         rects
             .iter()
             .zip(ids.iter())
@@ -500,10 +619,19 @@ mod tests {
             .collect()
     }
 
-    fn pane_centers_with_prev(rects: &[Rect], prev_rects: &[Rect], ids: &[u32]) -> Vec<PaneCenter> {
-        rects
-            .iter()
-            .zip(prev_rects.iter())
+    /// Build PaneCenter state with prev centers — simulates panes that
+    /// transitioned from one layout to another (prev = where they were).
+    fn state_with_prev(
+        current_count: usize,
+        prev_count: usize,
+        ids: &[u32],
+        w: u16,
+        h: u16,
+    ) -> Vec<PaneCenter> {
+        let cur = grid_positions(current_count, w, h);
+        let prev = grid_positions(prev_count, w, h);
+        cur.iter()
+            .zip(prev.iter())
             .zip(ids.iter())
             .map(|((r, pr), &id)| {
                 let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
@@ -519,89 +647,9 @@ mod tests {
             .collect()
     }
 
-    /// Simulate what apply_grid_layout does when adding a pane.
-    /// Returns the final ordered pane IDs (existing + new_pane_id).
-    fn simulate_add_pane(
-        existing: &[PaneCenter],
-        new_pane_id: u32,
-        new_total: usize,
-        w: u16,
-        h: u16,
-    ) -> Vec<u32> {
-        let rects = grid_positions(new_total, w, h);
-        let slot_centers = centers_from_rects(&rects);
-
-        // Option A: match existing panes to ALL slots.
-        // Use structural matching when a lone column pane exists
-        // (balanced+column → balanced transitions like 3→4, 5→6, 7→8).
-        let matched = match_panes_structural(existing, &slot_centers, existing.len(), new_total);
-
-        let matched_ids: Vec<u32> = matched.iter().filter_map(|&id| id).collect();
-        let all_ids: Vec<u32> = existing
-            .iter()
-            .map(|p| p.id)
-            .chain(std::iter::once(new_pane_id))
-            .collect();
-        let mut unmatched = all_ids.iter().filter(|id| !matched_ids.contains(id));
-        let mut ordered: Vec<u32> = matched
-            .iter()
-            .map(|opt| match opt {
-                Some(id) => *id,
-                None => *unmatched.next().unwrap(),
-            })
-            .collect();
-        for &id in unmatched {
-            ordered.push(id);
-        }
-        ordered
-    }
-
-    /// Simulate what apply_grid_layout does when a pane is removed.
-    /// Takes explicit target slot rects (since the layout variant may differ
-    /// from what grid_positions returns — e.g., full-height right vs left).
-    fn simulate_remove_pane(
-        panes_before: &[PaneCenter],
-        removed_id: u32,
-        target_rects: &[Rect],
-    ) -> Vec<u32> {
-        let remaining: Vec<PaneCenter> = panes_before
-            .iter()
-            .filter(|p| p.id != removed_id)
-            .cloned()
-            .collect();
-        let slots = centers_from_rects(target_rects);
-        let matched =
-            match_panes_structural(&remaining, &slots, panes_before.len(), target_rects.len());
-        matched.iter().map(|opt| opt.unwrap()).collect()
-    }
-
-    /// 3-pane layout: split left column + full-height right column.
-    /// (Mirror of the standard 3-pane layout which has full-height LEFT.)
-    fn layout_3_full_right(w: u16, h: u16) -> Vec<Rect> {
-        let right_w = (w - 1) / 2;
-        let left_w = w - 1 - right_w;
-        let top_h = (h - 1) / 2;
-        let bot_h = h - 1 - top_h;
-        vec![
-            Rect {
-                x: 0,
-                y: 0,
-                w: left_w,
-                h: top_h,
-            }, // left-top
-            Rect {
-                x: 0,
-                y: top_h + 1,
-                w: left_w,
-                h: bot_h,
-            }, // left-bottom
-            Rect {
-                x: left_w + 1,
-                y: 0,
-                w: right_w,
-                h: h,
-            }, // right full
-        ]
+    /// Shorthand: compute_pane_order → ordered_ids
+    fn order(ids: &[u32], centers: &[PaneCenter], prev: usize, w: u16, h: u16) -> Vec<u32> {
+        compute_pane_order(ids, centers, prev, w, h).ordered_ids
     }
 
     const W: u16 = 280;
@@ -609,380 +657,372 @@ mod tests {
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // ADDING PANES
+    //
+    // New pane always goes to the last slot. Existing panes stay put.
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    // ── 3→4: unbalanced → balanced ──────────────────────────────────
-    //
-    //  BEFORE (3 panes):          AFTER (4 panes):
-    //  ┌──────┬──────┐            ┌──────┬──────┐
-    //  │      │  B   │            │  A   │  B   │
-    //  │  A   ├──────┤    →       ├──────┼──────┤
-    //  │      │  C   │            │ NEW  │  C   │
-    //  └──────┴──────┘            └──────┴──────┘
-    //
-    //  Right column untouched. Left pane shrinks to TL. New pane fills BL.
-
     #[test]
-    fn add_pane_3_to_4() {
-        let rects_3 = grid_positions(3, W, H);
-        let panes = pane_centers_from_rects(&rects_3, &[10, 11, 12]);
-
-        let ordered = simulate_add_pane(&panes, 99, 4, W, H);
-
-        assert_eq!(ordered[0], 10, "TL: left pane stays left");
-        assert_eq!(ordered[1], 11, "TR: right-top stays");
-        assert_eq!(ordered[2], 99, "BL: new pane fills the gap");
-        assert_eq!(ordered[3], 12, "BR: right-bottom stays");
+    fn add_3_to_4() {
+        //  [A][B]    [A][B]
+        //  [_][C] →  [N][C]
+        let c = state(3, &[10, 11, 12], W, H);
+        let o = order(&[10, 11, 12, 99], &c, 3, W, H);
+        assert_eq!(o, [10, 11, 99, 12]);
     }
 
-    // ── 4→5: balanced → balanced+column ─────────────────────────────
-    //
-    //  BEFORE (4 panes):          AFTER (5 panes):
-    //  ┌──────┬──────┐            ┌───┬───┬─────┐
-    //  │  A   │  B   │            │ A │ B │     │
-    //  ├──────┼──────┤    →       ├───┼───┤ NEW │
-    //  │  C   │  D   │            │ C │ D │     │
-    //  └──────┴──────┘            └───┴───┴─────┘
-    //
-    //  2x2 shifts slightly narrower but stays in position.
-    //  New pane is a full-height column on the right.
-
     #[test]
-    fn add_pane_4_to_5() {
-        let rects_4 = grid_positions(4, W, H);
-        let panes = pane_centers_from_rects(&rects_4, &[10, 11, 12, 13]);
-
-        let ordered = simulate_add_pane(&panes, 99, 5, W, H);
-
-        assert_eq!(ordered[0], 10, "TL: stays top-left");
-        assert_eq!(ordered[1], 11, "TR: stays top-right");
-        assert_eq!(ordered[2], 12, "BL: stays bottom-left");
-        assert_eq!(ordered[3], 13, "BR: stays bottom-right");
-        assert_eq!(ordered[4], 99, "R: new pane is right column");
+    fn add_4_to_5() {
+        //  [A][B]    [A][B][ ]
+        //  [C][D] →  [C][D][N]
+        let c = state(4, &[10, 11, 12, 13], W, H);
+        let o = order(&[10, 11, 12, 13, 99], &c, 4, W, H);
+        assert_eq!(o, [10, 11, 12, 13, 99]);
     }
 
-    // ── 5→6: balanced+column → balanced ─────────────────────────────
-    //
-    //  BEFORE (5 panes):          AFTER (6 panes):
-    //  ┌───┬───┬─────┐            ┌───┬───┬───┐
-    //  │ A │ B │     │            │ A │ B │ E │
-    //  ├───┼───┤  E  │    →       ├───┼───┼───┤
-    //  │ C │ D │     │            │ C │ D │NEW│
-    //  └───┴───┴─────┘            └───┴───┴───┘
-    //
-    //  Right column (E) shrinks to top-right. New pane fills bottom-right.
-    //  2x2 block (A,B,C,D) completely untouched.
-
     #[test]
-    fn add_pane_5_to_6() {
-        let rects_5 = grid_positions(5, W, H);
-        let rects_4 = grid_positions(4, W, H);
-
-        // Panes 10-13 have prev centers from the 4-pane layout.
-        // Pane 14 was new in 4→5, so no prev center.
-        let mut panes = pane_centers_with_prev(&rects_5[..4], &rects_4, &[10, 11, 12, 13]);
-        let (cx, cy) = rect_center(rects_5[4].x, rects_5[4].y, rects_5[4].w, rects_5[4].h);
-        panes.push(PaneCenter {
+    fn add_5_to_6() {
+        //  [A][B][_]    [A][B][E]
+        //  [C][D][E] →  [C][D][N]
+        let mut c = state_with_prev(5, 4, &[10, 11, 12, 13], W, H);
+        let r5 = grid_positions(5, W, H);
+        let (cx, cy) = rect_center(r5[4].x, r5[4].y, r5[4].w, r5[4].h);
+        c.push(PaneCenter {
             id: 14,
             cx,
             cy,
             prev_cx: None,
             prev_cy: None,
         });
-
-        let ordered = simulate_add_pane(&panes, 99, 6, W, H);
-
-        assert_eq!(ordered[0], 10, "TL: stays top-left");
-        assert_eq!(ordered[1], 11, "TM: stays (was TR of 2x2)");
-        assert_eq!(ordered[2], 14, "TR: right column pane moves to top-right");
-        assert_eq!(ordered[3], 12, "BL: stays bottom-left");
-        assert_eq!(ordered[4], 13, "BM: stays (was BR of 2x2)");
-        assert_eq!(ordered[5], 99, "BR: new pane fills bottom-right");
+        let o = order(&[10, 11, 12, 13, 14, 99], &c, 5, W, H);
+        assert_eq!(o, [10, 11, 14, 12, 13, 99]);
     }
 
-    // ── 6→7: balanced → balanced+column ─────────────────────────────
-    //
-    //  BEFORE (6 panes):          AFTER (7 panes):
-    //  ┌───┬───┬───┐              ┌──┬──┬──┬────┐
-    //  │ A │ B │ C │              │A │B │C │    │
-    //  ├───┼───┼───┤    →         ├──┼──┼──┤NEW │
-    //  │ D │ E │ F │              │D │E │F │    │
-    //  └───┴───┴───┘              └──┴──┴──┴────┘
-    //
-    //  3x2 shifts narrower but stays in position. New column on right.
-
     #[test]
-    fn add_pane_6_to_7() {
-        let rects_6 = grid_positions(6, W, H);
-        let panes = pane_centers_from_rects(&rects_6, &[10, 11, 12, 13, 14, 15]);
-
-        let ordered = simulate_add_pane(&panes, 99, 7, W, H);
-
-        assert_eq!(ordered[0], 10, "TL");
-        assert_eq!(ordered[1], 11, "TM");
-        assert_eq!(ordered[2], 12, "TR");
-        assert_eq!(ordered[3], 13, "BL");
-        assert_eq!(ordered[4], 14, "BM");
-        assert_eq!(ordered[5], 15, "BR");
-        assert_eq!(ordered[6], 99, "R: new right column");
+    fn add_6_to_7() {
+        //  [A][B][C]    [A][B][C][ ]
+        //  [D][E][F] →  [D][E][F][N]
+        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
+        let o = order(&[10, 11, 12, 13, 14, 15, 99], &c, 6, W, H);
+        assert_eq!(o, [10, 11, 12, 13, 14, 15, 99]);
     }
 
-    // ── 7→8: balanced+column → balanced ─────────────────────────────
-    //
-    //  BEFORE (7 panes):          AFTER (8 panes):
-    //  ┌──┬──┬──┬────┐            ┌──┬──┬──┬──┐
-    //  │A │B │C │    │            │A │B │C │G │
-    //  ├──┼──┼──┤ G  │    →       ├──┼──┼──┼──┤
-    //  │D │E │F │    │            │D │E │F │NW│
-    //  └──┴──┴──┴────┘            └──┴──┴──┴──┘
-    //
-    //  G shrinks to top-right. New pane fills bottom-right.
-
     #[test]
-    fn add_pane_7_to_8() {
-        let rects_7 = grid_positions(7, W, H);
-        let rects_6 = grid_positions(6, W, H);
-
-        let mut panes = pane_centers_with_prev(&rects_7[..6], &rects_6, &[10, 11, 12, 13, 14, 15]);
-        let (cx, cy) = rect_center(rects_7[6].x, rects_7[6].y, rects_7[6].w, rects_7[6].h);
-        panes.push(PaneCenter {
+    fn add_7_to_8() {
+        //  [A][B][C][_]    [A][B][C][G]
+        //  [D][E][F][G] →  [D][E][F][N]
+        let mut c = state_with_prev(7, 6, &[10, 11, 12, 13, 14, 15], W, H);
+        let r7 = grid_positions(7, W, H);
+        let (cx, cy) = rect_center(r7[6].x, r7[6].y, r7[6].w, r7[6].h);
+        c.push(PaneCenter {
             id: 16,
             cx,
             cy,
             prev_cx: None,
             prev_cy: None,
         });
-
-        let ordered = simulate_add_pane(&panes, 99, 8, W, H);
-
-        assert_eq!(ordered[0], 10, "TL");
-        assert_eq!(ordered[1], 11, "TM-left");
-        assert_eq!(ordered[2], 12, "TM-right");
-        assert_eq!(ordered[3], 16, "TR: right column pane moves to top-right");
-        assert_eq!(ordered[4], 13, "BL");
-        assert_eq!(ordered[5], 14, "BM-left");
-        assert_eq!(ordered[6], 15, "BM-right");
-        assert_eq!(ordered[7], 99, "BR: new pane fills bottom-right");
+        let o = order(&[10, 11, 12, 13, 14, 15, 16, 99], &c, 7, W, H);
+        assert_eq!(o, [10, 11, 12, 16, 13, 14, 15, 99]);
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // REMOVING PANES — Column-Mate Expands (balanced → unbalanced)
+    // REMOVING FROM 4-PANE (4→3) — Column-Mate Expands
     //
-    // When a pane is removed from a balanced grid, its column-mate expands
-    // to full height. The other columns stay split.
+    // Left-column removal → left-full layout (standard)
+    // Right-column removal → right-full layout (mirrored)
+    // Column-mate expands on its own side. Other column stays split.
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    // ── 4→3: remove TL ──────────────────────────────────────────────
-    //
-    //  ┌───┬───┐     ┌───┬───┐
-    //  │ x │ B │     │   │ B │
-    //  ├───┼───┤  →  │ C ├───┤    C (column-mate of removed TL) expands.
-    //  │ C │ D │     │   │ D │    B and D stay on right.
-    //  └───┴───┘     └───┴───┘
-
     #[test]
-    fn remove_tl_from_2x2() {
-        let rects_4 = grid_positions(4, W, H);
-        let panes = pane_centers_from_rects(&rects_4, &[10, 11, 12, 13]);
-
-        // Target: 3-pane with full-height LEFT (standard orientation)
-        let target = grid_positions(3, W, H);
-        let ordered = simulate_remove_pane(&panes, 10, &target);
-
-        assert_eq!(ordered[0], 12, "full-left: BL expands (column-mate)");
-        assert_eq!(ordered[1], 11, "right-top: TR stays");
-        assert_eq!(ordered[2], 13, "right-bottom: BR stays");
+    fn remove_4_tl() {
+        //  [x][B]    [ ][B]
+        //  [C][D] →  [C][D]    C expands full-left
+        let c = state(4, &[10, 11, 12, 13], W, H);
+        let pl = compute_pane_order(&[11, 12, 13], &c, 4, W, H);
+        assert!(!pl.three_pane_right_full);
+        assert_eq!(pl.ordered_ids, [12, 11, 13]);
     }
 
-    // ── 4→3: remove TR ──────────────────────────────────────────────
-    //
-    //  ┌───┬───┐     ┌───┬───┐
-    //  │ A │ x │     │ A │   │
-    //  ├───┼───┤  →  ├───┤ D │    D (column-mate of removed TR) expands.
-    //  │ C │ D │     │ C │   │    A and C stay on left.
-    //  └───┴───┘     └───┴───┘
-
     #[test]
-    fn remove_tr_from_2x2() {
-        let rects_4 = grid_positions(4, W, H);
-        let panes = pane_centers_from_rects(&rects_4, &[10, 11, 12, 13]);
-
-        // Target: 3-pane with full-height RIGHT (mirrored orientation)
-        let target = layout_3_full_right(W, H);
-        let ordered = simulate_remove_pane(&panes, 11, &target);
-
-        assert_eq!(ordered[0], 10, "left-top: TL stays");
-        assert_eq!(ordered[1], 12, "left-bottom: BL stays");
-        assert_eq!(ordered[2], 13, "full-right: BR expands (column-mate)");
+    fn remove_4_tr() {
+        //  [A][x]    [A][ ]
+        //  [C][D] →  [C][D]    D expands full-right
+        let c = state(4, &[10, 11, 12, 13], W, H);
+        let pl = compute_pane_order(&[10, 12, 13], &c, 4, W, H);
+        assert!(pl.three_pane_right_full);
+        assert_eq!(pl.ordered_ids, [10, 12, 13]);
     }
 
-    // ── 4→3: remove BL ──────────────────────────────────────────────
-    //
-    //  ┌───┬───┐     ┌───┬───┐
-    //  │ A │ B │     │   │ B │
-    //  ├───┼───┤  →  │ A ├───┤    A (column-mate of removed BL) expands.
-    //  │ x │ D │     │   │ D │
-    //  └───┴───┘     └───┴───┘
-
     #[test]
-    fn remove_bl_from_2x2() {
-        let rects_4 = grid_positions(4, W, H);
-        let panes = pane_centers_from_rects(&rects_4, &[10, 11, 12, 13]);
-
-        let target = grid_positions(3, W, H);
-        let ordered = simulate_remove_pane(&panes, 12, &target);
-
-        assert_eq!(ordered[0], 10, "full-left: TL expands (column-mate)");
-        assert_eq!(ordered[1], 11, "right-top: TR stays");
-        assert_eq!(ordered[2], 13, "right-bottom: BR stays");
+    fn remove_4_bl() {
+        //  [A][B]    [A][B]
+        //  [x][D] →  [ ][D]    A expands full-left
+        let c = state(4, &[10, 11, 12, 13], W, H);
+        let pl = compute_pane_order(&[10, 11, 13], &c, 4, W, H);
+        assert!(!pl.three_pane_right_full);
+        assert_eq!(pl.ordered_ids, [10, 11, 13]);
     }
 
-    // ── 4→3: remove BR ──────────────────────────────────────────────
-    //
-    //  ┌───┬───┐     ┌───┬───┐
-    //  │ A │ B │     │ A │   │
-    //  ├───┼───┤  →  ├───┤ B │    B (column-mate of removed BR) expands.
-    //  │ C │ x │     │ C │   │
-    //  └───┴───┘     └───┴───┘
-
     #[test]
-    fn remove_br_from_2x2() {
-        let rects_4 = grid_positions(4, W, H);
-        let panes = pane_centers_from_rects(&rects_4, &[10, 11, 12, 13]);
-
-        let target = layout_3_full_right(W, H);
-        let ordered = simulate_remove_pane(&panes, 13, &target);
-
-        assert_eq!(ordered[0], 10, "left-top: TL stays");
-        assert_eq!(ordered[1], 12, "left-bottom: BL stays");
-        assert_eq!(ordered[2], 11, "full-right: TR expands (column-mate)");
+    fn remove_4_br() {
+        //  [A][B]    [A][ ]
+        //  [C][x] →  [C][B]    B expands full-right
+        let c = state(4, &[10, 11, 12, 13], W, H);
+        let pl = compute_pane_order(&[10, 11, 12], &c, 4, W, H);
+        assert!(pl.three_pane_right_full);
+        assert_eq!(pl.ordered_ids, [10, 12, 11]);
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // REMOVING PANES — Substitute Fills Gap (unbalanced → balanced)
+    // REMOVING FROM 5-PANE (5→4) — Substitute Fills Gap
     //
-    // When a pane is removed from the balanced part of a balanced+column
-    // layout, the right column pane fills the gap. Everyone else stays.
+    // 5-pane: [TL TR BL BR | R]
+    // Remove from 2x2 part → right-col pane fills the gap.
+    // Remove right-col → 2x2 stays unchanged.
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    // ── 5→4: remove right column ────────────────────────────────────
-    //
-    //  ┌───┬───┬─────┐     ┌───┬───┐
-    //  │ A │ B │     │     │ A │ B │
-    //  ├───┼───┤  x  │  →  ├───┼───┤    2x2 stays. Zero movement.
-    //  │ C │ D │     │     │ C │ D │
-    //  └───┴───┴─────┘     └───┴───┘
-
     #[test]
-    fn remove_right_column_from_5() {
-        let rects_5 = grid_positions(5, W, H);
-        let panes = pane_centers_from_rects(&rects_5, &[10, 11, 12, 13, 14]);
-
-        let target = grid_positions(4, W, H);
-        let ordered = simulate_remove_pane(&panes, 14, &target);
-
-        assert_eq!(ordered[0], 10, "TL: stays");
-        assert_eq!(ordered[1], 11, "TR: stays");
-        assert_eq!(ordered[2], 12, "BL: stays");
-        assert_eq!(ordered[3], 13, "BR: stays");
+    fn remove_5_tl() {
+        let c = state(5, &[10, 11, 12, 13, 14], W, H);
+        assert_eq!(order(&[11, 12, 13, 14], &c, 5, W, H), [14, 11, 12, 13]);
     }
-
-    // ── 5→4: remove from 2x2 part ──────────────────────────────────
-    //
-    //  ┌───┬───┬─────┐     ┌───┬───┐
-    //  │ x │ B │     │     │ E │ B │
-    //  ├───┼───┤  E  │  →  ├───┼───┤    E fills the gap. Others stay.
-    //  │ C │ D │     │     │ C │ D │
-    //  └───┴───┴─────┘     └───┴───┘
-
     #[test]
-    fn remove_tl_from_5_substitute_fills() {
-        let rects_5 = grid_positions(5, W, H);
-        let panes = pane_centers_from_rects(&rects_5, &[10, 11, 12, 13, 14]);
-
-        let target = grid_positions(4, W, H);
-        let ordered = simulate_remove_pane(&panes, 10, &target);
-
-        assert_eq!(ordered[0], 14, "TL: right column pane fills the gap");
-        assert_eq!(ordered[1], 11, "TR: stays");
-        assert_eq!(ordered[2], 12, "BL: stays");
-        assert_eq!(ordered[3], 13, "BR: stays");
+    fn remove_5_tr() {
+        let c = state(5, &[10, 11, 12, 13, 14], W, H);
+        assert_eq!(order(&[10, 12, 13, 14], &c, 5, W, H), [10, 14, 12, 13]);
+    }
+    #[test]
+    fn remove_5_bl() {
+        let c = state(5, &[10, 11, 12, 13, 14], W, H);
+        assert_eq!(order(&[10, 11, 13, 14], &c, 5, W, H), [10, 11, 14, 13]);
+    }
+    #[test]
+    fn remove_5_br() {
+        let c = state(5, &[10, 11, 12, 13, 14], W, H);
+        assert_eq!(order(&[10, 11, 12, 14], &c, 5, W, H), [10, 11, 12, 14]);
+    }
+    #[test]
+    fn remove_5_rcol() {
+        let c = state(5, &[10, 11, 12, 13, 14], W, H);
+        assert_eq!(order(&[10, 11, 12, 13], &c, 5, W, H), [10, 11, 12, 13]);
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // REMOVING PANES — Column-Mate from 3x2 (balanced → unbalanced)
+    // REMOVING FROM 6-PANE (6→5) — Column-Mate to Right Column
     //
-    // When a pane is removed from a 3x2 grid, its column-mate takes the
-    // full-height right column. The other two columns form the 2x2.
+    // 6-pane 3x2: [TL TM TR | BL BM BR]
+    // Column-mate of removed pane takes the full-height right column.
+    // Other 4 panes fill the 2x2 part.
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    // ── 6→5: remove TM ──────────────────────────────────────────────
-    //
-    //  ┌───┬───┬───┐     ┌───┬───┬─────┐
-    //  │ A │ x │ C │     │ A │ C │     │
-    //  ├───┼───┼───┤  →  ├───┼───┤  E  │    E = column-mate of removed B
-    //  │ D │ E │ F │     │ D │ F │     │    C and F shift left.
-    //  └───┴───┴───┘     └───┴───┴─────┘
-
     #[test]
-    fn remove_tm_from_3x2() {
-        let rects_6 = grid_positions(6, W, H);
-        let panes = pane_centers_from_rects(&rects_6, &[10, 11, 12, 13, 14, 15]);
-
-        let target = grid_positions(5, W, H); // 2x2 + right column
-        let ordered = simulate_remove_pane(&panes, 11, &target);
-
-        assert_eq!(ordered[0], 10, "TL: stays");
-        assert_eq!(ordered[1], 12, "TR: old TR shifts to 2x2 TR");
-        assert_eq!(ordered[2], 13, "BL: stays");
-        assert_eq!(ordered[3], 15, "BR: old BR shifts to 2x2 BR");
-        assert_eq!(ordered[4], 14, "R: column-mate takes right column");
+    fn remove_6_tl() {
+        //  [x][B][C]    [B][C][ ]
+        //  [D][E][F] →  [E][F][D]   D=column-mate→R
+        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
+        assert_eq!(
+            order(&[11, 12, 13, 14, 15], &c, 6, W, H),
+            [12, 11, 15, 14, 13]
+        );
+    }
+    #[test]
+    fn remove_6_tm() {
+        //  [A][x][C]    [A][C][ ]
+        //  [D][E][F] →  [D][F][E]   E=column-mate→R
+        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
+        assert_eq!(
+            order(&[10, 12, 13, 14, 15], &c, 6, W, H),
+            [10, 12, 13, 15, 14]
+        );
+    }
+    #[test]
+    fn remove_6_tr() {
+        //  [A][B][x]    [A][B][ ]
+        //  [D][E][F] →  [D][E][F]   F=column-mate→R
+        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
+        assert_eq!(
+            order(&[10, 11, 13, 14, 15], &c, 6, W, H),
+            [10, 11, 13, 14, 15]
+        );
+    }
+    #[test]
+    fn remove_6_bl() {
+        //  [A][B][C]    [B][C][ ]
+        //  [x][E][F] →  [E][F][A]   A=column-mate→R
+        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 14, 15], &c, 6, W, H),
+            [12, 11, 15, 14, 10]
+        );
+    }
+    #[test]
+    fn remove_6_bm() {
+        //  [A][B][C]    [A][C][ ]
+        //  [D][x][F] →  [D][F][B]   B=column-mate→R
+        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 13, 15], &c, 6, W, H),
+            [10, 12, 13, 15, 11]
+        );
+    }
+    #[test]
+    fn remove_6_br() {
+        //  [A][B][C]    [A][B][ ]
+        //  [D][E][x] →  [D][E][C]   C=column-mate→R
+        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 13, 14], &c, 6, W, H),
+            [10, 11, 13, 14, 12]
+        );
     }
 
-    // ── 6→5: remove BR ──────────────────────────────────────────────
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // REMOVING FROM 7-PANE (7→6) — Substitute Fills Gap
     //
-    //  ┌───┬───┬───┐     ┌───┬───┬─────┐
-    //  │ A │ B │ C │     │ A │ B │     │
-    //  ├───┼───┼───┤  →  ├───┼───┤  C  │    C = column-mate of removed F
-    //  │ D │ E │ x │     │ D │ E │     │    A,B,D,E stay as 2x2.
-    //  └───┴───┴───┘     └───┴───┴─────┘
+    // 7-pane: [TL TM TR | BL BM BR | R]
+    // Remove from 3x2 part → right-col pane fills the gap.
+    // Remove right-col → 3x2 stays unchanged.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     #[test]
-    fn remove_br_from_3x2() {
-        let rects_6 = grid_positions(6, W, H);
-        let panes = pane_centers_from_rects(&rects_6, &[10, 11, 12, 13, 14, 15]);
+    fn remove_7_tl() {
+        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        assert_eq!(
+            order(&[11, 12, 13, 14, 15, 16], &c, 7, W, H),
+            [16, 11, 12, 13, 14, 15]
+        );
+    }
+    #[test]
+    fn remove_7_tm() {
+        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        assert_eq!(
+            order(&[10, 12, 13, 14, 15, 16], &c, 7, W, H),
+            [10, 16, 12, 13, 14, 15]
+        );
+    }
+    #[test]
+    fn remove_7_tr() {
+        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        assert_eq!(
+            order(&[10, 11, 13, 14, 15, 16], &c, 7, W, H),
+            [10, 11, 16, 13, 14, 15]
+        );
+    }
+    #[test]
+    fn remove_7_bl() {
+        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 14, 15, 16], &c, 7, W, H),
+            [10, 11, 12, 16, 14, 15]
+        );
+    }
+    #[test]
+    fn remove_7_bm() {
+        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 13, 15, 16], &c, 7, W, H),
+            [10, 11, 12, 13, 16, 15]
+        );
+    }
+    #[test]
+    fn remove_7_br() {
+        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 13, 14, 16], &c, 7, W, H),
+            [10, 11, 12, 13, 14, 16]
+        );
+    }
+    #[test]
+    fn remove_7_rcol() {
+        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 13, 14, 15], &c, 7, W, H),
+            [10, 11, 12, 13, 14, 15]
+        );
+    }
 
-        let target = grid_positions(5, W, H);
-        let ordered = simulate_remove_pane(&panes, 15, &target);
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // REMOVING FROM 8-PANE (8→7) — Column-Mate to Right Column
+    //
+    // 8-pane 4x2: [TL TML TMR TR | BL BML BMR BR]
+    // Column-mate of removed pane takes the full-height right column.
+    // Other 6 panes fill the 3x2 part.
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-        assert_eq!(ordered[0], 10, "TL: stays");
-        assert_eq!(ordered[1], 11, "TR: stays");
-        assert_eq!(ordered[2], 13, "BL: stays");
-        assert_eq!(ordered[3], 14, "BR: stays");
-        assert_eq!(ordered[4], 12, "R: column-mate takes right column");
+    #[test]
+    fn remove_8_tl() {
+        // BL=column-mate→R, others→3x2
+        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        assert_eq!(
+            order(&[11, 12, 13, 14, 15, 16, 17], &c, 8, W, H),
+            [13, 11, 12, 17, 15, 16, 14]
+        );
+    }
+    #[test]
+    fn remove_8_tml() {
+        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        assert_eq!(
+            order(&[10, 12, 13, 14, 15, 16, 17], &c, 8, W, H),
+            [10, 13, 12, 14, 17, 16, 15]
+        );
+    }
+    #[test]
+    fn remove_8_tmr() {
+        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        assert_eq!(
+            order(&[10, 11, 13, 14, 15, 16, 17], &c, 8, W, H),
+            [10, 11, 13, 14, 15, 17, 16]
+        );
+    }
+    #[test]
+    fn remove_8_tr() {
+        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 14, 15, 16, 17], &c, 8, W, H),
+            [10, 11, 12, 14, 15, 16, 17]
+        );
+    }
+    #[test]
+    fn remove_8_bl() {
+        // TL=column-mate→R
+        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 13, 15, 16, 17], &c, 8, W, H),
+            [13, 11, 12, 17, 15, 16, 10]
+        );
+    }
+    #[test]
+    fn remove_8_bml() {
+        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 13, 14, 16, 17], &c, 8, W, H),
+            [10, 13, 12, 14, 17, 16, 11]
+        );
+    }
+    #[test]
+    fn remove_8_bmr() {
+        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 13, 14, 15, 17], &c, 8, W, H),
+            [10, 11, 13, 14, 15, 17, 12]
+        );
+    }
+    #[test]
+    fn remove_8_br() {
+        // TR=column-mate→R
+        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        assert_eq!(
+            order(&[10, 11, 12, 13, 14, 15, 16], &c, 8, W, H),
+            [10, 11, 12, 14, 15, 16, 13]
+        );
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // SNAP-BACK — Removing the last-added pane reverses the add
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    // ── 5→4: remove right column (undo of 4→5) ─────────────────────
-
     #[test]
     fn snap_back_5_to_4() {
-        let rects_4 = grid_positions(4, W, H);
-        let rects_5 = grid_positions(5, W, H);
-        let ids: Vec<u32> = vec![10, 11, 12, 13];
-
-        let current_rects: Vec<Rect> = (0..4).map(|i| rects_5[i].clone()).collect();
-        let panes = pane_centers_with_prev(&current_rects, &rects_4, &ids);
-
-        let slot_centers = centers_from_rects(&rects_4);
-        let matched = match_panes_to_slots(&panes, &slot_centers, false);
-
-        assert_eq!(matched[0], Some(10), "TL: snaps back");
-        assert_eq!(matched[1], Some(11), "TR: snaps back");
-        assert_eq!(matched[2], Some(12), "BL: snaps back");
-        assert_eq!(matched[3], Some(13), "BR: snaps back");
+        let c = state_with_prev(5, 4, &[10, 11, 12, 13], W, H);
+        assert_eq!(order(&[10, 11, 12, 13], &c, 5, W, H), [10, 11, 12, 13]);
     }
 }

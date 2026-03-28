@@ -489,8 +489,8 @@ fn layout_close_preserves_positions() {
     // Record dimensions of pane 0 (top-left in 2x2)
     let p0_before = (panes_before[0].width, panes_before[0].height);
 
-    // Kill pane 1 (top-right) — pane 0 should expand to full-height left column
-    amux::tmux::kill_pane(&ts.name, 1).expect("kill");
+    // Kill pane 2 (bottom-left) — pane 0 (column-mate) should expand to full-height left column
+    amux::tmux::kill_pane(&ts.name, 2).expect("kill");
 
     let panes_after = amux::tmux::list_panes(&ts.name).expect("list");
     assert_eq!(panes_after.len(), 3);

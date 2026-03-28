@@ -76,6 +76,13 @@ pub fn grid_positions(count: usize, width: u16, height: u16) -> Vec<Rect> {
     }
 }
 
+/// 3-pane layout with full-height RIGHT column (mirrored variant).
+/// Slot order: left-top, left-bottom, full-right.
+/// Used when removing from the right column of a 2x2.
+pub fn grid_positions_3_right(width: u16, height: u16) -> Vec<Rect> {
+    layout_balanced_plus_column(1, width, height)
+}
+
 /// Layout a balanced grid (cols x 2) plus a full-height right column.
 /// Slot order: top row L→R, bottom row L→R, then right column.
 fn layout_balanced_plus_column(balanced_cols: usize, width: u16, height: u16) -> Vec<Rect> {
@@ -313,6 +320,54 @@ pub fn build_layout_string_direct(
     Some(format!("{:04x},{}", csum, body))
 }
 
+/// Build tmux layout string for 3-pane right-full variant.
+/// Slot order: left-top, left-bottom, full-right.
+pub fn build_layout_string_3_right(
+    width: u16,
+    height: u16,
+    pane_ids: &[u32],
+    border_top: u16,
+) -> Option<String> {
+    if pane_ids.len() != 3 {
+        return None;
+    }
+
+    // Same geometry as odd >= 5 path but with balanced_cols = 1
+    let total_cols = 2u16;
+    let available = width - (total_cols - 1);
+    let col_w = available / total_cols;
+
+    let left_w = col_w;
+    let right_x = left_w + 1;
+    let right_w = width - right_x;
+
+    let (th, bh) = split_two_rows(height, border_top);
+    let by = th + 1;
+
+    // left-top, left-bottom, full-right
+    let body = format!(
+        "{}x{},0,0{{{}x{},0,0[{}x{},0,0,{},{}x{},0,{},{}],{}x{},{},0,{}}}",
+        width,
+        height,
+        left_w,
+        height,
+        left_w,
+        th,
+        pane_ids[0],
+        left_w,
+        bh,
+        by,
+        pane_ids[1],
+        right_w,
+        height,
+        right_x,
+        pane_ids[2]
+    );
+
+    let csum = layout_checksum(&body);
+    Some(format!("{:04x},{}", csum, body))
+}
+
 /// Split height into two rows, compensating for border_top.
 ///
 /// With pane-border-status top, the first row of panes loses `border_top`
@@ -429,6 +484,30 @@ mod tests {
         assert!(rects[2].y > 0);
         // Right panes stack vertically
         assert_eq!(rects[1].x, rects[2].x);
+    }
+
+    #[test]
+    fn three_panes_right_full_left_split() {
+        let rects = grid_positions_3_right(280, 80);
+        assert_eq!(rects.len(), 3);
+        // Pane 1: top-left
+        assert_eq!(rects[0].x, 0);
+        assert_eq!(rects[0].y, 0);
+        assert!(rects[0].h < 80);
+        // Pane 2: bottom-left
+        assert_eq!(rects[1].x, 0);
+        assert!(rects[1].y > 0);
+        assert!(rects[1].h < 80);
+        // Pane 3: right, full height
+        assert!(rects[2].x > 0);
+        assert_eq!(rects[2].y, 0);
+        assert_eq!(rects[2].h, 80);
+        // Left panes stack vertically
+        assert_eq!(rects[0].x, rects[1].x);
+        // Left and right columns don't overlap
+        assert!(rects[2].x > rects[0].w);
+        // Left panes cover full height (with divider)
+        assert_eq!(rects[0].h + 1 + rects[1].h, 80);
     }
 
     #[test]

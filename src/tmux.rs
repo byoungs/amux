@@ -355,91 +355,47 @@ pub fn apply_grid_layout(session: &str) -> Result<()> {
     let prev_count = get_prev_pane_count(session);
     let count_changed = prev_count > 0 && (ids.len() as i32) != prev_count;
 
-    // Reset split tree first
-    let _ = Command::new("tmux")
-        .args(["select-layout", "-t", session, "tiled"])
-        .output();
+    // Only do spatial matching/swapping when pane count changed.
+    // This prevents panes from shuffling during L2→L2 navigation.
+    let (pane_layout, pane_centers) = if count_changed {
+        let centers = crate::sticky::read_all_pane_centers(session).unwrap_or_default();
+        let pl =
+            crate::sticky::compute_pane_order(&ids, &centers, prev_count as usize, w, effective_h);
+        (Some(pl), centers)
+    } else {
+        (None, Vec::new())
+    };
 
-    // Apply the grid layout with standard ID ordering (tmux assigns positions
-    // to panes in index order, ignoring IDs in the layout string).
+    // Apply the grid layout. For 3-pane right-full variant, use the
+    // mirrored layout string. Otherwise use the standard layout.
     // Note: build_layout_string_direct gets raw `h` (not effective_h) because the
     // layout string must span the full window. It uses border_top internally to
     // add extra height to the first row, compensating for the stolen border line.
-    if let Some(layout_str) = crate::layout::build_layout_string_direct(w, h, &ids, border_top) {
+    let layout_str = if pane_layout
+        .as_ref()
+        .is_some_and(|pl| pl.three_pane_right_full)
+    {
+        crate::layout::build_layout_string_3_right(w, h, &ids, border_top)
+    } else {
+        crate::layout::build_layout_string_direct(w, h, &ids, border_top)
+    };
+    if let Some(ls) = layout_str {
+        // Reset split tree before applying custom layout
         let _ = Command::new("tmux")
-            .args(["select-layout", "-t", session, &layout_str])
+            .args(["select-layout", "-t", session, "tiled"])
+            .output();
+        let _ = Command::new("tmux")
+            .args(["select-layout", "-t", session, &ls])
             .output()
             .context("failed to apply custom layout")?;
     }
 
-    // Only do spatial matching/swapping when pane count changed.
-    // This prevents panes from shuffling during L2→L2 navigation.
-    if count_changed {
-        let rects = crate::layout::grid_positions(ids.len(), w, effective_h);
-        let slot_centers: Vec<crate::sticky::SlotCenter> = rects
-            .iter()
-            .map(|r| {
-                let (cx, cy) = crate::sticky::rect_center(r.x, r.y, r.w, r.h);
-                crate::sticky::SlotCenter { cx, cy }
-            })
-            .collect();
-
-        let pane_centers = crate::sticky::read_all_pane_centers(session).unwrap_or_default();
-        let going_up = (ids.len() as i32) > prev_count;
-
-        // Build matching input — only include panes that have saved center data.
-        // New panes (no center data) are excluded and fill leftover slots.
-        let match_input: Vec<crate::sticky::PaneCenter> = ids
-            .iter()
-            .filter_map(|&id| {
-                pane_centers
-                    .iter()
-                    .find(|p| p.id == id)
-                    .filter(|p| p.cx != 0 || p.cy != 0 || p.prev_cx.is_some())
-                    .cloned()
-            })
-            .collect();
-
-        // Use structural matching for removal transitions and geometric
-        // matching with prev-center snap-back for addition transitions.
-        let matched = if going_up {
-            // When adding panes, reserve the last N slots for new panes so
-            // they always appear at the end of the display order.
-            let new_count = ids.len() - match_input.len();
-            let available_slots = slot_centers.len().saturating_sub(new_count);
-            crate::sticky::match_panes_to_slots(
-                &match_input,
-                &slot_centers[..available_slots],
-                true, // use prev centers for snap-back
-            )
-        } else {
-            crate::sticky::match_panes_structural(
-                &match_input,
-                &slot_centers,
-                prev_count as usize,
-                ids.len(),
-            )
-        };
-
-        let matched_ids: Vec<u32> = matched.iter().filter_map(|&id| id).collect();
-        let mut unmatched_iter = ids.iter().filter(|id| !matched_ids.contains(id));
-        let mut ordered_ids: Vec<u32> = matched
-            .iter()
-            .map(|opt| match opt {
-                Some(id) => *id,
-                None => *unmatched_iter.next().unwrap_or(&ids[0]),
-            })
-            .collect();
-        // Append any remaining unmatched panes (new panes fill leftover slots)
-        for &id in unmatched_iter {
-            ordered_ids.push(id);
-        }
-
+    if let Some(pl) = &pane_layout {
         // Swap panes when the ordering differs from tmux's index order.
-        // Runs for BOTH going_up and going_down.
-        let has_spatial_history = match_input.iter().any(|p| p.prev_cx.is_some()) || !going_up;
-        if has_spatial_history && ordered_ids != ids {
-            swap_panes_to_order(session, &ids, &ordered_ids)?;
+        let going_up = (ids.len() as i32) > prev_count;
+        let has_spatial_history = pane_centers.iter().any(|p| p.prev_cx.is_some()) || !going_up;
+        if has_spatial_history && pl.ordered_ids != ids {
+            swap_panes_to_order(session, &ids, &pl.ordered_ids)?;
         }
     }
 

@@ -18,7 +18,7 @@ SYMLINK := $(HOME)/.cargo/bin/amux
 BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 SHORT_SHA := $(shell git rev-parse --short HEAD)
 
-.PHONY: dev test validate fmt lint refresh clean setup setup-rust setup-tmux setup-hook
+.PHONY: dev test validate fmt lint refresh clean setup setup-rust setup-tmux setup-hook app app-dev app-test app-clean
 
 # ── Build ──────────────────────────────────────────────
 
@@ -101,6 +101,22 @@ setup-tmux:
 setup-hook:
 	@"$(RELEASE_BIN)" hook-install 2>&1 || true
 	@echo "✓ Claude Code notification hook checked"
+
+# -- Native App ------------------------------------------------
+
+app:
+	cd app && swift build -c release
+	@echo "Built amux-app -- run: app/.build/release/amux-app"
+
+app-dev:
+	cd app && swift build
+	app/.build/debug/amux-app
+
+app-test: app-dev
+	app/.build/debug/amux-app --run-tests
+
+app-clean:
+	cd app && swift package clean
 
 # ── Convenience ────────────────────────────────────────
 

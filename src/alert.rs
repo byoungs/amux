@@ -21,7 +21,11 @@ pub fn smart_landing(alert_states: &[bool], prev_level: u8, prev_pane: usize) ->
         let index = alert_states.iter().position(|&a| a).unwrap();
         LandingTarget::FocusPane { index, level: 2 }
     } else {
-        let capped_level = if prev_level >= 3 { 2 } else { prev_level };
+        let capped_level = if prev_level == 3 || prev_level == 1 {
+            2
+        } else {
+            prev_level
+        };
         LandingTarget::Resume {
             level: capped_level,
             pane: prev_pane,

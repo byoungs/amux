@@ -88,6 +88,10 @@ enum Commands {
         /// Pane's current working directory
         cwd: String,
     },
+    /// Switch to next pane (Cmd-])
+    PaneNext,
+    /// Switch to previous pane (Cmd-[)
+    PanePrev,
 }
 
 /// The amux session name. AMUX_SESSION env var takes priority (used by hooks
@@ -139,6 +143,8 @@ fn main() -> Result<()> {
         Some(Commands::BellWatch { pane, session }) => cmd_bell_watch(session, pane),
         Some(Commands::HookInstall) => unreachable!("HookInstall handled before tmux check"),
         Some(Commands::UpdateTitle { pane, cwd }) => cmd_update_title(pane, &cwd),
+        Some(Commands::PaneNext) => cmd_pane_next(),
+        Some(Commands::PanePrev) => cmd_pane_prev(),
         None => {
             // Default: start if no session exists, refresh+attach if it does
             let session = session_name();
@@ -192,8 +198,8 @@ fn cmd_start(sessions: &[String]) -> Result<()> {
     let state = build_state(&session)?;
     let _ = state.save(&AmuxState::default_path());
 
-    // Start in bird's eye mode
-    tmux::set_level(&session, 1)?;
+    // Start in working mode (L2)
+    tmux::set_level(&session, 2)?;
 
     // Attach to the session
     tmux::attach(&session)?;
@@ -234,6 +240,13 @@ fn cmd_list() -> Result<()> {
 
 fn cmd_attach() -> Result<()> {
     let session = session_name();
+
+    // If multiple spaces exist, show the spaces picker on attach
+    let spaces = tmux::list_focus_sessions().unwrap_or_default();
+    if spaces.len() > 1 {
+        tmux::set_startup_spaces_hook(&session)?;
+    }
+
     tmux::attach(&session)?;
     Ok(())
 }
@@ -267,10 +280,10 @@ fn cmd_refresh() -> Result<()> {
     // Re-apply tiled layout
     tmux::apply_grid_layout(&session)?;
 
-    // If at level 1, re-enter the bird's eye key table
+    // Migrate L1 (legacy bird's eye) to L2 (working)
     let level = tmux::get_level(&session).unwrap_or(2);
     if level == 1 {
-        tmux::enter_birdeye_table()?;
+        tmux::set_level(&session, 2)?;
     }
 
     eprintln!("Refreshed {} panes in session '{}'", panes.len(), session);
@@ -417,13 +430,9 @@ fn cmd_zoom_in() -> Result<()> {
     let current = tmux::active_pane_index(&session)?;
 
     match level {
-        1 => {
-            // L1 → L2: activate the highlighted pane
+        1 | 2 => {
+            // L1/L2 → L3: full screen
             dismiss_on_focus(&session, current);
-            tmux::set_level(&session, 2)?;
-        }
-        2 => {
-            // L2 → L3: full screen
             tmux::toggle_zoom(&session)?;
             tmux::set_level(&session, 3)?;
         }
@@ -443,12 +452,11 @@ fn cmd_zoom_out() -> Result<()> {
 
     match level {
         1 => {
-            // Already at L1, do nothing
+            // Already at L1 (spaces), do nothing
         }
         2 => {
-            // L2 → L1: just switch key table (layout is already tiled)
-            tmux::set_level(&session, 1)?;
-            tmux::enter_birdeye_table()?;
+            // L2 → spaces picker (replaces bird's eye)
+            tmux::open_spaces_popup()?;
         }
         3 => {
             // L3 → L2: unzoom
@@ -461,12 +469,63 @@ fn cmd_zoom_out() -> Result<()> {
     Ok(())
 }
 
-/// Enter bird's eye mode explicitly
-fn cmd_birdeye() -> Result<()> {
+/// Cmd-] : switch to next pane (cycles, stays in current level)
+fn cmd_pane_next() -> Result<()> {
     let session = session_name();
-    tmux::restore_tiled(&session)?;
-    tmux::set_level(&session, 1)?;
-    tmux::enter_birdeye_table()?;
+    let level = tmux::get_level(&session)?;
+    let count = tmux::pane_count(&session)?;
+    if count <= 1 {
+        return Ok(());
+    }
+    let current = tmux::active_pane_index(&session)?;
+    let next = (current + 1) % count;
+
+    match level {
+        3 => {
+            // Full screen: unzoom, select next, re-zoom
+            tmux::toggle_zoom(&session)?;
+            tmux::select_pane(&session, next)?;
+            tmux::toggle_zoom(&session)?;
+        }
+        _ => {
+            // Working/bird's eye: just select next
+            tmux::select_pane(&session, next)?;
+        }
+    }
+    dismiss_on_focus(&session, next);
+    Ok(())
+}
+
+/// Cmd-[ : switch to previous pane (cycles, stays in current level)
+fn cmd_pane_prev() -> Result<()> {
+    let session = session_name();
+    let level = tmux::get_level(&session)?;
+    let count = tmux::pane_count(&session)?;
+    if count <= 1 {
+        return Ok(());
+    }
+    let current = tmux::active_pane_index(&session)?;
+    let prev = (current + count - 1) % count;
+
+    match level {
+        3 => {
+            // Full screen: unzoom, select prev, re-zoom
+            tmux::toggle_zoom(&session)?;
+            tmux::select_pane(&session, prev)?;
+            tmux::toggle_zoom(&session)?;
+        }
+        _ => {
+            // Working/bird's eye: just select prev
+            tmux::select_pane(&session, prev)?;
+        }
+    }
+    dismiss_on_focus(&session, prev);
+    Ok(())
+}
+
+/// Enter bird's eye mode explicitly (now opens spaces picker)
+fn cmd_birdeye() -> Result<()> {
+    tmux::open_spaces_popup()?;
     Ok(())
 }
 
@@ -631,16 +690,23 @@ fn switch_to_space(target: &str) -> Result<()> {
 
     match landing {
         amux::alert::LandingTarget::FocusPane { index, level } => {
+            // Unzoom if the window was left zoomed but we're landing at L2
+            if level != 3 && tmux::is_zoomed(target).unwrap_or(false) {
+                tmux::toggle_zoom(target)?;
+            }
             tmux::select_pane(target, index)?;
             dismiss_on_focus(target, index);
             tmux::set_level(target, level)?;
         }
         amux::alert::LandingTarget::Resume { level, pane } => {
+            // Cap L1 to L2 (bird's eye removed)
+            let level = if level == 1 { 2 } else { level };
+            // Unzoom if the window was left zoomed but we're resuming at L2
+            if level != 3 && tmux::is_zoomed(target).unwrap_or(false) {
+                tmux::toggle_zoom(target)?;
+            }
             tmux::select_pane(target, pane)?;
             tmux::set_level(target, level)?;
-            if level == 1 {
-                tmux::enter_birdeye_table()?;
-            }
         }
     }
 
@@ -748,7 +814,7 @@ fn cmd_spaces() -> Result<()> {
 
                 tmux::create_session(&name)?;
                 config::apply_config(&name)?;
-                tmux::set_level(&name, 1)?;
+                tmux::set_level(&name, 2)?;
                 tmux::mark_as_managed(&name)?;
 
                 let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
@@ -848,7 +914,7 @@ fn cmd_send() -> Result<()> {
                 // Create the new space
                 tmux::create_session(&name)?;
                 config::apply_config(&name)?;
-                tmux::set_level(&name, 1)?;
+                tmux::set_level(&name, 2)?;
                 tmux::mark_as_managed(&name)?;
 
                 let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());

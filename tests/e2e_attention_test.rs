@@ -205,15 +205,15 @@ fn zoom_to_alerted_pane_clears_alert() {
 }
 
 #[test]
-fn zoom_in_from_birdeye_clears_alert_on_current_pane() {
+fn zoom_in_clears_alert_on_current_pane() {
     let ts = common::TestSession::new(2);
 
-    // Set to level 1 (bird's eye), alert pane 0
-    amux::tmux::set_level(&ts.name, 1).expect("set level");
+    // Set to level 2 (working), alert pane 0
+    amux::tmux::set_level(&ts.name, 2).expect("set level");
     amux::tmux::set_alert(&ts.name, 0, true).expect("set");
     amux::tmux::set_alert_count(&ts.name, 1).expect("count");
 
-    // Zoom in (L1 → L2) via CLI — should dismiss alert on current pane
+    // Zoom in (L2 → L3) via CLI — should dismiss alert on current pane
     let status = common::amux_cmd(&ts.name, &["zoom-in"]).status;
     assert!(status.success());
 

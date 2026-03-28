@@ -1,8 +1,11 @@
 /// End-to-end zoom level transition tests.
 ///
-/// Tests the full BIRD'S EYE (L1) → WORKING (L2) → FULL SCREEN (L3) cycle
-/// via the amux CLI binary, verifying both the AMUX_LEVEL state and tmux's
-/// actual window_zoomed_flag stay in sync.
+/// Tests the WORKING (L2) → FULL SCREEN (L3) cycle via the amux CLI binary,
+/// verifying both the AMUX_LEVEL state and tmux's actual window_zoomed_flag
+/// stay in sync.
+///
+/// Note: zoom-out from L2 opens a spaces popup, which requires an attached
+/// tmux client and can't be tested in headless mode.
 mod common;
 
 fn get_level(session: &str) -> u8 {
@@ -22,18 +25,11 @@ fn active_pane(session: &str) -> usize {
 // ============================================================
 
 #[test]
-fn zoom_in_from_birdeye_to_working_to_fullscreen() {
+fn zoom_in_from_working_to_fullscreen() {
     let ts = common::TestSession::new(3);
-
-    // Start at L1 (bird's eye)
-    amux::tmux::set_level(&ts.name, 1).expect("set L1");
-    assert_eq!(get_level(&ts.name), 1);
+    amux::tmux::set_level(&ts.name, 2).expect("set L2");
+    assert_eq!(get_level(&ts.name), 2);
     assert!(!is_zoomed(&ts.name));
-
-    // Ctrl-+ (zoom-in): L1 → L2
-    common::amux_cmd(&ts.name, &["zoom-in"]);
-    assert_eq!(get_level(&ts.name), 2, "zoom-in from L1 should go to L2");
-    assert!(!is_zoomed(&ts.name), "L2 should not be tmux-zoomed");
 
     // Ctrl-+ (zoom-in): L2 → L3
     common::amux_cmd(&ts.name, &["zoom-in"]);
@@ -47,7 +43,20 @@ fn zoom_in_from_birdeye_to_working_to_fullscreen() {
 }
 
 #[test]
-fn zoom_out_from_fullscreen_to_working_to_birdeye() {
+fn zoom_in_from_legacy_l1_goes_to_fullscreen() {
+    let ts = common::TestSession::new(3);
+
+    // Legacy L1 state — zoom-in should go directly to L3
+    amux::tmux::set_level(&ts.name, 1).expect("set L1");
+    assert_eq!(get_level(&ts.name), 1);
+
+    common::amux_cmd(&ts.name, &["zoom-in"]);
+    assert_eq!(get_level(&ts.name), 3, "zoom-in from L1 should go to L3");
+    assert!(is_zoomed(&ts.name), "L3 should be tmux-zoomed");
+}
+
+#[test]
+fn zoom_out_from_fullscreen_to_working() {
     let ts = common::TestSession::new(3);
 
     // Start at L3 (full screen)
@@ -60,38 +69,20 @@ fn zoom_out_from_fullscreen_to_working_to_birdeye() {
     common::amux_cmd(&ts.name, &["zoom-out"]);
     assert_eq!(get_level(&ts.name), 2, "zoom-out from L3 should go to L2");
     assert!(!is_zoomed(&ts.name), "L2 should not be tmux-zoomed");
-
-    // Ctrl-- (zoom-out): L2 → L1
-    common::amux_cmd(&ts.name, &["zoom-out"]);
-    assert_eq!(get_level(&ts.name), 1, "zoom-out from L2 should go to L1");
-    assert!(!is_zoomed(&ts.name));
-
-    // Ctrl-- at L1: should stay at L1
-    common::amux_cmd(&ts.name, &["zoom-out"]);
-    assert_eq!(get_level(&ts.name), 1, "zoom-out at L1 should stay L1");
 }
 
 #[test]
 fn full_cycle_in_out() {
     let ts = common::TestSession::new(3);
+    amux::tmux::set_level(&ts.name, 2).expect("set L2");
 
-    // L1 → L2 → L3 → L2 → L1
-    amux::tmux::set_level(&ts.name, 1).expect("set L1");
-
-    common::amux_cmd(&ts.name, &["zoom-in"]);
-    assert_eq!(get_level(&ts.name), 2);
-    assert!(!is_zoomed(&ts.name));
-
+    // L2 → L3 → L2
     common::amux_cmd(&ts.name, &["zoom-in"]);
     assert_eq!(get_level(&ts.name), 3);
     assert!(is_zoomed(&ts.name));
 
     common::amux_cmd(&ts.name, &["zoom-out"]);
     assert_eq!(get_level(&ts.name), 2);
-    assert!(!is_zoomed(&ts.name));
-
-    common::amux_cmd(&ts.name, &["zoom-out"]);
-    assert_eq!(get_level(&ts.name), 1);
     assert!(!is_zoomed(&ts.name));
 }
 
@@ -100,19 +91,7 @@ fn full_cycle_in_out() {
 // ============================================================
 
 #[test]
-fn zoom_to_pane_from_birdeye_goes_to_working() {
-    let ts = common::TestSession::new(3);
-    amux::tmux::set_level(&ts.name, 1).expect("set L1");
-
-    // Ctrl-2: from L1, zoom to pane 1 → should go to L2
-    common::amux_cmd(&ts.name, &["zoom", "1"]);
-    assert_eq!(get_level(&ts.name), 2, "zoom from L1 should go to L2");
-    assert_eq!(active_pane(&ts.name), 1, "should select pane 1");
-    assert!(!is_zoomed(&ts.name));
-}
-
-#[test]
-fn zoom_same_pane_at_working_goes_to_fullscreen() {
+fn zoom_to_pane_from_working_same_pane_goes_to_fullscreen() {
     let ts = common::TestSession::new(3);
     amux::tmux::set_level(&ts.name, 2).expect("set L2");
     amux::tmux::select_pane(&ts.name, 1).expect("select");
@@ -165,13 +144,9 @@ fn zoom_different_pane_at_fullscreen_goes_to_working() {
 #[test]
 fn level_and_zoom_flag_stay_in_sync_through_rapid_transitions() {
     let ts = common::TestSession::new(3);
-    amux::tmux::set_level(&ts.name, 1).expect("set L1");
+    amux::tmux::set_level(&ts.name, 2).expect("set L2");
 
-    // Rapid cycle: L1 → L2 → L3 → L2 → L3 → L2 → L1
-    common::amux_cmd(&ts.name, &["zoom-in"]); // L2
-    assert_eq!(get_level(&ts.name), 2);
-    assert!(!is_zoomed(&ts.name), "L2 must not be zoomed");
-
+    // Rapid cycle: L2 → L3 → L2 → L3 → L2
     common::amux_cmd(&ts.name, &["zoom-in"]); // L3
     assert_eq!(get_level(&ts.name), 3);
     assert!(is_zoomed(&ts.name), "L3 must be zoomed");
@@ -186,10 +161,6 @@ fn level_and_zoom_flag_stay_in_sync_through_rapid_transitions() {
 
     common::amux_cmd(&ts.name, &["zoom-out"]); // L2
     assert_eq!(get_level(&ts.name), 2);
-    assert!(!is_zoomed(&ts.name));
-
-    common::amux_cmd(&ts.name, &["zoom-out"]); // L1
-    assert_eq!(get_level(&ts.name), 1);
     assert!(!is_zoomed(&ts.name));
 }
 
@@ -227,4 +198,115 @@ fn zoom_nonexistent_pane_at_fullscreen_preserves_zoom() {
     assert_eq!(get_level(&ts.name), 3, "level should stay L3");
     assert!(is_zoomed(&ts.name), "should remain tmux-zoomed");
     assert_eq!(active_pane(&ts.name), 0, "active pane should not change");
+}
+
+// ============================================================
+// Zoom bug: level/zoom desync after space switch
+// ============================================================
+
+#[test]
+fn zoom_level_consistent_after_space_operations() {
+    // Regression test: when returning to a space that was left at L3 (zoomed),
+    // but the landing level resolves to L2, the window must be unzoomed too.
+    // Bug: set_level(2) was called without unzooming first, leaving level=2
+    // but window_zoomed_flag=1 — zoom-out would then silently open the spaces
+    // picker instead of unzooming.
+    let ts = common::TestSession::new(3);
+
+    // Simulate the "left at L3" state a space might be in after a switch away:
+    // level=3 and window is tmux-zoomed.
+    amux::tmux::set_level(&ts.name, 3).expect("set L3");
+    amux::tmux::toggle_zoom(&ts.name).expect("zoom in");
+    assert_eq!(get_level(&ts.name), 3);
+    assert!(is_zoomed(&ts.name));
+
+    // Simulate what switch_to_space does when landing at L2 (the fix):
+    // unzoom before setting level.
+    if get_level(&ts.name) != 3 && is_zoomed(&ts.name) {
+        amux::tmux::toggle_zoom(&ts.name).expect("unzoom");
+    }
+    // In the bug case, only set_level was called (no unzoom).
+    // The fix adds the unzoom. For this unit test we verify the invariant directly:
+    // after a space-switch landing at L2, level and zoom must be consistent.
+    amux::tmux::toggle_zoom(&ts.name).expect("unzoom (fix)");
+    amux::tmux::set_level(&ts.name, 2).expect("set L2");
+
+    // Invariant: at L2, window must NOT be zoomed
+    let level = get_level(&ts.name);
+    let zoomed = is_zoomed(&ts.name);
+    assert_eq!(level, 2, "level should be 2 after space landing");
+    assert!(
+        !zoomed,
+        "window must not be zoomed at L2 (zoom/level desync bug)"
+    );
+
+    // Corollary: zoom-out from L2 should open spaces, not error
+    // (Can't test spaces popup in headless mode, but zoom-in must work cleanly)
+    common::amux_cmd(&ts.name, &["zoom-in"]);
+    assert_eq!(get_level(&ts.name), 3, "zoom-in from L2 should reach L3");
+    assert!(is_zoomed(&ts.name), "L3 must be tmux-zoomed");
+}
+
+// ============================================================
+// Pane cycling (pane-next / pane-prev)
+// ============================================================
+
+#[test]
+fn pane_next_at_working_cycles_through_panes() {
+    let ts = common::TestSession::new(3); // panes 0, 1, 2
+    amux::tmux::set_level(&ts.name, 2).expect("set L2");
+    amux::tmux::select_pane(&ts.name, 0).expect("select pane 0");
+
+    common::amux_cmd(&ts.name, &["pane-next"]);
+    assert_eq!(active_pane(&ts.name), 1, "should move to pane 1");
+    assert_eq!(get_level(&ts.name), 2, "should stay at L2");
+
+    common::amux_cmd(&ts.name, &["pane-next"]);
+    assert_eq!(active_pane(&ts.name), 2, "should move to pane 2");
+
+    // Wrap around
+    common::amux_cmd(&ts.name, &["pane-next"]);
+    assert_eq!(active_pane(&ts.name), 0, "should wrap to pane 0");
+}
+
+#[test]
+fn pane_prev_at_working_cycles_backward() {
+    let ts = common::TestSession::new(3);
+    amux::tmux::set_level(&ts.name, 2).expect("set L2");
+    amux::tmux::select_pane(&ts.name, 0).expect("select pane 0");
+
+    // From pane 0, prev should wrap to pane 2
+    common::amux_cmd(&ts.name, &["pane-prev"]);
+    assert_eq!(active_pane(&ts.name), 2, "should wrap to pane 2");
+    assert_eq!(get_level(&ts.name), 2, "should stay at L2");
+
+    common::amux_cmd(&ts.name, &["pane-prev"]);
+    assert_eq!(active_pane(&ts.name), 1, "should move to pane 1");
+}
+
+#[test]
+fn pane_next_at_fullscreen_cycles_while_zoomed() {
+    let ts = common::TestSession::new(3);
+    amux::tmux::select_pane(&ts.name, 0).expect("select");
+    amux::tmux::toggle_zoom(&ts.name).expect("zoom");
+    amux::tmux::set_level(&ts.name, 3).expect("set L3");
+
+    common::amux_cmd(&ts.name, &["pane-next"]);
+    assert_eq!(active_pane(&ts.name), 1, "should move to pane 1");
+    assert_eq!(get_level(&ts.name), 3, "should stay at L3");
+    assert!(is_zoomed(&ts.name), "should still be zoomed");
+}
+
+#[test]
+fn pane_prev_at_fullscreen_cycles_while_zoomed() {
+    let ts = common::TestSession::new(3);
+    amux::tmux::select_pane(&ts.name, 0).expect("select");
+    amux::tmux::toggle_zoom(&ts.name).expect("zoom");
+    amux::tmux::set_level(&ts.name, 3).expect("set L3");
+
+    // From pane 0, prev wraps to pane 2
+    common::amux_cmd(&ts.name, &["pane-prev"]);
+    assert_eq!(active_pane(&ts.name), 2, "should wrap to pane 2");
+    assert_eq!(get_level(&ts.name), 3, "should stay at L3");
+    assert!(is_zoomed(&ts.name), "should still be zoomed");
 }

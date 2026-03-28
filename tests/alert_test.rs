@@ -35,11 +35,11 @@ fn smart_land_was_at_level3_caps_at_level2() {
 }
 
 #[test]
-fn smart_land_was_at_level1_preserves() {
+fn smart_land_was_at_level1_caps_to_level2() {
     let result = amux::alert::smart_landing(&[false, false], 1, 0);
     assert_eq!(
         result,
-        amux::alert::LandingTarget::Resume { level: 1, pane: 0 }
+        amux::alert::LandingTarget::Resume { level: 2, pane: 0 }
     );
 }
 

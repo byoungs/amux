@@ -9,7 +9,7 @@ use std::process::Command;
 pub const PANE_BORDER_FORMAT: &str = " #{?pane_active,#[fg=colour43 bold]▎ #[fg=yellow]#{e|+:#{pane_index},1}#[fg=colour252] #{?@amux-title,#{@amux-title},#{pane_title}} #[fg=colour43]●,#{?#{==:#{@amux-alert},1},#[fg=colour214 bold]▎ #[fg=colour214]#{e|+:#{pane_index},1}#[fg=colour252] #{?@amux-title,#{@amux-title},#{pane_title}} #[fg=colour214]●,#[fg=colour236]▎ #[fg=colour240]#{e|+:#{pane_index},1}#[fg=colour245] #{?@amux-title,#{@amux-title},#{pane_title}}}} ";
 
 /// Status bar right-side format string.
-pub const STATUS_RIGHT_FORMAT: &str = " #{?#{>:#{window_index},0},#[fg=cyan bold]SPLIT #[fg=colour238]C-- exit,#{?#{==:#{AMUX_LEVEL},1},#[fg=colour81]BIRD'S EYE #[fg=colour238]arrows nav · C-1..9 focus · C-n new · C-p spaces,#{?window_zoomed_flag,#[fg=yellow bold]FULL SCREEN #[fg=colour238]C-- working · C-1..9 switch · C-p spaces#{?#{>:#{@amux-alert-count},0}, #[fg=colour214 bold]● #{@amux-alert-count},},#[fg=colour245]WORKING #[fg=colour238]C-+ full · C-- bird's eye · C-1..9 focus · C-p spaces#{?#{>:#{@amux-alert-count},0}, #[fg=colour214 bold]● #{@amux-alert-count},}}}} ";
+pub const STATUS_RIGHT_FORMAT: &str = " #{?#{>:#{window_index},0},#[fg=cyan bold]SPLIT #[fg=colour238]C-- exit,#{?window_zoomed_flag,#[fg=yellow bold]FULL SCREEN #[fg=colour238]C-- working · C-[/] cycle · C-1..9 switch · C-p spaces#{?#{>:#{@amux-alert-count},0}, #[fg=colour214 bold]● #{@amux-alert-count},},#[fg=colour245]WORKING #[fg=colour238]C-+ full · C-- spaces · C-[/] cycle · C-1..9 focus · C-p spaces#{?#{>:#{@amux-alert-count},0}, #[fg=colour214 bold]● #{@amux-alert-count},}}} ";
 
 /// Apply all amux tmux configuration to a session.
 pub fn apply_config(session: &str) -> Result<()> {
@@ -230,6 +230,13 @@ fn apply_key_bindings(_session: &str) -> Result<()> {
 
     // Any other key in bird's eye exits to L2 (the key is consumed)
     // tmux auto-exits the key table on unbound keys
+
+    // === Pane cycling (Cmd-[ / Cmd-]) ===
+    // With extended-keys, tmux can distinguish C-[ from bare Escape.
+    // Cmd-[ sends CSI u for codepoint 91 with ctrl modifier.
+    // Cmd-] sends CSI u for codepoint 93 with ctrl modifier.
+    tmux_bind_root("C-[", &format!(r#"run-shell "{} pane-prev""#, bin))?;
+    tmux_bind_root("C-]", &format!(r#"run-shell "{} pane-next""#, bin))?;
 
     // === Pane lifecycle ===
     // Ctrl-n: create pane via amux (sets title), then force layout refresh

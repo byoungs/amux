@@ -1018,6 +1018,40 @@ pub fn enter_birdeye_table() -> Result<()> {
     Ok(())
 }
 
+/// Open the spaces picker as a tmux popup.
+/// Used by zoom-out from L2 (replaces bird's eye).
+pub fn open_spaces_popup() -> Result<()> {
+    let _ = Command::new("tmux")
+        .args([
+            "display-popup",
+            "-E",
+            "-w",
+            "70",
+            "-h",
+            "20",
+            "-T",
+            " Spaces ",
+            "amux spaces",
+        ])
+        .output();
+    Ok(())
+}
+
+/// Set a one-shot client-session-changed hook that opens the spaces picker.
+/// The hook removes itself after firing once.
+pub fn set_startup_spaces_hook(session: &str) -> Result<()> {
+    let _ = Command::new("tmux")
+        .args([
+            "set-hook",
+            "-t",
+            session,
+            "client-attached",
+            "run-shell \"amux spaces; tmux set-hook -u -t #{session_name} client-attached\"",
+        ])
+        .output();
+    Ok(())
+}
+
 /// Set up pipe-pane on a pane to watch for BEL characters.
 pub fn setup_bell_watch(session: &str, pane_index: usize) -> Result<()> {
     let bin = "amux";

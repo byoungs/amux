@@ -36,8 +36,8 @@ flow of AI coding:
   — your terminal is a team dashboard, not a grid of anonymous rectangles
 - **Fluid scaling**: expand to 6+ agents when you need parallelism, collapse
   back to 2 when you don't — panes stick to their spatial positions
-- **Progressive zoom**: three levels from bird's eye survey to deep focus,
-  with the right amount of detail at each level
+- **Progressive zoom**: two levels — working grid and full screen — with
+  quick cycling between panes in either view
 - **Calm notifications**: visual indicators when you're in the terminal, a
   single macOS notification when you're away. No alert fatigue.
 
@@ -70,7 +70,8 @@ amux
 
 If you move the repo, re-run `make setup` to update the symlink.
 
-Create panes with `Ctrl-n`, zoom in with `Ctrl-+`, zoom out with `Ctrl--`.
+Create panes with `Ctrl-n`, cycle between them with `Ctrl-]`/`Ctrl-[`,
+zoom in with `Ctrl-+`, zoom out with `Ctrl--`.
 
 ## How It Works
 
@@ -78,19 +79,22 @@ amux is a thin layer on top of tmux. It configures layout, styles, key
 bindings, and attention tracking, then gets out of the way. tmux handles all
 rendering — perfect keystroke fidelity, perfect resize, zero overhead.
 
-### Three-Level Zoom
-
-Think of it like a camera — or a manager moving between oversight and
-hands-on work:
+### Two-Level Zoom
 
 | Level | View | Mode | Enter | Exit |
 |-------|------|------|-------|------|
-| **Bird's Eye** | All panes tiled equally | Survey the team — scan states, navigate | `Ctrl--` | `Ctrl-+` or `Ctrl-N` |
-| **Working** | All visible, stable grid | Pair with one agent — type in the active pane | `Ctrl-+` from L1, or `Ctrl-N` | `Ctrl--` or `Ctrl-+` |
-| **Full Screen** | One pane fills terminal | Deep focus — heads down on one task | `Ctrl-+` from L2 | `Ctrl--` |
+| **Working** | All panes visible in a grid | Pair with one agent — type in the active pane | `Ctrl--` from Full Screen | `Ctrl-+` |
+| **Full Screen** | One pane fills terminal | Deep focus — heads down on one task | `Ctrl-+` from Working | `Ctrl--` |
+
+`Ctrl-]` and `Ctrl-[` cycle between panes (wraps around at the ends).
+Works in both Working and Full Screen — in Full Screen, the view stays
+zoomed as you cycle.
 
 `Ctrl-1` through `Ctrl-9` jumps to a specific pane. Press the same number
 again to zoom deeper. Press a different number to switch panes.
+
+`Ctrl--` from Working opens the space picker instead of zooming out
+further — spaces replace the old bird's eye view.
 
 ### Attention Management
 
@@ -107,8 +111,8 @@ The system respects your attention level:
 - **Full Screen**: a subtle badge in the status bar corner shows how many
   agents are waiting. No detail, no interruption.
 - **Working**: amber borders glow on panes that need you.
-- **Bird's Eye**: full team dashboard — every pane's state visible.
-- **Space Picker** (`Ctrl-P`): indicators show which spaces have waiting agents.
+- **Space Picker** (`Ctrl-P` or `Ctrl--`): indicators show which spaces
+  have waiting agents.
 - **Outside amux**: a single macOS notification brings you back. No per-agent
   spam.
 
@@ -154,14 +158,15 @@ All bindings work without a prefix key.
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-+` | Zoom in one level |
-| `Ctrl--` | Zoom out one level (or exit split view) |
+| `Ctrl-]` | Next pane (cycles, works in Full Screen) |
+| `Ctrl-[` | Previous pane (cycles, works in Full Screen) |
+| `Ctrl-+` | Zoom in (Working → Full Screen) |
+| `Ctrl--` | Zoom out (Full Screen → Working, Working → Spaces) |
 | `Ctrl-1..9` | Jump to pane N (context-aware zoom) |
 | `Ctrl-n` | Create new pane |
 | `Ctrl-P` | Space picker (notification center) |
 | `Ctrl-S` | Send current pane to another space |
 | `Ctrl-L` | Start split view |
-| Arrow keys | Navigate panes (Bird's Eye only) |
 
 ## Commands
 

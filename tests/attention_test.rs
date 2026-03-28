@@ -142,7 +142,7 @@ fn smart_landing_integration() {
     assert_eq!(result, LandingTarget::Resume { level: 2, pane: 1 });
 
     let result = smart_landing(&[true, true, false], 1, 0);
-    assert_eq!(result, LandingTarget::Resume { level: 1, pane: 0 });
+    assert_eq!(result, LandingTarget::Resume { level: 2, pane: 0 });
 }
 
 #[test]

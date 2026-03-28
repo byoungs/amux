@@ -51,6 +51,33 @@ enum KeyInputTests {
             check("Cmd-\(i)", KeyInput.ctrlBytes(for: String(i)), expected)
         }
 
+        // Scroll up sends button 64
+        check("scroll-up-button",
+              KeyInput.scrollBytes(deltaY: 10, col: 5, row: 3, cellHeight: 17, precise: false)[0],
+              "\u{1B}[<64;6;4M".data(using: .utf8)!)
+
+        // Scroll down sends button 65
+        check("scroll-down-button",
+              KeyInput.scrollBytes(deltaY: -10, col: 5, row: 3, cellHeight: 17, precise: false)[0],
+              "\u{1B}[<65;6;4M".data(using: .utf8)!)
+
+        // Mouse wheel sends exactly 3 events
+        let mouseWheel = KeyInput.scrollBytes(deltaY: 1, col: 0, row: 0, cellHeight: 17, precise: false)
+        check("scroll-mouse-count", Data([UInt8(mouseWheel.count)]), Data([3]))
+
+        // Trackpad with small delta sends 1 event
+        let trackpadSmall = KeyInput.scrollBytes(deltaY: 5, col: 0, row: 0, cellHeight: 17, precise: true)
+        check("scroll-trackpad-small", Data([UInt8(trackpadSmall.count)]), Data([1]))
+
+        // Trackpad capped at 3 events
+        let trackpadLarge = KeyInput.scrollBytes(deltaY: 200, col: 0, row: 0, cellHeight: 17, precise: true)
+        check("scroll-trackpad-cap", Data([UInt8(trackpadLarge.count)]), Data([3]))
+
+        // SGR coordinates are 1-indexed
+        check("scroll-1indexed",
+              KeyInput.scrollBytes(deltaY: 1, col: 0, row: 0, cellHeight: 17, precise: false)[0],
+              "\u{1B}[<64;1;1M".data(using: .utf8)!)
+
         print("KeyInput tests: \(passed) passed, \(failed) failed")
         if failed > 0 { fatalError("KeyInput tests failed") }
     }

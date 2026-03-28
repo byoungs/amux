@@ -315,23 +315,16 @@ final class TerminalView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        // Forward scroll events to tmux as mouse wheel sequences via SGR encoding
-        // Button 64 = scroll up, button 65 = scroll down
         let pos = cellPosition(for: event)
-        let col = pos.col + 1
-        let row = pos.row + 1
-
-        let scrollAmount = Int(event.scrollingDeltaY)
-        if scrollAmount == 0 { return }
-
-        let button = scrollAmount > 0 ? 64 : 65  // 64=up, 65=down
-        let count = min(abs(scrollAmount), 5)     // cap at 5 to avoid flooding
-
-        for _ in 0..<count {
-            let seq = "\u{1B}[<\(button);\(col);\(row)M"
-            if let data = seq.data(using: .utf8) {
-                pty.write(data)
-            }
+        let sequences = KeyInput.scrollBytes(
+            deltaY: event.scrollingDeltaY,
+            col: pos.col,
+            row: pos.row,
+            cellHeight: cellHeight,
+            precise: event.hasPreciseScrollingDeltas
+        )
+        for data in sequences {
+            pty.write(data)
         }
     }
 

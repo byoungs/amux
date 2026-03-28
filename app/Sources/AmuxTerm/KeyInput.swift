@@ -90,4 +90,36 @@ enum KeyInput {
     static func csiU(codepoint: Int, modifier: Int) -> Data {
         return "\u{1B}[\(codepoint);\(modifier)u".data(using: .utf8)!
     }
+
+    /// Encode a scroll wheel event as SGR mouse sequences for tmux.
+    /// Returns an array of SGR escape sequence Data objects.
+    /// - Parameters:
+    ///   - deltaY: scroll delta (positive = up, negative = down)
+    ///   - col: 0-indexed column
+    ///   - row: 0-indexed row
+    ///   - cellHeight: cell height for trackpad scaling
+    ///   - precise: true for trackpad (pixel deltas), false for mouse wheel
+    static func scrollBytes(deltaY: CGFloat, col: Int, row: Int, cellHeight: CGFloat, precise: Bool) -> [Data] {
+        let sgrCol = col + 1  // SGR is 1-indexed
+        let sgrRow = row + 1
+
+        let lines: Int
+        if precise {
+            lines = max(1, Int(abs(deltaY) / cellHeight))
+        } else {
+            lines = 3
+        }
+
+        let button = deltaY > 0 ? 64 : 65
+        let count = min(lines, 3)
+
+        var result: [Data] = []
+        for _ in 0..<count {
+            let seq = "\u{1B}[<\(button);\(sgrCol);\(sgrRow)M"
+            if let data = seq.data(using: .utf8) {
+                result.append(data)
+            }
+        }
+        return result
+    }
 }

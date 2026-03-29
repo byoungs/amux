@@ -73,8 +73,9 @@ pub fn create_pane(session: &str, cwd: Option<&str>) -> Result<usize> {
         );
     }
 
-    // Apply clean grid layout
-    let _ = relayout(session, crate::sticky::LayoutEvent::Resize);
+    // Apply clean grid layout — pass the new pane's ID so sticky matching knows it was added
+    let pane_id: u32 = new_pane_id.trim_start_matches('%').parse().unwrap_or(0);
+    let _ = relayout(session, crate::sticky::LayoutEvent::Add(pane_id));
     let panes = list_panes(session)?;
     let active = panes
         .iter()
@@ -153,7 +154,16 @@ pub fn list_panes_in_window(session: &str, window: usize) -> Result<Vec<PaneInfo
 }
 
 pub fn kill_pane(session: &str, pane_index: usize) -> Result<()> {
+    // Capture the pane's tmux ID before killing (needed for Remove event)
     let target = format!("{}:.{}", session, pane_index);
+    let id_output = Command::new("tmux")
+        .args(["display-message", "-t", &target, "-p", "#{pane_id}"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let pane_id: u32 = id_output.trim_start_matches('%').parse().unwrap_or(0);
+
     let output = Command::new("tmux")
         .args(["kill-pane", "-t", &target])
         .output()
@@ -161,7 +171,7 @@ pub fn kill_pane(session: &str, pane_index: usize) -> Result<()> {
     if !output.status.success() {
         bail!("tmux kill-pane failed");
     }
-    let _ = relayout(session, crate::sticky::LayoutEvent::Resize);
+    let _ = relayout(session, crate::sticky::LayoutEvent::Remove(pane_id));
     Ok(())
 }
 
@@ -381,10 +391,6 @@ pub fn relayout(session: &str, event: crate::sticky::LayoutEvent) -> Result<()> 
 
     // Build and apply the layout string
     if let Some(ls) = crate::layout::build_layout_string(&new_layout, w, h, border_top) {
-        // Reset split tree before applying custom layout
-        let _ = Command::new("tmux")
-            .args(["select-layout", "-t", session, "tiled"])
-            .output();
         let _ = Command::new("tmux")
             .args(["select-layout", "-t", session, &ls])
             .output()

@@ -239,13 +239,10 @@ fn apply_key_bindings(_session: &str) -> Result<()> {
     tmux_bind_root("C-]", &format!(r#"run-shell "{} pane-next""#, bin))?;
 
     // === Pane lifecycle ===
-    // Ctrl-n: create pane via amux (sets title), then force layout refresh
+    // Ctrl-n: create pane via amux (sets title, handles layout internally)
     tmux_bind_root(
         "C-n",
-        &format!(
-            r#"run-shell "cd '#{{pane_current_path}}' && {} new && {} refresh 2>/dev/null""#,
-            bin, bin
-        ),
+        &format!(r#"run-shell "cd '#{{pane_current_path}}' && {} new""#, bin),
     )?;
 
     // === Spaces ===

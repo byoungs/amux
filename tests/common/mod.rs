@@ -55,7 +55,7 @@ impl TestSession {
         for _ in 1..pane_count {
             amux::tmux::create_pane(&name, None).expect("create pane");
         }
-        amux::tmux::apply_grid_layout(&name).expect("layout");
+        amux::tmux::relayout(&name, amux::sticky::LayoutEvent::Resize).expect("layout");
         amux::tmux::select_pane(&name, 0).expect("select pane 0");
 
         TestSession { name }

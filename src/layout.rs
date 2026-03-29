@@ -368,6 +368,42 @@ pub fn build_layout_string_3_right(
     Some(format!("{:04x},{}", csum, body))
 }
 
+/// Build a tmux layout string from positioned panes.
+///
+/// This function takes the output of `compute_layout` — panes with their
+/// exact positions — and generates the tmux layout string. It delegates to
+/// `build_layout_string_direct` or `build_layout_string_3_right` based on
+/// the pane positions (detecting the right-full variant by checking if the
+/// rightmost pane is full-height).
+///
+/// `border_top` is applied to the layout string to compensate for
+/// pane-border-status. `window_w` and `window_h` are the raw window
+/// dimensions (before border subtraction).
+pub fn build_layout_string(
+    panes: &[crate::sticky::Pane],
+    window_w: u16,
+    window_h: u16,
+    border_top: u16,
+) -> Option<String> {
+    if panes.is_empty() {
+        return None;
+    }
+
+    // Extract ordered IDs (panes are already in slot order from compute_layout)
+    let ids: Vec<u32> = panes.iter().map(|p| p.id).collect();
+
+    // Detect 3-pane right-full variant: rightmost pane is full height
+    if panes.len() == 3 {
+        let rightmost = panes.iter().max_by_key(|p| p.x).unwrap();
+        let effective_h = window_h.saturating_sub(border_top);
+        if rightmost.h == effective_h {
+            return build_layout_string_3_right(window_w, window_h, &ids, border_top);
+        }
+    }
+
+    build_layout_string_direct(window_w, window_h, &ids, border_top)
+}
+
 /// Split height into two rows, compensating for border_top.
 ///
 /// With pane-border-status top, the first row of panes loses `border_top`
@@ -781,5 +817,60 @@ mod tests {
             "bottom row should be 11 high at y=13: {}",
             s
         );
+    }
+
+    #[test]
+    fn build_layout_string_from_panes_4() {
+        use crate::sticky::Pane;
+        let rects = grid_positions(4, 280, 80);
+        let panes: Vec<Pane> = rects
+            .iter()
+            .enumerate()
+            .map(|(i, r)| Pane {
+                id: 100 + i as u32,
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            })
+            .collect();
+        let s = build_layout_string(&panes, 280, 80, 0).unwrap();
+        // Should contain all pane IDs
+        assert!(s.contains(",100"), "missing pane 100: {}", s);
+        assert!(s.contains(",101"), "missing pane 101: {}", s);
+        assert!(s.contains(",102"), "missing pane 102: {}", s);
+        assert!(s.contains(",103"), "missing pane 103: {}", s);
+        // Should have checksum prefix
+        assert!(s.len() > 5);
+        assert_eq!(&s[4..5], ",");
+    }
+
+    #[test]
+    fn build_layout_string_from_panes_matches_direct() {
+        use crate::sticky::Pane;
+        // For standard layouts, build_layout_string should produce the same
+        // result as build_layout_string_direct when given matching positions
+        for count in 1..=8 {
+            let ids: Vec<u32> = (100..100 + count as u32).collect();
+            let rects = grid_positions(count, 280, 80);
+            let panes: Vec<Pane> = rects
+                .iter()
+                .zip(ids.iter())
+                .map(|(r, &id)| Pane {
+                    id,
+                    x: r.x,
+                    y: r.y,
+                    w: r.w,
+                    h: r.h,
+                })
+                .collect();
+            let from_panes = build_layout_string(&panes, 280, 80, 0);
+            let from_direct = build_layout_string_direct(280, 80, &ids, 0);
+            assert_eq!(
+                from_panes, from_direct,
+                "mismatch for {} panes:\n  panes:  {:?}\n  direct: {:?}",
+                count, from_panes, from_direct
+            );
+        }
     }
 }

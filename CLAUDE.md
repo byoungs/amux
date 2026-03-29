@@ -16,37 +16,12 @@ make setup     # Full environment setup (idempotent)
 **Never use `cargo install --path .`** — it overwrites the symlink that
 `make dev` manages. Always use `make dev` to build.
 
-## Worktree Workflow
-
-**All code changes happen in worktrees. Never commit directly to main.**
-
-When asked to make any code change, create a worktree first — don't ask,
-just do it. Name the branch after the work (e.g., `fix-alert-dismiss`,
-`add-split-view`).
-
-### Creating a worktree
-```
-git worktree add -b <branch-name> .worktrees/<branch-name> main
-```
-
-### Developing
-```
-make dev       # Build — binary is live on next tmux keypress
-make test      # Run tests
-make refresh   # Only needed if you changed tmux config strings in config.rs
-```
-
-### Completing work
-```
-# Squash to single commit on the branch
-# Rebase onto current main (essential for parallel worktrees)
-git rebase main
-# Brian reviews, then from main:
-git merge --ff-only <branch-name>
-make dev
-git worktree remove .worktrees/<branch-name>
-git branch -d <branch-name>
-```
+## Dev Flow
+Flow: worktree
+- All code changes happen in worktrees, never on main
+- Use /dev to start work (creates worktree automatically)
+- Use /stage to wrap up (prepares clean commit for wtr landing)
+- Brian reviews and lands via wtr (ff-only merge → validate → push)
 
 ## What Goes Live Instantly vs Needs Refresh
 
@@ -79,6 +54,9 @@ handles CLI commands invoked by tmux key bindings and hooks.
 
 - `make test` — lint + fast tests + release build. Runs anywhere, no tmux needed.
 - `make validate` — full suite including tmux integration tests. Parallel-safe via unique session names.
+- Use `make test` for rapid iteration. Use `make validate` as the final
+  verification before claiming work is complete — it catches adapter-layer
+  bugs that unit tests miss.
 
 ## Conventions
 

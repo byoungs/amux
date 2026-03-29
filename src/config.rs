@@ -26,23 +26,23 @@ pub fn apply_hooks(session: &str) -> Result<()> {
 
     let bin = "amux";
 
-    // Re-apply grid layout when a pane exits (shell closes naturally)
+    // Re-apply layout when a pane exits (shell closes naturally)
     let _ = Command::new("tmux")
         .args([
             "set-hook",
             "-g",
             "pane-exited",
-            &format!("run-shell \"{} refresh 2>/dev/null\"", bin),
+            &format!("run-shell \"{} layout #{{session_name}} 2>/dev/null\"", bin),
         ])
         .output();
 
-    // Re-apply grid layout when the terminal window is resized
+    // Re-apply layout when the terminal window is resized
     let _ = Command::new("tmux")
         .args([
             "set-hook",
             "-g",
             "client-resized",
-            &format!("run-shell \"{} refresh 2>/dev/null\"", bin),
+            &format!("run-shell \"{} layout #{{session_name}} 2>/dev/null\"", bin),
         ])
         .output();
 

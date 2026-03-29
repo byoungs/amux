@@ -1,7 +1,25 @@
 // src/sticky.rs
 
-use anyhow::{Context, Result};
-use std::process::Command;
+/// A pane with its ID and position in the terminal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pane {
+    pub id: u32,
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+}
+
+/// Events that trigger a layout recomputation.
+#[derive(Debug, Clone)]
+pub enum LayoutEvent {
+    /// A new pane was added with the given ID.
+    Add(u32),
+    /// A pane with the given ID was removed.
+    Remove(u32),
+    /// Window dimensions changed. Also used for start, attach, and space-switch.
+    Resize,
+}
 
 /// A pane's current and previous center coordinates.
 #[derive(Debug, Clone)]
@@ -73,103 +91,8 @@ pub fn match_panes_to_slots(
 }
 
 /// Compute the center point of a grid slot rectangle.
-pub fn rect_center(x: u16, y: u16, w: u16, h: u16) -> (i32, i32) {
+fn rect_center(x: u16, y: u16, w: u16, h: u16) -> (i32, i32) {
     ((x as i32) + (w as i32) / 2, (y as i32) + (h as i32) / 2)
-}
-
-/// Save a pane's current center as tmux pane options.
-/// Rotates current -> previous before writing new current.
-pub fn save_pane_center(session: &str, pane_index: usize, cx: i32, cy: i32) -> Result<()> {
-    let target = format!("{}:.{}", session, pane_index);
-
-    // Read current center (if any) and save as previous
-    if let Ok((old_cx, old_cy)) = load_pane_center(session, pane_index) {
-        set_pane_option(&target, "@amux-pcx", old_cx)?;
-        set_pane_option(&target, "@amux-pcy", old_cy)?;
-    }
-
-    set_pane_option(&target, "@amux-cx", cx)?;
-    set_pane_option(&target, "@amux-cy", cy)?;
-    Ok(())
-}
-
-/// Load a pane's current center from tmux pane options.
-pub fn load_pane_center(session: &str, pane_index: usize) -> Result<(i32, i32)> {
-    let target = format!("{}:.{}", session, pane_index);
-    let cx = get_pane_option(&target, "@amux-cx")?;
-    let cy = get_pane_option(&target, "@amux-cy")?;
-    Ok((cx, cy))
-}
-
-/// Load a pane's previous center from tmux pane options.
-pub fn load_pane_prev_center(session: &str, pane_index: usize) -> Option<(i32, i32)> {
-    let target = format!("{}:.{}", session, pane_index);
-    let cx = get_pane_option(&target, "@amux-pcx").ok()?;
-    let cy = get_pane_option(&target, "@amux-pcy").ok()?;
-    Some((cx, cy))
-}
-
-/// Read all pane centers for a session, returning PaneCenters keyed by pane ID.
-/// Uses a single tmux list-panes call for efficiency.
-pub fn read_all_pane_centers(session: &str) -> Result<Vec<PaneCenter>> {
-    let output = Command::new("tmux")
-        .args([
-            "list-panes",
-            "-t",
-            session,
-            "-F",
-            "#{pane_id}\t#{pane_index}\t#{@amux-cx}\t#{@amux-cy}\t#{@amux-pcx}\t#{@amux-pcy}",
-        ])
-        .output()
-        .context("failed to list pane centers")?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    let mut centers = Vec::new();
-    for line in stdout.lines().filter(|l| !l.is_empty()) {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 6 {
-            continue;
-        }
-        let id: u32 = parts[0].trim_start_matches('%').parse().unwrap_or(0);
-        let cx = parts[2].parse().ok();
-        let cy = parts[3].parse().ok();
-        let pcx = parts[4].parse().ok();
-        let pcy = parts[5].parse().ok();
-
-        centers.push(PaneCenter {
-            id,
-            cx: cx.unwrap_or(0),
-            cy: cy.unwrap_or(0),
-            prev_cx: pcx,
-            prev_cy: pcy,
-        });
-    }
-    Ok(centers)
-}
-
-fn set_pane_option(target: &str, key: &str, value: i32) -> Result<()> {
-    let output = Command::new("tmux")
-        .args(["set-option", "-p", "-t", target, key, &value.to_string()])
-        .output()
-        .with_context(|| format!("failed to set {} on {}", key, target))?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "tmux set-option {} failed: {}",
-            key,
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    Ok(())
-}
-
-fn get_pane_option(target: &str, key: &str) -> Result<i32> {
-    let output = Command::new("tmux")
-        .args(["show-options", "-p", "-t", target, "-v", key])
-        .output()
-        .with_context(|| format!("failed to get {} on {}", key, target))?;
-    let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    val.parse()
-        .with_context(|| format!("{} not set or invalid: {:?}", key, val))
 }
 
 /// Structural matching for layout transitions.
@@ -488,60 +411,31 @@ fn find_lone_column_pane(panes: &[PaneCenter]) -> Option<usize> {
     None
 }
 
-/// Result of compute_pane_order: the desired pane ordering plus which
-/// layout variant to use for the tmux layout string.
-pub struct PaneLayout {
-    pub ordered_ids: Vec<u32>,
-    /// True when the 3-pane layout should use full-height RIGHT column
-    /// instead of the standard full-height LEFT.
-    pub three_pane_right_full: bool,
+/// Pure state transition: given current pane positions, an event, and window
+/// dimensions, compute the new layout. This is the single source of truth for
+/// both pane ordering and geometry.
+pub fn compute_layout(
+    current: &[Pane],
+    event: LayoutEvent,
+    window_w: u16,
+    window_h: u16,
+) -> Vec<Pane> {
+    match event {
+        LayoutEvent::Resize => compute_resize(current, window_w, window_h),
+        LayoutEvent::Add(new_id) => compute_add(current, new_id, window_w, window_h),
+        LayoutEvent::Remove(removed_id) => compute_remove(current, removed_id, window_w, window_h),
+    }
 }
 
-/// Pure state transformation: given the current pane IDs, their saved centers,
-/// the previous pane count, and window dimensions, compute the desired pane
-/// ordering. This is the functional core extracted from apply_grid_layout —
-/// both production and tests call this same function.
-pub fn compute_pane_order(
-    ids: &[u32],
-    pane_centers: &[PaneCenter],
-    prev_count: usize,
-    w: u16,
-    h: u16,
-) -> PaneLayout {
-    // Build matching input — only include panes that have saved center data.
-    // New panes (no center data) are excluded and fill leftover slots.
-    let match_input: Vec<PaneCenter> = ids
-        .iter()
-        .filter_map(|&id| {
-            pane_centers
-                .iter()
-                .find(|p| p.id == id)
-                .filter(|p| p.cx != 0 || p.cy != 0 || p.prev_cx.is_some())
-                .cloned()
-        })
-        .collect();
+/// Resize: recompute the grid at new dimensions, match panes by position.
+fn compute_resize(current: &[Pane], window_w: u16, window_h: u16) -> Vec<Pane> {
+    let count = current.len();
+    if count == 0 {
+        return vec![];
+    }
 
-    // For 4→3 transitions, detect which side the lone pane is on.
-    // If the lone pane (column-mate) is on the right, use a right-full layout
-    // so it expands in place instead of jumping to the left side.
-    let right_full_3 = ids.len() == 3
-        && prev_count == 4
-        && find_lone_column_pane(&match_input)
-            .map(|i| {
-                let lone_cx = match_input[i].cx;
-                let avg_cx =
-                    match_input.iter().map(|p| p.cx as i64).sum::<i64>() / match_input.len() as i64;
-                lone_cx as i64 > avg_cx
-            })
-            .unwrap_or(false);
-
-    let rects = if right_full_3 {
-        crate::layout::grid_positions_3_right(w, h)
-    } else {
-        crate::layout::grid_positions(ids.len(), w, h)
-    };
-
-    let slot_centers: Vec<SlotCenter> = rects
+    let rects = crate::layout::grid_positions(count, window_w, window_h);
+    let slots: Vec<SlotCenter> = rects
         .iter()
         .map(|r| {
             let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
@@ -549,480 +443,753 @@ pub fn compute_pane_order(
         })
         .collect();
 
-    // Structural matching handles both adding and removing transitions.
-    // It detects layout shape changes (balanced ↔ balanced+column) and
-    // uses column-aware rules. Falls back to geometric matching for
-    // unrecognized patterns.
-    let matched = match_panes_structural(&match_input, &slot_centers, prev_count, ids.len());
-
-    let matched_ids: Vec<u32> = matched.iter().filter_map(|&id| id).collect();
-    let mut unmatched_iter = ids.iter().filter(|id| !matched_ids.contains(id));
-    let mut ordered: Vec<u32> = matched
+    // Convert current panes to PaneCenters for matching
+    let pane_centers: Vec<PaneCenter> = current
         .iter()
-        .map(|opt| match opt {
-            Some(id) => *id,
-            None => *unmatched_iter.next().unwrap_or(&ids[0]),
+        .map(|p| {
+            let (cx, cy) = rect_center(p.x, p.y, p.w, p.h);
+            PaneCenter {
+                id: p.id,
+                cx,
+                cy,
+                prev_cx: None,
+                prev_cy: None,
+            }
         })
         .collect();
-    for &id in unmatched_iter {
-        ordered.push(id);
-    }
 
-    PaneLayout {
-        ordered_ids: ordered,
-        three_pane_right_full: right_full_3,
+    let matched = match_panes_to_slots(&pane_centers, &slots, false);
+
+    // Build output: matched panes get new positions from grid
+    let matched_ids: Vec<u32> = matched.iter().filter_map(|&id| id).collect();
+    let mut unmatched: Vec<u32> = current
+        .iter()
+        .filter(|p| !matched_ids.contains(&p.id))
+        .map(|p| p.id)
+        .collect();
+
+    let mut result = Vec::new();
+    for (si, rect) in rects.iter().enumerate() {
+        let id = matched[si].unwrap_or_else(|| unmatched.pop().unwrap_or(0));
+        result.push(Pane {
+            id,
+            x: rect.x,
+            y: rect.y,
+            w: rect.w,
+            h: rect.h,
+        });
     }
+    result
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Tests: Sticky Pane Behavior
-//
-// These tests define the desired behavior for pane placement when adding
-// and removing panes. The layout alternates between balanced grids and
-// balanced+column layouts:
-//
-//   1    2       3         4       5          6        7            8
-//  [A] [A][B] [A][B] [AB][AB] [AB  ][AB] [ABC][ABC] [ABC  ][ABC] [ABCD][ABCD]
-//              [  C] [CD][CD] [CD E][CD] [DEF][DEF] [DEF G][DEF]
-//
-// Two principles govern placement:
-// 1. New panes always go to the last slot (rightmost/bottommost)
-// 2. Existing panes move as little as possible
-//
-// See docs/sticky-panes.md for the full design rationale.
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/// Add: compute grid for N+1 panes, match existing panes, new pane gets leftover slot.
+fn compute_add(current: &[Pane], new_id: u32, window_w: u16, window_h: u16) -> Vec<Pane> {
+    let new_count = current.len() + 1;
+    let rects = crate::layout::grid_positions(new_count, window_w, window_h);
+    let slots: Vec<SlotCenter> = rects
+        .iter()
+        .map(|r| {
+            let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
+            SlotCenter { cx, cy }
+        })
+        .collect();
+
+    let pane_centers: Vec<PaneCenter> = current
+        .iter()
+        .map(|p| {
+            let (cx, cy) = rect_center(p.x, p.y, p.w, p.h);
+            PaneCenter {
+                id: p.id,
+                cx,
+                cy,
+                prev_cx: None,
+                prev_cy: None,
+            }
+        })
+        .collect();
+
+    // Use structural matching for add transitions
+    let matched = match_panes_structural(&pane_centers, &slots, current.len(), new_count);
+
+    // Build output: matched panes get new positions, new pane fills empty slot
+    let mut result = Vec::new();
+    for (si, rect) in rects.iter().enumerate() {
+        let id = if si < matched.len() {
+            matched[si].unwrap_or(new_id)
+        } else {
+            new_id
+        };
+        result.push(Pane {
+            id,
+            x: rect.x,
+            y: rect.y,
+            w: rect.w,
+            h: rect.h,
+        });
+    }
+    result
+}
+
+/// Remove: filter out the removed pane, compute grid for N-1 panes,
+/// match surviving panes using structural rules.
+fn compute_remove(current: &[Pane], removed_id: u32, window_w: u16, window_h: u16) -> Vec<Pane> {
+    let surviving: Vec<&Pane> = current.iter().filter(|p| p.id != removed_id).collect();
+    let new_count = surviving.len();
+    if new_count == 0 {
+        return vec![];
+    }
+
+    let prev_count = current.len();
+
+    // Detect 4→3 right-column removal for right-full layout variant
+    let pane_centers: Vec<PaneCenter> = surviving
+        .iter()
+        .map(|p| {
+            let (cx, cy) = rect_center(p.x, p.y, p.w, p.h);
+            PaneCenter {
+                id: p.id,
+                cx,
+                cy,
+                prev_cx: None,
+                prev_cy: None,
+            }
+        })
+        .collect();
+
+    let right_full_3 = new_count == 3
+        && prev_count == 4
+        && find_lone_column_pane(&pane_centers)
+            .map(|i| {
+                let lone_cx = pane_centers[i].cx;
+                let avg_cx = pane_centers.iter().map(|p| p.cx as i64).sum::<i64>()
+                    / pane_centers.len() as i64;
+                lone_cx as i64 > avg_cx
+            })
+            .unwrap_or(false);
+
+    let rects = if right_full_3 {
+        crate::layout::grid_positions_3_right(window_w, window_h)
+    } else {
+        crate::layout::grid_positions(new_count, window_w, window_h)
+    };
+
+    let slots: Vec<SlotCenter> = rects
+        .iter()
+        .map(|r| {
+            let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
+            SlotCenter { cx, cy }
+        })
+        .collect();
+
+    let matched = match_panes_structural(&pane_centers, &slots, prev_count, new_count);
+
+    let matched_ids: Vec<u32> = matched.iter().filter_map(|&id| id).collect();
+    let mut unmatched: Vec<u32> = surviving
+        .iter()
+        .filter(|p| !matched_ids.contains(&p.id))
+        .map(|p| p.id)
+        .collect();
+
+    let mut result = Vec::new();
+    for (si, rect) in rects.iter().enumerate() {
+        let id = matched[si].unwrap_or_else(|| unmatched.pop().unwrap_or(0));
+        result.push(Pane {
+            id,
+            x: rect.x,
+            y: rect.y,
+            w: rect.w,
+            h: rect.h,
+        });
+    }
+    result
+}
 
 #[cfg(test)]
-mod tests {
+mod layout_tests {
     use super::*;
     use crate::layout::grid_positions;
-
-    // ── Helpers ──────────────────────────────────────────────────────
-
-    /// Build PaneCenter state from grid_positions — simulates what tmux
-    /// would report for panes sitting in an N-pane layout.
-    fn state(count: usize, ids: &[u32], w: u16, h: u16) -> Vec<PaneCenter> {
-        let rects = grid_positions(count, w, h);
-        rects
-            .iter()
-            .zip(ids.iter())
-            .map(|(r, &id)| {
-                let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
-                PaneCenter {
-                    id,
-                    cx,
-                    cy,
-                    prev_cx: None,
-                    prev_cy: None,
-                }
-            })
-            .collect()
-    }
-
-    /// Build PaneCenter state with prev centers — simulates panes that
-    /// transitioned from one layout to another (prev = where they were).
-    fn state_with_prev(
-        current_count: usize,
-        prev_count: usize,
-        ids: &[u32],
-        w: u16,
-        h: u16,
-    ) -> Vec<PaneCenter> {
-        let cur = grid_positions(current_count, w, h);
-        let prev = grid_positions(prev_count, w, h);
-        cur.iter()
-            .zip(prev.iter())
-            .zip(ids.iter())
-            .map(|((r, pr), &id)| {
-                let (cx, cy) = rect_center(r.x, r.y, r.w, r.h);
-                let (pcx, pcy) = rect_center(pr.x, pr.y, pr.w, pr.h);
-                PaneCenter {
-                    id,
-                    cx,
-                    cy,
-                    prev_cx: Some(pcx),
-                    prev_cy: Some(pcy),
-                }
-            })
-            .collect()
-    }
-
-    /// Shorthand: compute_pane_order → ordered_ids
-    fn order(ids: &[u32], centers: &[PaneCenter], prev: usize, w: u16, h: u16) -> Vec<u32> {
-        compute_pane_order(ids, centers, prev, w, h).ordered_ids
-    }
 
     const W: u16 = 280;
     const H: u16 = 80;
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // ADDING PANES
-    //
-    // New pane always goes to the last slot. Existing panes stay put.
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    /// Build Vec<Pane> from grid_positions — simulates panes sitting in an N-pane layout.
+    fn panes_at(count: usize, ids: &[u32], w: u16, h: u16) -> Vec<Pane> {
+        let rects = grid_positions(count, w, h);
+        rects
+            .iter()
+            .zip(ids.iter())
+            .map(|(r, &id)| Pane {
+                id,
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            })
+            .collect()
+    }
+
+    // ── Resize Tests ──
 
     #[test]
-    fn add_3_to_4() {
+    fn resize_equalizes_uneven_columns() {
+        // Simulate the actual bug: panes at wrong sizes, resize to 269x66
+        let current = vec![
+            Pane {
+                id: 1,
+                x: 0,
+                y: 0,
+                w: 69,
+                h: 32,
+            },
+            Pane {
+                id: 2,
+                x: 70,
+                y: 0,
+                w: 126,
+                h: 32,
+            },
+            Pane {
+                id: 3,
+                x: 0,
+                y: 33,
+                w: 69,
+                h: 33,
+            },
+            Pane {
+                id: 4,
+                x: 70,
+                y: 33,
+                w: 126,
+                h: 33,
+            },
+            Pane {
+                id: 5,
+                x: 197,
+                y: 0,
+                w: 72,
+                h: 66,
+            },
+        ];
+        let result = compute_layout(&current, LayoutEvent::Resize, 269, 66);
+        assert_eq!(result.len(), 5);
+        // All three columns should be approximately equal (within 2px)
+        let col_widths: Vec<u16> = vec![result[0].w, result[1].w, result[4].w];
+        let max_w = *col_widths.iter().max().unwrap();
+        let min_w = *col_widths.iter().min().unwrap();
+        assert!(
+            max_w - min_w <= 2,
+            "columns should be roughly equal: {:?}",
+            col_widths
+        );
+    }
+
+    #[test]
+    fn resize_identity_preserves_positions() {
+        // Resize to the same dimensions should produce the same layout
+        let current = panes_at(4, &[10, 11, 12, 13], W, H);
+        let result = compute_layout(&current, LayoutEvent::Resize, W, H);
+        assert_eq!(result.len(), 4);
+        for (c, r) in current.iter().zip(result.iter()) {
+            assert_eq!(c.id, r.id);
+            assert_eq!(c.x, r.x);
+            assert_eq!(c.y, r.y);
+            assert_eq!(c.w, r.w);
+            assert_eq!(c.h, r.h);
+        }
+    }
+
+    #[test]
+    fn resize_preserves_pane_order() {
+        // After resize, leftmost pane stays leftmost
+        let current = panes_at(4, &[10, 11, 12, 13], W, H);
+        let result = compute_layout(&current, LayoutEvent::Resize, 200, 60);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].id, 10); // top-left stays top-left
+        assert_eq!(result[1].id, 11); // top-right stays top-right
+        assert_eq!(result[2].id, 12); // bottom-left stays bottom-left
+        assert_eq!(result[3].id, 13); // bottom-right stays bottom-right
+    }
+
+    #[test]
+    fn resize_one_pane() {
+        let current = panes_at(1, &[10], 80, 24);
+        let result = compute_layout(&current, LayoutEvent::Resize, 200, 60);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[0].w, 200);
+        assert_eq!(result[0].h, 60);
+    }
+
+    #[test]
+    fn resize_two_panes() {
+        let current = panes_at(2, &[10, 11], 200, 60);
+        let result = compute_layout(&current, LayoutEvent::Resize, 300, 80);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 11);
+        // Both full height
+        assert_eq!(result[0].h, 80);
+        assert_eq!(result[1].h, 80);
+        // Total width covers terminal (with divider)
+        assert_eq!(result[0].w + 1 + result[1].w, 300);
+    }
+
+    // ── Add Tests ──
+
+    #[test]
+    fn layout_add_3_to_4() {
         //  [A][B]    [A][B]
         //  [_][C] →  [N][C]
-        let c = state(3, &[10, 11, 12], W, H);
-        let o = order(&[10, 11, 12, 99], &c, 3, W, H);
-        assert_eq!(o, [10, 11, 99, 12]);
+        let current = panes_at(3, &[10, 11, 12], W, H);
+        let result = compute_layout(&current, LayoutEvent::Add(99), W, H);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 99); // new pane fills bottom-left
+        assert_eq!(result[3].id, 12);
+        // Verify geometry matches grid_positions(4)
+        let expected = grid_positions(4, W, H);
+        for (r, e) in result.iter().zip(expected.iter()) {
+            assert_eq!(r.x, e.x);
+            assert_eq!(r.y, e.y);
+            assert_eq!(r.w, e.w);
+            assert_eq!(r.h, e.h);
+        }
     }
 
     #[test]
-    fn add_4_to_5() {
-        //  [A][B]    [A][B][ ]
-        //  [C][D] →  [C][D][N]
-        let c = state(4, &[10, 11, 12, 13], W, H);
-        let o = order(&[10, 11, 12, 13, 99], &c, 4, W, H);
-        assert_eq!(o, [10, 11, 12, 13, 99]);
+    fn layout_add_4_to_5() {
+        let current = panes_at(4, &[10, 11, 12, 13], W, H);
+        let result = compute_layout(&current, LayoutEvent::Add(99), W, H);
+        assert_eq!(result.len(), 5);
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 12);
+        assert_eq!(result[3].id, 13);
+        assert_eq!(result[4].id, 99); // new pane takes right column
     }
 
     #[test]
-    fn add_5_to_6() {
-        //  [A][B][_]    [A][B][E]
-        //  [C][D][E] →  [C][D][N]
-        let mut c = state_with_prev(5, 4, &[10, 11, 12, 13], W, H);
+    fn layout_add_5_to_6() {
         let r5 = grid_positions(5, W, H);
-        let (cx, cy) = rect_center(r5[4].x, r5[4].y, r5[4].w, r5[4].h);
-        c.push(PaneCenter {
-            id: 14,
-            cx,
-            cy,
-            prev_cx: None,
-            prev_cy: None,
-        });
-        let o = order(&[10, 11, 12, 13, 14, 99], &c, 5, W, H);
-        assert_eq!(o, [10, 11, 14, 12, 13, 99]);
+        let current = vec![
+            Pane {
+                id: 10,
+                x: r5[0].x,
+                y: r5[0].y,
+                w: r5[0].w,
+                h: r5[0].h,
+            },
+            Pane {
+                id: 11,
+                x: r5[1].x,
+                y: r5[1].y,
+                w: r5[1].w,
+                h: r5[1].h,
+            },
+            Pane {
+                id: 12,
+                x: r5[2].x,
+                y: r5[2].y,
+                w: r5[2].w,
+                h: r5[2].h,
+            },
+            Pane {
+                id: 13,
+                x: r5[3].x,
+                y: r5[3].y,
+                w: r5[3].w,
+                h: r5[3].h,
+            },
+            Pane {
+                id: 14,
+                x: r5[4].x,
+                y: r5[4].y,
+                w: r5[4].w,
+                h: r5[4].h,
+            },
+        ];
+        let result = compute_layout(&current, LayoutEvent::Add(99), W, H);
+        assert_eq!(result.len(), 6);
+        // Right column pane (14) should go to top of its column
+        assert_eq!(result[2].id, 14); // top-right in 3x2
+        assert_eq!(result[5].id, 99); // new pane fills bottom-right
     }
 
     #[test]
-    fn add_6_to_7() {
-        //  [A][B][C]    [A][B][C][ ]
-        //  [D][E][F] →  [D][E][F][N]
-        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
-        let o = order(&[10, 11, 12, 13, 14, 15, 99], &c, 6, W, H);
-        assert_eq!(o, [10, 11, 12, 13, 14, 15, 99]);
+    fn layout_add_6_to_7() {
+        let current = panes_at(6, &[10, 11, 12, 13, 14, 15], W, H);
+        let result = compute_layout(&current, LayoutEvent::Add(99), W, H);
+        assert_eq!(result.len(), 7);
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 12);
+        assert_eq!(result[3].id, 13);
+        assert_eq!(result[4].id, 14);
+        assert_eq!(result[5].id, 15);
+        assert_eq!(result[6].id, 99); // new pane takes right column
     }
 
     #[test]
-    fn add_7_to_8() {
-        //  [A][B][C][_]    [A][B][C][G]
-        //  [D][E][F][G] →  [D][E][F][N]
-        let mut c = state_with_prev(7, 6, &[10, 11, 12, 13, 14, 15], W, H);
+    fn layout_add_7_to_8() {
         let r7 = grid_positions(7, W, H);
-        let (cx, cy) = rect_center(r7[6].x, r7[6].y, r7[6].w, r7[6].h);
-        c.push(PaneCenter {
-            id: 16,
-            cx,
-            cy,
-            prev_cx: None,
-            prev_cy: None,
-        });
-        let o = order(&[10, 11, 12, 13, 14, 15, 16, 99], &c, 7, W, H);
-        assert_eq!(o, [10, 11, 12, 16, 13, 14, 15, 99]);
+        let current = vec![
+            Pane {
+                id: 10,
+                x: r7[0].x,
+                y: r7[0].y,
+                w: r7[0].w,
+                h: r7[0].h,
+            },
+            Pane {
+                id: 11,
+                x: r7[1].x,
+                y: r7[1].y,
+                w: r7[1].w,
+                h: r7[1].h,
+            },
+            Pane {
+                id: 12,
+                x: r7[2].x,
+                y: r7[2].y,
+                w: r7[2].w,
+                h: r7[2].h,
+            },
+            Pane {
+                id: 13,
+                x: r7[3].x,
+                y: r7[3].y,
+                w: r7[3].w,
+                h: r7[3].h,
+            },
+            Pane {
+                id: 14,
+                x: r7[4].x,
+                y: r7[4].y,
+                w: r7[4].w,
+                h: r7[4].h,
+            },
+            Pane {
+                id: 15,
+                x: r7[5].x,
+                y: r7[5].y,
+                w: r7[5].w,
+                h: r7[5].h,
+            },
+            Pane {
+                id: 16,
+                x: r7[6].x,
+                y: r7[6].y,
+                w: r7[6].w,
+                h: r7[6].h,
+            },
+        ];
+        let result = compute_layout(&current, LayoutEvent::Add(99), W, H);
+        assert_eq!(result.len(), 8);
+        // Right column pane (16) should split into its column
+        assert_eq!(result[3].id, 16); // top-right in 4x2
+        assert_eq!(result[7].id, 99); // new pane fills bottom-right
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // REMOVING FROM 4-PANE (4→3) — Column-Mate Expands
-    //
-    // Left-column removal → left-full layout (standard)
-    // Right-column removal → right-full layout (mirrored)
-    // Column-mate expands on its own side. Other column stays split.
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ── 4→3 Remove Tests ──
 
     #[test]
-    fn remove_4_tl() {
-        //  [x][B]    [ ][B]
-        //  [C][D] →  [C][D]    C expands full-left
-        let c = state(4, &[10, 11, 12, 13], W, H);
-        let pl = compute_pane_order(&[11, 12, 13], &c, 4, W, H);
-        assert!(!pl.three_pane_right_full);
-        assert_eq!(pl.ordered_ids, [12, 11, 13]);
+    fn layout_remove_4_tl() {
+        let current = panes_at(4, &[10, 11, 12, 13], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(10), W, H);
+        assert_eq!(result.len(), 3);
+        // C expands full-left (standard 3-pane: left-full + right-split)
+        assert_eq!(result[0].id, 12); // left full-height
+        assert_eq!(result[0].h, H); // full height
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 13);
     }
 
     #[test]
-    fn remove_4_tr() {
-        //  [A][x]    [A][ ]
-        //  [C][D] →  [C][D]    D expands full-right
-        let c = state(4, &[10, 11, 12, 13], W, H);
-        let pl = compute_pane_order(&[10, 12, 13], &c, 4, W, H);
-        assert!(pl.three_pane_right_full);
-        assert_eq!(pl.ordered_ids, [10, 12, 13]);
+    fn layout_remove_4_tr() {
+        let current = panes_at(4, &[10, 11, 12, 13], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(11), W, H);
+        assert_eq!(result.len(), 3);
+        // D expands full-right (right-full variant)
+        assert_eq!(result[2].id, 13); // right full-height
+        assert_eq!(result[2].h, H);
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 12);
     }
 
     #[test]
-    fn remove_4_bl() {
-        //  [A][B]    [A][B]
-        //  [x][D] →  [ ][D]    A expands full-left
-        let c = state(4, &[10, 11, 12, 13], W, H);
-        let pl = compute_pane_order(&[10, 11, 13], &c, 4, W, H);
-        assert!(!pl.three_pane_right_full);
-        assert_eq!(pl.ordered_ids, [10, 11, 13]);
+    fn layout_remove_4_bl() {
+        let current = panes_at(4, &[10, 11, 12, 13], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(12), W, H);
+        assert_eq!(result.len(), 3);
+        // A expands full-left (standard 3-pane)
+        assert_eq!(result[0].id, 10); // left full-height
+        assert_eq!(result[0].h, H);
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 13);
     }
 
     #[test]
-    fn remove_4_br() {
-        //  [A][B]    [A][ ]
-        //  [C][x] →  [C][B]    B expands full-right
-        let c = state(4, &[10, 11, 12, 13], W, H);
-        let pl = compute_pane_order(&[10, 11, 12], &c, 4, W, H);
-        assert!(pl.three_pane_right_full);
-        assert_eq!(pl.ordered_ids, [10, 12, 11]);
+    fn layout_remove_4_br() {
+        let current = panes_at(4, &[10, 11, 12, 13], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(13), W, H);
+        assert_eq!(result.len(), 3);
+        // B expands full-right (right-full variant)
+        assert_eq!(result[2].id, 11); // right full-height
+        assert_eq!(result[2].h, H);
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 12);
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // REMOVING FROM 5-PANE (5→4) — Substitute Fills Gap
-    //
-    // 5-pane: [TL TR BL BR | R]
-    // Remove from 2x2 part → right-col pane fills the gap.
-    // Remove right-col → 2x2 stays unchanged.
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ── 5→4 Remove Tests ──
 
     #[test]
-    fn remove_5_tl() {
-        let c = state(5, &[10, 11, 12, 13, 14], W, H);
-        assert_eq!(order(&[11, 12, 13, 14], &c, 5, W, H), [14, 11, 12, 13]);
-    }
-    #[test]
-    fn remove_5_tr() {
-        let c = state(5, &[10, 11, 12, 13, 14], W, H);
-        assert_eq!(order(&[10, 12, 13, 14], &c, 5, W, H), [10, 14, 12, 13]);
-    }
-    #[test]
-    fn remove_5_bl() {
-        let c = state(5, &[10, 11, 12, 13, 14], W, H);
-        assert_eq!(order(&[10, 11, 13, 14], &c, 5, W, H), [10, 11, 14, 13]);
-    }
-    #[test]
-    fn remove_5_br() {
-        let c = state(5, &[10, 11, 12, 13, 14], W, H);
-        assert_eq!(order(&[10, 11, 12, 14], &c, 5, W, H), [10, 11, 12, 14]);
-    }
-    #[test]
-    fn remove_5_rcol() {
-        let c = state(5, &[10, 11, 12, 13, 14], W, H);
-        assert_eq!(order(&[10, 11, 12, 13], &c, 5, W, H), [10, 11, 12, 13]);
+    fn layout_remove_5_tl() {
+        let current = panes_at(5, &[10, 11, 12, 13, 14], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(10), W, H);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].id, 14); // right-col fills gap
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 12);
+        assert_eq!(result[3].id, 13);
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // REMOVING FROM 6-PANE (6→5) — Column-Mate to Right Column
-    //
-    // 6-pane 3x2: [TL TM TR | BL BM BR]
-    // Column-mate of removed pane takes the full-height right column.
-    // Other 4 panes fill the 2x2 part.
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
     #[test]
-    fn remove_6_tl() {
-        //  [x][B][C]    [B][C][ ]
-        //  [D][E][F] →  [E][F][D]   D=column-mate→R
-        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
-        assert_eq!(
-            order(&[11, 12, 13, 14, 15], &c, 6, W, H),
-            [12, 11, 15, 14, 13]
-        );
-    }
-    #[test]
-    fn remove_6_tm() {
-        //  [A][x][C]    [A][C][ ]
-        //  [D][E][F] →  [D][F][E]   E=column-mate→R
-        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
-        assert_eq!(
-            order(&[10, 12, 13, 14, 15], &c, 6, W, H),
-            [10, 12, 13, 15, 14]
-        );
-    }
-    #[test]
-    fn remove_6_tr() {
-        //  [A][B][x]    [A][B][ ]
-        //  [D][E][F] →  [D][E][F]   F=column-mate→R
-        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
-        assert_eq!(
-            order(&[10, 11, 13, 14, 15], &c, 6, W, H),
-            [10, 11, 13, 14, 15]
-        );
-    }
-    #[test]
-    fn remove_6_bl() {
-        //  [A][B][C]    [B][C][ ]
-        //  [x][E][F] →  [E][F][A]   A=column-mate→R
-        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 14, 15], &c, 6, W, H),
-            [12, 11, 15, 14, 10]
-        );
-    }
-    #[test]
-    fn remove_6_bm() {
-        //  [A][B][C]    [A][C][ ]
-        //  [D][x][F] →  [D][F][B]   B=column-mate→R
-        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 13, 15], &c, 6, W, H),
-            [10, 12, 13, 15, 11]
-        );
-    }
-    #[test]
-    fn remove_6_br() {
-        //  [A][B][C]    [A][B][ ]
-        //  [D][E][x] →  [D][E][C]   C=column-mate→R
-        let c = state(6, &[10, 11, 12, 13, 14, 15], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 13, 14], &c, 6, W, H),
-            [10, 11, 13, 14, 12]
-        );
+    fn layout_remove_5_tr() {
+        let current = panes_at(5, &[10, 11, 12, 13, 14], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(11), W, H);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 14); // right-col fills gap
+        assert_eq!(result[2].id, 12);
+        assert_eq!(result[3].id, 13);
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // REMOVING FROM 7-PANE (7→6) — Substitute Fills Gap
-    //
-    // 7-pane: [TL TM TR | BL BM BR | R]
-    // Remove from 3x2 part → right-col pane fills the gap.
-    // Remove right-col → 3x2 stays unchanged.
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
     #[test]
-    fn remove_7_tl() {
-        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
-        assert_eq!(
-            order(&[11, 12, 13, 14, 15, 16], &c, 7, W, H),
-            [16, 11, 12, 13, 14, 15]
-        );
-    }
-    #[test]
-    fn remove_7_tm() {
-        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
-        assert_eq!(
-            order(&[10, 12, 13, 14, 15, 16], &c, 7, W, H),
-            [10, 16, 12, 13, 14, 15]
-        );
-    }
-    #[test]
-    fn remove_7_tr() {
-        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
-        assert_eq!(
-            order(&[10, 11, 13, 14, 15, 16], &c, 7, W, H),
-            [10, 11, 16, 13, 14, 15]
-        );
-    }
-    #[test]
-    fn remove_7_bl() {
-        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 14, 15, 16], &c, 7, W, H),
-            [10, 11, 12, 16, 14, 15]
-        );
-    }
-    #[test]
-    fn remove_7_bm() {
-        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 13, 15, 16], &c, 7, W, H),
-            [10, 11, 12, 13, 16, 15]
-        );
-    }
-    #[test]
-    fn remove_7_br() {
-        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 13, 14, 16], &c, 7, W, H),
-            [10, 11, 12, 13, 14, 16]
-        );
-    }
-    #[test]
-    fn remove_7_rcol() {
-        let c = state(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 13, 14, 15], &c, 7, W, H),
-            [10, 11, 12, 13, 14, 15]
-        );
+    fn layout_remove_5_bl() {
+        let current = panes_at(5, &[10, 11, 12, 13, 14], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(12), W, H);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 14); // right-col fills gap
+        assert_eq!(result[3].id, 13);
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // REMOVING FROM 8-PANE (8→7) — Column-Mate to Right Column
-    //
-    // 8-pane 4x2: [TL TML TMR TR | BL BML BMR BR]
-    // Column-mate of removed pane takes the full-height right column.
-    // Other 6 panes fill the 3x2 part.
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
     #[test]
-    fn remove_8_tl() {
-        // BL=column-mate→R, others→3x2
-        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
-        assert_eq!(
-            order(&[11, 12, 13, 14, 15, 16, 17], &c, 8, W, H),
-            [13, 11, 12, 17, 15, 16, 14]
-        );
-    }
-    #[test]
-    fn remove_8_tml() {
-        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
-        assert_eq!(
-            order(&[10, 12, 13, 14, 15, 16, 17], &c, 8, W, H),
-            [10, 13, 12, 14, 17, 16, 15]
-        );
-    }
-    #[test]
-    fn remove_8_tmr() {
-        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
-        assert_eq!(
-            order(&[10, 11, 13, 14, 15, 16, 17], &c, 8, W, H),
-            [10, 11, 13, 14, 15, 17, 16]
-        );
-    }
-    #[test]
-    fn remove_8_tr() {
-        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 14, 15, 16, 17], &c, 8, W, H),
-            [10, 11, 12, 14, 15, 16, 17]
-        );
-    }
-    #[test]
-    fn remove_8_bl() {
-        // TL=column-mate→R
-        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 13, 15, 16, 17], &c, 8, W, H),
-            [13, 11, 12, 17, 15, 16, 10]
-        );
-    }
-    #[test]
-    fn remove_8_bml() {
-        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 13, 14, 16, 17], &c, 8, W, H),
-            [10, 13, 12, 14, 17, 16, 11]
-        );
-    }
-    #[test]
-    fn remove_8_bmr() {
-        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 13, 14, 15, 17], &c, 8, W, H),
-            [10, 11, 13, 14, 15, 17, 12]
-        );
-    }
-    #[test]
-    fn remove_8_br() {
-        // TR=column-mate→R
-        let c = state(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
-        assert_eq!(
-            order(&[10, 11, 12, 13, 14, 15, 16], &c, 8, W, H),
-            [10, 11, 12, 14, 15, 16, 13]
-        );
+    fn layout_remove_5_br() {
+        let current = panes_at(5, &[10, 11, 12, 13, 14], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(13), W, H);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 12);
+        assert_eq!(result[3].id, 14); // right-col fills gap
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // SNAP-BACK — Removing the last-added pane reverses the add
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #[test]
+    fn layout_remove_5_rcol() {
+        let current = panes_at(5, &[10, 11, 12, 13, 14], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(14), W, H);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 12);
+        assert_eq!(result[3].id, 13);
+    }
+
+    // ── 6→5 Remove Tests ──
 
     #[test]
-    fn snap_back_5_to_4() {
-        let c = state_with_prev(5, 4, &[10, 11, 12, 13], W, H);
-        assert_eq!(order(&[10, 11, 12, 13], &c, 5, W, H), [10, 11, 12, 13]);
+    fn layout_remove_6_tl() {
+        let current = panes_at(6, &[10, 11, 12, 13, 14, 15], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(10), W, H);
+        assert_eq!(result.len(), 5);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        // D(13)=column-mate→right col. Others fill 2x2.
+        assert_eq!(ids, [12, 11, 15, 14, 13]);
     }
-}
+
+    #[test]
+    fn layout_remove_6_tm() {
+        let current = panes_at(6, &[10, 11, 12, 13, 14, 15], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(11), W, H);
+        assert_eq!(result.len(), 5);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [10, 12, 13, 15, 14]);
+    }
+
+    #[test]
+    fn layout_remove_6_tr() {
+        let current = panes_at(6, &[10, 11, 12, 13, 14, 15], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(12), W, H);
+        assert_eq!(result.len(), 5);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [10, 11, 13, 14, 15]);
+    }
+
+    #[test]
+    fn layout_remove_6_bl() {
+        let current = panes_at(6, &[10, 11, 12, 13, 14, 15], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(13), W, H);
+        assert_eq!(result.len(), 5);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [12, 11, 15, 14, 10]);
+    }
+
+    #[test]
+    fn layout_remove_6_bm() {
+        let current = panes_at(6, &[10, 11, 12, 13, 14, 15], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(14), W, H);
+        assert_eq!(result.len(), 5);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [10, 12, 13, 15, 11]);
+    }
+
+    #[test]
+    fn layout_remove_6_br() {
+        let current = panes_at(6, &[10, 11, 12, 13, 14, 15], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(15), W, H);
+        assert_eq!(result.len(), 5);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [10, 11, 13, 14, 12]);
+    }
+
+    // ── 7→6 Remove Tests ──
+
+    #[test]
+    fn layout_remove_7_tl() {
+        let current = panes_at(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(10), W, H);
+        assert_eq!(result.len(), 6);
+        assert_eq!(result[0].id, 16); // right-col fills gap
+    }
+
+    #[test]
+    fn layout_remove_7_tm() {
+        let current = panes_at(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(11), W, H);
+        assert_eq!(result.len(), 6);
+        assert_eq!(result[1].id, 16); // right-col fills gap
+    }
+
+    #[test]
+    fn layout_remove_7_tr() {
+        let current = panes_at(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(12), W, H);
+        assert_eq!(result.len(), 6);
+        assert_eq!(result[2].id, 16); // right-col fills gap
+    }
+
+    #[test]
+    fn layout_remove_7_bl() {
+        let current = panes_at(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(13), W, H);
+        assert_eq!(result.len(), 6);
+        assert_eq!(result[3].id, 16); // right-col fills gap
+    }
+
+    #[test]
+    fn layout_remove_7_bm() {
+        let current = panes_at(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(14), W, H);
+        assert_eq!(result.len(), 6);
+        assert_eq!(result[4].id, 16); // right-col fills gap
+    }
+
+    #[test]
+    fn layout_remove_7_br() {
+        let current = panes_at(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(15), W, H);
+        assert_eq!(result.len(), 6);
+        assert_eq!(result[5].id, 16); // right-col fills gap
+    }
+
+    #[test]
+    fn layout_remove_7_rcol() {
+        let current = panes_at(7, &[10, 11, 12, 13, 14, 15, 16], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(16), W, H);
+        assert_eq!(result.len(), 6);
+        // All stay in place
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 12);
+        assert_eq!(result[3].id, 13);
+        assert_eq!(result[4].id, 14);
+        assert_eq!(result[5].id, 15);
+    }
+
+    // ── 8→7 Remove Tests ──
+
+    #[test]
+    fn layout_remove_8_tl() {
+        let current = panes_at(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(10), W, H);
+        assert_eq!(result.len(), 7);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [13, 11, 12, 17, 15, 16, 14]);
+    }
+
+    #[test]
+    fn layout_remove_8_tml() {
+        let current = panes_at(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(11), W, H);
+        assert_eq!(result.len(), 7);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [10, 13, 12, 14, 17, 16, 15]);
+    }
+
+    #[test]
+    fn layout_remove_8_tmr() {
+        let current = panes_at(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(12), W, H);
+        assert_eq!(result.len(), 7);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [10, 11, 13, 14, 15, 17, 16]);
+    }
+
+    #[test]
+    fn layout_remove_8_tr() {
+        let current = panes_at(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(13), W, H);
+        assert_eq!(result.len(), 7);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [10, 11, 12, 14, 15, 16, 17]);
+    }
+
+    #[test]
+    fn layout_remove_8_bl() {
+        let current = panes_at(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(14), W, H);
+        assert_eq!(result.len(), 7);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [13, 11, 12, 17, 15, 16, 10]);
+    }
+
+    #[test]
+    fn layout_remove_8_bml() {
+        let current = panes_at(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(15), W, H);
+        assert_eq!(result.len(), 7);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [10, 13, 12, 14, 17, 16, 11]);
+    }
+
+    #[test]
+    fn layout_remove_8_bmr() {
+        let current = panes_at(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(16), W, H);
+        assert_eq!(result.len(), 7);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [10, 11, 13, 14, 15, 17, 12]);
+    }
+
+    #[test]
+    fn layout_remove_8_br() {
+        let current = panes_at(8, &[10, 11, 12, 13, 14, 15, 16, 17], W, H);
+        let result = compute_layout(&current, LayoutEvent::Remove(17), W, H);
+        assert_eq!(result.len(), 7);
+        let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [10, 11, 12, 14, 15, 16, 13]);
+    }
+} // close mod layout_tests

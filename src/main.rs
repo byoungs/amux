@@ -92,6 +92,11 @@ enum Commands {
     PaneNext,
     /// Switch to previous pane (Cmd-[)
     PanePrev,
+    /// Re-apply layout to a specific session (called by tmux hooks)
+    Layout {
+        /// Session name
+        session: String,
+    },
 }
 
 /// The amux session name. AMUX_SESSION env var takes priority (used by hooks
@@ -145,6 +150,10 @@ fn main() -> Result<()> {
         Some(Commands::UpdateTitle { pane, cwd }) => cmd_update_title(pane, &cwd),
         Some(Commands::PaneNext) => cmd_pane_next(),
         Some(Commands::PanePrev) => cmd_pane_prev(),
+        Some(Commands::Layout { session }) => {
+            std::env::set_var("AMUX_SESSION", &session);
+            tmux::relayout(&session, amux::sticky::LayoutEvent::Resize)
+        }
         None => {
             // Default: start if no session exists, refresh+attach if it does
             let session = session_name();
@@ -192,7 +201,7 @@ fn cmd_start(sessions: &[String]) -> Result<()> {
     }
 
     // Apply tiled layout
-    tmux::apply_grid_layout(&session)?;
+    tmux::relayout(&session, amux::sticky::LayoutEvent::Resize)?;
 
     // Save state
     let state = build_state(&session)?;
@@ -278,7 +287,7 @@ fn cmd_refresh() -> Result<()> {
     }
 
     // Re-apply tiled layout
-    tmux::apply_grid_layout(&session)?;
+    tmux::relayout(&session, amux::sticky::LayoutEvent::Resize)?;
 
     // Migrate L1 (legacy bird's eye) to L2 (working)
     let level = tmux::get_level(&session).unwrap_or(2);
@@ -687,6 +696,9 @@ fn switch_to_space(target: &str) -> Result<()> {
     let landing = amux::alert::smart_landing(&alert_states, prev_level, prev_pane);
 
     tmux::switch_session(target)?;
+
+    // Re-equalize layout for the target space (window size may have changed)
+    let _ = tmux::relayout(target, amux::sticky::LayoutEvent::Resize);
 
     match landing {
         amux::alert::LandingTarget::FocusPane { index, level } => {

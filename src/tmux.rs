@@ -74,7 +74,7 @@ pub fn create_pane(session: &str, cwd: Option<&str>) -> Result<usize> {
     }
 
     // Apply clean grid layout
-    let _ = apply_grid_layout(session);
+    let _ = relayout(session, crate::sticky::LayoutEvent::Resize);
     let panes = list_panes(session)?;
     let active = panes
         .iter()
@@ -161,7 +161,7 @@ pub fn kill_pane(session: &str, pane_index: usize) -> Result<()> {
     if !output.status.success() {
         bail!("tmux kill-pane failed");
     }
-    let _ = apply_grid_layout(session);
+    let _ = relayout(session, crate::sticky::LayoutEvent::Resize);
     Ok(())
 }
 
@@ -298,6 +298,36 @@ pub fn select_pane(session: &str, pane_index: usize) -> Result<()> {
     Ok(())
 }
 
+/// Read current pane positions from tmux as Pane structs.
+pub fn read_pane_positions(session: &str) -> Result<Vec<crate::sticky::Pane>> {
+    let output = Command::new("tmux")
+        .args([
+            "list-panes",
+            "-t",
+            session,
+            "-F",
+            "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}",
+        ])
+        .output()
+        .context("failed to read pane positions")?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let mut panes = Vec::new();
+    for line in stdout.lines().filter(|l| !l.is_empty()) {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        let id: u32 = parts[0].trim_start_matches('%').parse().unwrap_or(0);
+        let x: u16 = parts[1].parse().unwrap_or(0);
+        let y: u16 = parts[2].parse().unwrap_or(0);
+        let w: u16 = parts[3].parse().unwrap_or(0);
+        let h: u16 = parts[4].parse().unwrap_or(0);
+        panes.push(crate::sticky::Pane { id, x, y, w, h });
+    }
+    Ok(panes)
+}
+
 /// Get ordered list of tmux pane IDs (numeric, like 5, 268).
 pub fn get_pane_ids(session: &str) -> Result<Vec<u32>> {
     let output = Command::new("tmux")
@@ -331,11 +361,11 @@ pub fn window_size(session: &str) -> Result<(u16, u16)> {
     Ok((w, h))
 }
 
-/// Apply the custom grid layout to the session.
-/// First resets to tiled (cleans tmux's split tree), then applies our layout.
-pub fn apply_grid_layout(session: &str) -> Result<()> {
-    let ids = get_pane_ids(session)?;
-    if ids.is_empty() {
+/// Apply a layout change to the session. This is the single entry point for
+/// all layout operations — add, remove, resize, start, and space-switch.
+pub fn relayout(session: &str, event: crate::sticky::LayoutEvent) -> Result<()> {
+    let current = read_pane_positions(session)?;
+    if current.is_empty() {
         return Ok(());
     }
 
@@ -345,41 +375,12 @@ pub fn apply_grid_layout(session: &str) -> Result<()> {
     } else {
         0
     };
-    // Use effective height (minus border) for grid positions so slot centers
-    // reflect the actual visible pane content area.
     let effective_h = h.saturating_sub(border_top);
 
-    // Detect whether pane count changed (a pane was killed or created).
-    // Spatial matching/swapping only runs when count changes — otherwise
-    // reapplying the layout would shuffle panes during normal navigation.
-    let prev_count = get_prev_pane_count(session);
-    let count_changed = prev_count > 0 && (ids.len() as i32) != prev_count;
+    let new_layout = crate::sticky::compute_layout(&current, event, w, effective_h);
 
-    // Only do spatial matching/swapping when pane count changed.
-    // This prevents panes from shuffling during L2→L2 navigation.
-    let (pane_layout, pane_centers) = if count_changed {
-        let centers = crate::sticky::read_all_pane_centers(session).unwrap_or_default();
-        let pl =
-            crate::sticky::compute_pane_order(&ids, &centers, prev_count as usize, w, effective_h);
-        (Some(pl), centers)
-    } else {
-        (None, Vec::new())
-    };
-
-    // Apply the grid layout. For 3-pane right-full variant, use the
-    // mirrored layout string. Otherwise use the standard layout.
-    // Note: build_layout_string_direct gets raw `h` (not effective_h) because the
-    // layout string must span the full window. It uses border_top internally to
-    // add extra height to the first row, compensating for the stolen border line.
-    let layout_str = if pane_layout
-        .as_ref()
-        .is_some_and(|pl| pl.three_pane_right_full)
-    {
-        crate::layout::build_layout_string_3_right(w, h, &ids, border_top)
-    } else {
-        crate::layout::build_layout_string_direct(w, h, &ids, border_top)
-    };
-    if let Some(ls) = layout_str {
+    // Build and apply the layout string
+    if let Some(ls) = crate::layout::build_layout_string(&new_layout, w, h, border_top) {
         // Reset split tree before applying custom layout
         let _ = Command::new("tmux")
             .args(["select-layout", "-t", session, "tiled"])
@@ -387,70 +388,15 @@ pub fn apply_grid_layout(session: &str) -> Result<()> {
         let _ = Command::new("tmux")
             .args(["select-layout", "-t", session, &ls])
             .output()
-            .context("failed to apply custom layout")?;
+            .context("failed to apply layout")?;
     }
 
-    if let Some(pl) = &pane_layout {
-        // Swap panes when the ordering differs from tmux's index order.
-        let going_up = (ids.len() as i32) > prev_count;
-        let has_spatial_history = pane_centers.iter().any(|p| p.prev_cx.is_some()) || !going_up;
-        if has_spatial_history && pl.ordered_ids != ids {
-            swap_panes_to_order(session, &ids, &pl.ordered_ids)?;
-        }
-    }
-
-    // After layout is applied, save each pane's actual position as its center
-    save_pane_centers_from_positions(session)?;
-
-    // Track pane count for going_up detection
-    set_prev_pane_count(session, ids.len());
+    // The layout string embeds pane IDs, so tmux's select-layout places
+    // each pane at its correct position. Pane index order is determined by
+    // the layout tree's DFS walk order, which matches our slot order.
+    // No explicit swap-pane calls are needed.
 
     Ok(())
-}
-
-/// Read each pane's actual position from tmux and save as center coordinates.
-fn save_pane_centers_from_positions(session: &str) -> Result<()> {
-    let output = Command::new("tmux")
-        .args([
-            "list-panes",
-            "-t",
-            session,
-            "-F",
-            "#{pane_index}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}",
-        ])
-        .output()
-        .context("failed to read pane positions")?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    for line in stdout.lines().filter(|l| !l.is_empty()) {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 5 {
-            continue;
-        }
-        let idx: usize = parts[0].parse().unwrap_or(0);
-        let x: u16 = parts[1].parse().unwrap_or(0);
-        let y: u16 = parts[2].parse().unwrap_or(0);
-        let w: u16 = parts[3].parse().unwrap_or(0);
-        let h: u16 = parts[4].parse().unwrap_or(0);
-        let (cx, cy) = crate::sticky::rect_center(x, y, w, h);
-        let _ = crate::sticky::save_pane_center(session, idx, cx, cy);
-    }
-    Ok(())
-}
-
-fn get_prev_pane_count(session: &str) -> i32 {
-    let output = Command::new("tmux")
-        .args(["show-environment", "-t", session, "AMUX_PANE_COUNT"])
-        .output()
-        .ok();
-    output
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .trim()
-                .strip_prefix("AMUX_PANE_COUNT=")
-                .and_then(|v| v.parse().ok())
-        })
-        .unwrap_or(0)
 }
 
 /// Check if pane-border-status is "top" (which steals a row from the top).
@@ -468,21 +414,14 @@ fn has_pane_border_status(session: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn set_prev_pane_count(session: &str, count: usize) {
-    let _ = Command::new("tmux")
-        .args([
-            "set-environment",
-            "-t",
-            session,
-            "AMUX_PANE_COUNT",
-            &count.to_string(),
-        ])
-        .output();
-}
-
 /// Swap panes so that each slot contains the desired pane.
 /// `current_ids[i]` is the pane ID currently at slot i.
 /// `desired_ids[i]` is the pane ID that should be at slot i.
+///
+/// Currently unused: tmux's select-layout respects pane IDs in layout strings,
+/// so panes are placed correctly without explicit swaps. Kept for potential
+/// future use with Add/Remove events that may need post-layout reordering.
+#[allow(dead_code)]
 fn swap_panes_to_order(session: &str, current_ids: &[u32], desired_ids: &[u32]) -> Result<()> {
     // Build a mutable mapping: slot -> current pane ID
     let mut placement: Vec<u32> = current_ids.to_vec();
@@ -716,7 +655,7 @@ pub fn enter_split(session: &str, pane_a: usize, pane_b: usize) -> Result<()> {
 
     // Retile the grid window
     let grid_window = format!("{}:0", session);
-    let _ = apply_grid_layout(&grid_window);
+    let _ = relayout(&grid_window, crate::sticky::LayoutEvent::Resize);
 
     Ok(())
 }
@@ -728,7 +667,7 @@ pub fn exit_split(session: &str) -> Result<()> {
     let win_count = window_count(session)?;
     if win_count <= 1 {
         // No split to exit
-        apply_grid_layout(session)?;
+        relayout(session, crate::sticky::LayoutEvent::Resize)?;
         return Ok(());
     }
 
@@ -770,7 +709,7 @@ pub fn exit_split(session: &str) -> Result<()> {
         .args(["select-window", "-t", &grid_target])
         .output();
 
-    apply_grid_layout(session)?;
+    relayout(session, crate::sticky::LayoutEvent::Resize)?;
     Ok(())
 }
 
@@ -874,7 +813,7 @@ pub fn restore_tiled(session: &str) -> Result<()> {
     if is_zoomed(session)? {
         toggle_zoom(session)?;
     }
-    apply_grid_layout(session)?;
+    relayout(session, crate::sticky::LayoutEvent::Resize)?;
     Ok(())
 }
 
@@ -959,8 +898,8 @@ pub fn send_pane_to_session(from_session: &str, to_session: &str) -> Result<()> 
     }
 
     // Retile both sessions
-    let _ = apply_grid_layout(from_session);
-    let _ = apply_grid_layout(to_session);
+    let _ = relayout(from_session, crate::sticky::LayoutEvent::Resize);
+    let _ = relayout(to_session, crate::sticky::LayoutEvent::Resize);
 
     Ok(())
 }
@@ -1211,16 +1150,6 @@ mod tests {
                 p.width
             );
         }
-    }
-
-    #[test]
-    fn save_and_load_pane_centers() {
-        let guard = TestGuard::new();
-        create_session(&guard.name).expect("create");
-
-        crate::sticky::save_pane_center(&guard.name, 0, 100, 50).expect("save");
-        let (cx, cy) = crate::sticky::load_pane_center(&guard.name, 0).expect("load");
-        assert_eq!((cx, cy), (100, 50));
     }
 
     #[test]

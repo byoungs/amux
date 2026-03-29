@@ -32,6 +32,8 @@ fn cleanup_stale_sessions() {
 /// Create with `TestSession::new(pane_count)` — it generates a unique
 /// session name, creates the session with config applied, and kills
 /// the session when dropped.
+///
+/// Pass `pane_count = 0` for a bare session (no config, single pane).
 pub struct TestSession {
     pub name: String,
 }
@@ -45,29 +47,23 @@ fn unique_session_name() -> String {
 }
 
 impl TestSession {
-    /// Create a new test session with the given number of panes.
+    /// Create a test session.
+    ///
+    /// - `pane_count >= 1`: creates session with config applied and that many panes.
+    /// - `pane_count == 0`: bare session (no config, single pane) for low-level tests.
     pub fn new(pane_count: usize) -> Self {
         cleanup_stale_sessions();
         let name = unique_session_name();
 
         amux::tmux::create_session(&name).expect("create test session");
-        amux::config::apply_config(&name).expect("apply config");
-        for _ in 1..pane_count {
-            amux::tmux::create_pane(&name, None).expect("create pane");
+        if pane_count > 0 {
+            amux::config::apply_config(&name).expect("apply config");
+            for _ in 1..pane_count {
+                amux::tmux::create_pane(&name, None).expect("create pane");
+            }
+            amux::tmux::relayout(&name, amux::sticky::LayoutEvent::Resize).expect("layout");
+            amux::tmux::select_pane(&name, 0).expect("select pane 0");
         }
-        amux::tmux::relayout(&name, amux::sticky::LayoutEvent::Resize).expect("layout");
-        amux::tmux::select_pane(&name, 0).expect("select pane 0");
-
-        TestSession { name }
-    }
-
-    /// Create a bare session (no config applied, no extra panes).
-    /// Useful for low-level tmux tests.
-    pub fn bare() -> Self {
-        cleanup_stale_sessions();
-        let name = unique_session_name();
-
-        amux::tmux::create_session(&name).expect("create test session");
 
         TestSession { name }
     }
@@ -79,24 +75,4 @@ impl Drop for TestSession {
             .args(["kill-session", "-t", &self.name])
             .output();
     }
-}
-
-/// Get the amux binary path (debug build from cargo).
-/// Respects CARGO_TARGET_DIR if set (used by Makefile for shared target dir).
-pub fn amux_bin() -> String {
-    if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
-        format!("{}/debug/amux", target_dir)
-    } else {
-        let manifest = env!("CARGO_MANIFEST_DIR");
-        format!("{}/target/debug/amux", manifest)
-    }
-}
-
-/// Run an amux subcommand against a test session.
-pub fn amux_cmd(session: &str, args: &[&str]) -> std::process::Output {
-    Command::new(amux_bin())
-        .args(args)
-        .env("AMUX_SESSION", session)
-        .output()
-        .expect("amux command failed")
 }

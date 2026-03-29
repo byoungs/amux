@@ -70,7 +70,7 @@ fn config_sets_border_style() {
 
 #[test]
 fn create_pane_increases_count() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     let panes = tmux_list_panes(&ts.name);
     assert_eq!(panes.len(), 2);
@@ -78,7 +78,7 @@ fn create_pane_increases_count() {
 
 #[test]
 fn pane_title_is_set() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::set_title(&ts.name, 0, "my-project").expect("title");
     let panes = tmux_list_panes(&ts.name);
     assert!(
@@ -101,7 +101,7 @@ fn four_panes_in_tiled_layout() {
 
 #[test]
 fn zoom_and_unzoom() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     assert!(!amux::tmux::is_zoomed(&ts.name).expect("check"));
     amux::tmux::toggle_zoom(&ts.name).expect("zoom");
@@ -112,7 +112,7 @@ fn zoom_and_unzoom() {
 
 #[test]
 fn kill_pane_reduces_count() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     assert_eq!(amux::tmux::pane_count(&ts.name).expect("count"), 3);
@@ -139,7 +139,7 @@ fn key_bindings_are_installed() {
 
 #[test]
 fn create_and_kill_many_panes() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     for i in 0..8 {
         amux::tmux::create_pane(&ts.name, None)
             .unwrap_or_else(|e| panic!("failed to create pane {}: {}", i + 2, e));
@@ -153,7 +153,7 @@ fn create_and_kill_many_panes() {
 
 #[test]
 fn rapid_zoom_unzoom_cycles() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     amux::tmux::create_pane(&ts.name, None).expect("pane");
@@ -167,7 +167,7 @@ fn rapid_zoom_unzoom_cycles() {
 
 #[test]
 fn zoom_each_pane_individually() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     for _ in 0..3 {
         amux::tmux::create_pane(&ts.name, None).expect("pane");
     }
@@ -184,7 +184,7 @@ fn zoom_each_pane_individually() {
 
 #[test]
 fn pane_titles_survive_layout_changes() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::set_title(&ts.name, 0, "alpha").expect("title");
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     amux::tmux::set_title(&ts.name, 1, "beta").expect("title");
@@ -205,7 +205,7 @@ fn pane_titles_survive_layout_changes() {
 
 #[test]
 fn split_then_zoom_then_exit() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     amux::tmux::enter_split(&ts.name, 0, 1).expect("enter split");
@@ -220,7 +220,7 @@ fn split_then_zoom_then_exit() {
 
 #[test]
 fn split_with_four_panes_various_pairs() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     for _ in 0..3 {
         amux::tmux::create_pane(&ts.name, None).expect("pane");
     }
@@ -237,7 +237,7 @@ fn split_with_four_panes_various_pairs() {
 
 #[test]
 fn kill_pane_then_create_maintains_layout() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     amux::tmux::create_pane(&ts.name, None).expect("pane");
@@ -250,7 +250,7 @@ fn kill_pane_then_create_maintains_layout() {
 
 #[test]
 fn config_applied_multiple_times_is_idempotent() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::config::apply_config(&ts.name).expect("config 1");
     amux::config::apply_config(&ts.name).expect("config 2");
     amux::config::apply_config(&ts.name).expect("config 3");
@@ -265,7 +265,7 @@ fn version_check_passes() {
 
 #[test]
 fn split_requires_at_least_three_panes() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     let result = amux::tmux::enter_split(&ts.name, 0, 1);
     assert!(result.is_err(), "split should require at least 3 panes");
@@ -275,7 +275,7 @@ fn split_requires_at_least_three_panes() {
 
 #[test]
 fn zoom_level_starts_at_default() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     // Default level is 2 when not explicitly set
     let level = amux::tmux::get_level(&ts.name).expect("get");
     assert_eq!(level, 2);
@@ -283,7 +283,7 @@ fn zoom_level_starts_at_default() {
 
 #[test]
 fn zoom_level_transitions() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
 
     // Set to L1
@@ -315,7 +315,7 @@ fn zoom_level_transitions() {
 
 #[test]
 fn smart_resize_with_many_panes() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     for _ in 0..3 {
         amux::tmux::create_pane(&ts.name, None).expect("pane");
     }
@@ -355,7 +355,7 @@ fn smart_resize_with_many_panes() {
 /// pane's height distorts the entire row layout.
 #[test]
 fn smart_resize_preserves_sufficient_dimensions() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     for _ in 0..3 {
         amux::tmux::create_pane(&ts.name, None).expect("pane");
     }
@@ -399,7 +399,7 @@ fn smart_resize_preserves_sufficient_dimensions() {
 
 #[test]
 fn restore_tiled_unzooms_first() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
 
     // Zoom in
@@ -415,15 +415,15 @@ fn restore_tiled_unzooms_first() {
 
 #[test]
 fn list_sessions_includes_created() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     let sessions = amux::tmux::list_sessions().expect("list");
     assert!(sessions.contains(&ts.name), "session should be listed");
 }
 
 #[test]
 fn send_pane_to_session() {
-    let ts1 = common::TestSession::bare();
-    let ts2 = common::TestSession::bare();
+    let ts1 = common::TestSession::new(0);
+    let ts2 = common::TestSession::new(0);
 
     // ts1 starts with 1 pane, create a second
     amux::tmux::create_pane(&ts1.name, None).expect("pane");
@@ -439,8 +439,8 @@ fn send_pane_to_session() {
 
 #[test]
 fn switch_session_sessions_exist() {
-    let ts1 = common::TestSession::bare();
-    let ts2 = common::TestSession::bare();
+    let ts1 = common::TestSession::new(0);
+    let ts2 = common::TestSession::new(0);
 
     // switch_session requires an attached client, which we don't have in tests
     // Just verify the sessions exist
@@ -452,7 +452,7 @@ fn switch_session_sessions_exist() {
 
 #[test]
 fn layout_two_panes_always_left_right() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
 
     let panes = amux::tmux::list_panes(&ts.name).expect("list");
@@ -477,7 +477,7 @@ fn layout_two_panes_always_left_right() {
 
 #[test]
 fn layout_close_preserves_positions() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane 2");
     amux::tmux::create_pane(&ts.name, None).expect("pane 3");
     amux::tmux::create_pane(&ts.name, None).expect("pane 4");
@@ -506,7 +506,7 @@ fn layout_close_preserves_positions() {
 
 #[test]
 fn layout_four_panes_is_2x2() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     for _ in 0..3 {
         amux::tmux::create_pane(&ts.name, None).expect("pane");
     }
@@ -545,7 +545,7 @@ fn layout_four_panes_is_2x2() {
 
 #[test]
 fn spatial_stickiness_kill_and_recreate() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     for _ in 0..3 {
         amux::tmux::create_pane(&ts.name, None).expect("pane");
     }
@@ -608,7 +608,7 @@ fn spatial_stickiness_kill_and_recreate() {
 
 #[test]
 fn apply_layout_twice_preserves_centers() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     for _ in 0..3 {
         amux::tmux::create_pane(&ts.name, None).expect("pane");
     }
@@ -627,7 +627,7 @@ fn apply_layout_twice_preserves_centers() {
 
 #[test]
 fn stickiness_survives_rapid_changes() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     for _ in 0..3 {
         amux::tmux::create_pane(&ts.name, None).expect("pane");
     }

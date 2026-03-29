@@ -8,6 +8,7 @@
 ///
 /// Each test creates a real tmux session, runs real commands, and verifies
 /// tmux state. Tests are independent and clean up after themselves.
+mod cli;
 mod common;
 
 use std::process::Command;
@@ -46,7 +47,7 @@ fn cli_alert_pane_sets_alert_on_non_active_pane() {
     let ts = common::TestSession::new(3);
 
     // Run alert-pane via CLI binary (how the hook calls it)
-    let status = common::amux_cmd(&ts.name, &["alert-pane", "1"]).status;
+    let status = cli::amux_cmd(&ts.name, &["alert-pane", "1"]).status;
     assert!(status.success(), "amux alert-pane should succeed");
 
     assert!(get_alert(&ts.name, 1), "pane 1 should be alerted");
@@ -64,7 +65,7 @@ fn cli_alert_pane_skips_active_pane_when_terminal_frontmost() {
 
     // Pane 0 is active. Whether it gets skipped depends on whether
     // the terminal is frontmost (which it usually is during tests).
-    let status = common::amux_cmd(&ts.name, &["alert-pane", "0"]).status;
+    let status = cli::amux_cmd(&ts.name, &["alert-pane", "0"]).status;
     assert!(status.success());
 
     // If terminal is frontmost, active pane should be skipped.
@@ -87,7 +88,7 @@ fn cli_alert_pane_allows_active_pane_at_birdeye() {
     amux::tmux::set_level(&ts.name, 1).expect("set level");
 
     // Alert pane 0 even though it's active — at L1 this should work
-    let status = common::amux_cmd(&ts.name, &["alert-pane", "0"]).status;
+    let status = cli::amux_cmd(&ts.name, &["alert-pane", "0"]).status;
     assert!(status.success());
 
     assert!(
@@ -102,8 +103,8 @@ fn cli_alert_pane_skips_already_alerted() {
     let ts = common::TestSession::new(2);
 
     // Alert pane 1 twice
-    common::amux_cmd(&ts.name, &["alert-pane", "1"]);
-    common::amux_cmd(&ts.name, &["alert-pane", "1"]);
+    cli::amux_cmd(&ts.name, &["alert-pane", "1"]);
+    cli::amux_cmd(&ts.name, &["alert-pane", "1"]);
 
     assert!(get_alert(&ts.name, 1));
     assert_eq!(
@@ -132,7 +133,7 @@ fn hook_command_alerts_correct_pane_from_subprocess() {
     // running inside pane 1's shell context)
     let hook_cmd = format!(
         "AMUX_SESSION=$(tmux display-message -t {} -p '#{{session_name}}') {} alert-pane $(tmux display-message -t {} -p '#{{pane_index}}')",
-        pane1_id, common::amux_bin(), pane1_id
+        pane1_id, cli::amux_bin(), pane1_id
     );
     let status = Command::new("sh")
         .args(["-c", &hook_cmd])
@@ -161,7 +162,7 @@ fn hook_command_skips_active_pane_when_terminal_frontmost() {
     let pane0_id = pane_id(&ts.name, 0);
     let hook_cmd = format!(
         "AMUX_SESSION=$(tmux display-message -t {} -p '#{{session_name}}') {} alert-pane $(tmux display-message -t {} -p '#{{pane_index}}')",
-        pane0_id, common::amux_bin(), pane0_id
+        pane0_id, cli::amux_bin(), pane0_id
     );
     let status = Command::new("sh")
         .args(["-c", &hook_cmd])
@@ -193,7 +194,7 @@ fn zoom_to_alerted_pane_clears_alert() {
     assert!(get_alert(&ts.name, 1));
 
     // Zoom to pane 1 via CLI (simulates Ctrl-2, which calls `amux zoom 1`)
-    let status = common::amux_cmd(&ts.name, &["zoom", "1"]).status;
+    let status = cli::amux_cmd(&ts.name, &["zoom", "1"]).status;
     assert!(status.success());
 
     // Alert should be cleared because focusing pane 1 dismisses it
@@ -214,7 +215,7 @@ fn zoom_in_clears_alert_on_current_pane() {
     amux::tmux::set_alert_count(&ts.name, 1).expect("count");
 
     // Zoom in (L2 → L3) via CLI — should dismiss alert on current pane
-    let status = common::amux_cmd(&ts.name, &["zoom-in"]).status;
+    let status = cli::amux_cmd(&ts.name, &["zoom-in"]).status;
     assert!(status.success());
 
     assert!(
@@ -234,23 +235,23 @@ fn full_alert_lifecycle_multiple_panes() {
 
     // Alert panes 1, 2, 3 (pane 0 is active)
     for i in 1..=3 {
-        let status = common::amux_cmd(&ts.name, &["alert-pane", &i.to_string()]).status;
+        let status = cli::amux_cmd(&ts.name, &["alert-pane", &i.to_string()]).status;
         assert!(status.success(), "alert pane {} should succeed", i);
     }
     assert_eq!(get_alert_count(&ts.name), 3);
 
     // Dismiss pane 1 by zooming to it
-    common::amux_cmd(&ts.name, &["zoom", "1"]).status;
+    cli::amux_cmd(&ts.name, &["zoom", "1"]).status;
     assert!(!get_alert(&ts.name, 1));
     assert_eq!(get_alert_count(&ts.name), 2);
 
     // Dismiss pane 2
-    common::amux_cmd(&ts.name, &["zoom", "2"]).status;
+    cli::amux_cmd(&ts.name, &["zoom", "2"]).status;
     assert!(!get_alert(&ts.name, 2));
     assert_eq!(get_alert_count(&ts.name), 1);
 
     // Dismiss pane 3
-    common::amux_cmd(&ts.name, &["zoom", "3"]).status;
+    cli::amux_cmd(&ts.name, &["zoom", "3"]).status;
     assert!(!get_alert(&ts.name, 3));
     assert_eq!(get_alert_count(&ts.name), 0);
 }

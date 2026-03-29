@@ -4,7 +4,7 @@ use std::process::Command;
 
 #[test]
 fn set_and_get_alert_flag() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
 
     assert!(!amux::tmux::get_alert(&ts.name, 0).expect("get"));
     amux::tmux::set_alert(&ts.name, 0, true).expect("set");
@@ -15,7 +15,7 @@ fn set_and_get_alert_flag() {
 
 #[test]
 fn list_panes_includes_alert_state() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
 
     amux::tmux::set_alert(&ts.name, 1, true).expect("set");
@@ -28,7 +28,7 @@ fn list_panes_includes_alert_state() {
 
 #[test]
 fn alert_states_for_session() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     amux::tmux::create_pane(&ts.name, None).expect("pane");
 
@@ -73,7 +73,7 @@ fn status_bar_includes_alert_badge() {
 
 #[test]
 fn alert_pane_marks_specific_pane() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane 2");
     amux::tmux::create_pane(&ts.name, None).expect("pane 3");
 
@@ -89,7 +89,7 @@ fn alert_pane_marks_specific_pane() {
 
 #[test]
 fn alert_pane_updates_count() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
 
     amux::tmux::select_pane(&ts.name, 0).expect("select");
@@ -103,7 +103,7 @@ fn alert_pane_updates_count() {
 
 #[test]
 fn alert_pane_skips_already_alerted() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");
 
     // Alert pane 1, then try to alert it again
@@ -164,7 +164,7 @@ fn focusing_pane_clears_alert() {
 
 #[test]
 fn notification_timestamp_persists() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
 
     amux::tmux::set_last_notification_time(&ts.name).expect("set");
 
@@ -210,7 +210,7 @@ fn scenario_focus_clears_alert() {
 
 #[test]
 fn scenario_multiple_alerts_partial_dismiss() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane 2");
     amux::tmux::create_pane(&ts.name, None).expect("pane 3");
 
@@ -249,7 +249,7 @@ fn scenario_two_panes_alert_independently() {
 
 #[test]
 fn scenario_pane_close_updates_alert_count() {
-    let ts = common::TestSession::bare();
+    let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane 2");
     amux::tmux::create_pane(&ts.name, None).expect("pane 3");
 

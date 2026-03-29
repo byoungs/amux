@@ -87,23 +87,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Restore saved window size, clamped to current screen bounds.
+        let defaults = UserDefaults.standard
+        var width = defaults.double(forKey: "amux-window-width")
+        var height = defaults.double(forKey: "amux-window-height")
+        if width < 400 || height < 300 {
+            width = 960
+            height = 640
+        }
+        if let screen = NSScreen.main?.visibleFrame {
+            width = min(width, screen.width)
+            height = min(height, screen.height)
+        }
+
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         window.title = "amux"
         window.contentView = termView
+        window.center()
 
-        // Restore saved window position and size (persists across launches).
-        // setFrameAutosaveName saves to UserDefaults automatically on move/resize.
-        window.setFrameAutosaveName("amux-main-window")
-
-        // If the restored position is off-screen (e.g., external monitor disconnected),
-        // center the window on the current screen instead.
-        if !isWindowOnScreen(window) {
-            window.center()
+        // Save window size on resize so it persists across launches.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: window, queue: .main
+        ) { notification in
+            guard let w = notification.object as? NSWindow else { return }
+            defaults.set(w.frame.width, forKey: "amux-window-width")
+            defaults.set(w.frame.height, forKey: "amux-window-height")
         }
 
         window.makeKeyAndOrderFront(nil)
@@ -180,19 +194,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         fatalError("\(name) not found. Searched: \(searchDirs.joined(separator: ", "))")
-    }
-
-    /// Check if the window's frame is at least partially visible on any connected screen.
-    private func isWindowOnScreen(_ window: NSWindow) -> Bool {
-        let frame = window.frame
-        // A zero-rect means no saved position — treat as off-screen so we center
-        if frame.width == 0 || frame.height == 0 { return false }
-        for screen in NSScreen.screens {
-            if frame.intersects(screen.visibleFrame) {
-                return true
-            }
-        }
-        return false
     }
 
     /// Symlink a binary to ~/.local/bin. Idempotent — updates if it already exists.

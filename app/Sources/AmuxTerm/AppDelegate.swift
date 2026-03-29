@@ -88,7 +88,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         window.title = "amux"
         window.contentView = termView
-        window.center()
+
+        // Restore saved window position and size (persists across launches).
+        // setFrameAutosaveName saves to UserDefaults automatically on move/resize.
+        window.setFrameAutosaveName("amux-main-window")
+
+        // If the restored position is off-screen (e.g., external monitor disconnected),
+        // center the window on the current screen instead.
+        if !isWindowOnScreen(window) {
+            window.center()
+        }
+
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(termView)
         self.window = window
@@ -163,6 +173,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         fatalError("\(name) not found. Searched: \(searchDirs.joined(separator: ", "))")
+    }
+
+    /// Check if the window's frame is at least partially visible on any connected screen.
+    private func isWindowOnScreen(_ window: NSWindow) -> Bool {
+        let frame = window.frame
+        // A zero-rect means no saved position — treat as off-screen so we center
+        if frame.width == 0 || frame.height == 0 { return false }
+        for screen in NSScreen.screens {
+            if frame.intersects(screen.visibleFrame) {
+                return true
+            }
+        }
+        return false
     }
 
     /// Symlink a binary to ~/.local/bin. Idempotent — updates if it already exists.

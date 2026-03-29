@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build tmux from HEAD with static libevent/ncurses for bundling inside Amux.app.
+# Build tmux from HEAD with static libevent/ncurses/utf8proc for bundling inside Amux.app.
 # Output: build/tmux-bundle/tmux (a binary with no Homebrew dylib dependencies)
 
 BUILD_DIR="$(cd "$(dirname "$0")/.." && pwd)/build/tmux-deps"
@@ -48,7 +48,7 @@ else
 fi
 
 # --- ncurses (static) ---
-if [ ! -f "$BUILD_DIR/lib/libncurses.a" ]; then
+if [ ! -f "$BUILD_DIR/lib/libncursesw.a" ]; then
     echo ""
     echo "=== Building ncurses (static) ==="
     cd /tmp
@@ -75,6 +75,29 @@ else
     echo "✓ ncurses already built"
 fi
 
+# --- utf8proc (static) ---
+if [ ! -f "$BUILD_DIR/lib/libutf8proc.a" ]; then
+    echo ""
+    echo "=== Building utf8proc (static) ==="
+    cd /tmp
+    rm -rf utf8proc-build
+    git clone --depth 1 --branch v2.9.0 https://github.com/JuliaStrings/utf8proc.git utf8proc-build
+    cd utf8proc-build
+    mkdir _build
+    cd _build
+    cmake -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" \
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+          -DBUILD_SHARED_LIBS=OFF \
+          ..
+    make -j"$NPROC"
+    make install
+    cd /tmp
+    rm -rf utf8proc-build
+    echo "✓ utf8proc built"
+else
+    echo "✓ utf8proc already built"
+fi
+
 # --- tmux (HEAD, linked against static deps) ---
 echo ""
 echo "=== Building tmux HEAD ==="
@@ -91,7 +114,7 @@ sh autogen.sh
 PKG_CONFIG_PATH="$BUILD_DIR/lib/pkgconfig" \
 CPPFLAGS="-I$BUILD_DIR/include -I$BUILD_DIR/include/ncursesw" \
 LDFLAGS="-L$BUILD_DIR/lib" \
-./configure --disable-utf8proc
+./configure --enable-utf8proc
 
 make -j"$NPROC"
 

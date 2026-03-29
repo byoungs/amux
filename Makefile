@@ -7,6 +7,8 @@
 # make fmt      Auto-format code
 # make lint     Run clippy + format check
 # make refresh  Re-apply tmux config (after changing format strings/keybindings)
+# make release  Build and validate a release DMG
+# make publish  Tag and publish to GitHub (requires gh, clean tree)
 # make clean    Remove build artifacts
 
 # Detect main worktree (always first in porcelain output)
@@ -17,8 +19,9 @@ RELEASE_BIN := $(CARGO_TARGET_DIR)/release/amux
 SYMLINK := $(HOME)/.cargo/bin/amux
 BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 SHORT_SHA := $(shell git rev-parse --short HEAD)
+VERSION := $(shell awk -F'"' '/^\[package\]/{p=1} p && /^version/{print $$2; exit}' Cargo.toml)
 
-.PHONY: dev test validate fmt lint refresh clean setup setup-rust setup-tmux setup-hook app app-dev app-test app-clean tmux-bundle dmg
+.PHONY: dev test validate fmt lint refresh clean setup setup-rust setup-tmux setup-hook app app-dev app-test app-clean tmux-bundle dmg release publish
 
 # ── Build ──────────────────────────────────────────────
 
@@ -141,6 +144,33 @@ dmg: app tmux-bundle
 	hdiutil create -volname "amux" -srcfolder build/dmg-staging -ov -format UDZO build/amux.dmg
 	rm -rf build/dmg-staging
 	@echo "✓ DMG created: build/amux.dmg"
+
+# ── Release ────────────────────────────────────────────
+
+# Build a release-ready DMG after full validation
+release: validate dmg
+	@echo ""
+	@echo "✓ amux v$(VERSION) release ready: build/amux.dmg"
+
+# Tag and publish to GitHub (requires gh CLI, clean tree)
+publish:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "✗ Could not extract version from Cargo.toml"; \
+		exit 1; \
+	fi
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "✗ Working tree is dirty — commit or stash changes first"; \
+		exit 1; \
+	fi
+	@if git rev-parse "v$(VERSION)" >/dev/null 2>&1; then \
+		echo "✗ Tag v$(VERSION) already exists — bump version in Cargo.toml first"; \
+		exit 1; \
+	fi
+	@$(MAKE) release
+	git tag -a "v$(VERSION)" -m "v$(VERSION)"
+	git push origin "v$(VERSION)"
+	gh release create "v$(VERSION)" build/amux.dmg --title "amux v$(VERSION)" --generate-notes
+	@echo "✓ Published amux v$(VERSION) to GitHub"
 
 # ── Convenience ────────────────────────────────────────
 

@@ -29,6 +29,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
 
+        // Set app icon so it shows in Dock even when running as a bare binary
+        // (outside the .app bundle, e.g. make app-dev).
+        if let iconURL = Bundle.module.url(forResource: "amux", withExtension: "icns"),
+           let icon = NSImage(contentsOf: iconURL) {
+            NSApp.applicationIconImage = icon
+        }
+
         // Find binaries — check next to our own executable first (works for
         // both .app bundle and bare binary), then fall back to common paths.
         let execDir = Bundle.main.executableURL?.deletingLastPathComponent().path

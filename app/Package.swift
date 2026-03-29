@@ -33,7 +33,8 @@ let package = Package(
         .executableTarget(
             name: "amux-app",
             dependencies: ["CVterm"],
-            path: "Sources/AmuxTerm"
+            path: "Sources/AmuxTerm",
+            resources: [.copy("amux.icns")]
         ),
     ]
 )

@@ -7,6 +7,10 @@ import CVterm
 private func onDamage(_ rect: VTermRect, _ user: UnsafeMutableRawPointer?) -> Int32 {
     let terminal = Unmanaged<VTerminal>.fromOpaque(user!).takeUnretainedValue()
     terminal.isDirty = true
+    // Track which rows changed for partial redraw
+    for row in rect.start_row..<rect.end_row {
+        terminal.dirtyRows.insert(Int(row))
+    }
     return 1
 }
 
@@ -33,6 +37,8 @@ final class VTerminal {
     fileprivate(set) var cursorCol: Int = 0
     fileprivate(set) var cursorVisible: Bool = true
     var isDirty: Bool = false
+    var dirtyRows: Set<Int> = []
+    var fullRedrawNeeded: Bool = true  // first draw is always full
 
     private var callbacks = VTermScreenCallbacks()
 
@@ -83,6 +89,7 @@ final class VTerminal {
         self.rows = rows
         self.cols = cols
         vterm_set_size(vt, Int32(rows), Int32(cols))
+        fullRedrawNeeded = true
     }
 
     /// Extract the Unicode string from a VTermScreenCell.

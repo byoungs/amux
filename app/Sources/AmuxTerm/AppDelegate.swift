@@ -8,6 +8,7 @@ struct AmuxTermApp {
         if CommandLine.arguments.contains("--run-tests") {
             #if DEBUG
             KeyInputTests.runAll()
+            VTerminalTests.runAll()
             print("All tests passed")
             #else
             print("Tests only available in debug builds")

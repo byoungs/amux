@@ -20,6 +20,7 @@ final class TerminalView: NSView {
     var cellHeight: CGFloat = 0
     private var fontAscent: CGFloat = 0
     private var resizeTimer: Timer?
+    private var pendingDraw: Bool = false
     // CTLine cache: avoids recreating CoreText layout for identical cells.
     // Key: "char|bold|italic|r,g,b" — Value: CTLine
     private var lineCache: [String: CTLine] = [:]
@@ -65,9 +66,39 @@ final class TerminalView: NSView {
                 }
             }
             #endif
+            // Feed data to libvterm (updates cell grid in memory)
             self.terminal.write(data: data)
-            self.terminal.flushDamage()
-            self.needsDisplay = true
+
+            // Coalesce rapid output chunks into a single draw.
+            // tmux often sends a keystroke echo in 2-3 chunks 0.5-2ms apart.
+            // Without coalescing, each chunk triggers a separate draw() — the
+            // jitter between "1 draw" and "2-3 draws" is perceptible.
+            if !self.pendingDraw {
+                self.pendingDraw = true
+                // Schedule draw at the end of the current run loop pass.
+                // All onOutput calls within this pass accumulate damage,
+                // then one draw happens with all changes combined.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.pendingDraw = false
+                    self.terminal.flushDamage()
+
+                    if self.terminal.fullRedrawNeeded || self.terminal.dirtyRows.count > self.terminal.rows / 2 {
+                        self.terminal.fullRedrawNeeded = false
+                        self.terminal.dirtyRows.removeAll()
+                        self.needsDisplay = true
+                    } else if !self.terminal.dirtyRows.isEmpty {
+                        for row in self.terminal.dirtyRows {
+                            let y = CGFloat(row) * self.cellHeight
+                            self.setNeedsDisplay(NSRect(x: 0, y: y, width: self.bounds.width, height: self.cellHeight))
+                        }
+                        let cursorY = CGFloat(self.terminal.cursorRow) * self.cellHeight
+                        self.setNeedsDisplay(NSRect(x: 0, y: cursorY, width: self.bounds.width, height: self.cellHeight))
+                        self.terminal.dirtyRows.removeAll()
+                    }
+                    self.displayIfNeeded()
+                }
+            }
         }
         pty.startReading()
     }
@@ -129,7 +160,7 @@ final class TerminalView: NSView {
         if newRows != terminal.rows || newCols != terminal.cols {
             // Debounce resize: only notify tmux after the window stops being dragged.
             // This prevents flooding tmux with SIGWINCH during live resize.
-            terminal.resize(rows: newRows, cols: newCols)
+            terminal.resize(rows: newRows, cols: newCols)  // sets fullRedrawNeeded internally
             resizeTimer?.invalidate()
             resizeTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
                 guard let self = self else { return }
@@ -153,10 +184,16 @@ final class TerminalView: NSView {
         // Fix CoreText in flipped coordinates
         ctx.textMatrix = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: 0)
 
-        ctx.setFillColor(defaultBg)
-        ctx.fill(bounds)
+        // Only redraw rows that intersect the dirty rect.
+        // When a single character is typed, this redraws 1-2 rows instead of all 40+.
+        let firstRow = max(0, Int(dirtyRect.origin.y / cellHeight))
+        let lastRow = min(terminal.rows - 1, Int((dirtyRect.origin.y + dirtyRect.height) / cellHeight))
 
-        for row in 0..<terminal.rows {
+        // Clear only the dirty region's background
+        ctx.setFillColor(defaultBg)
+        ctx.fill(dirtyRect)
+
+        for row in firstRow...lastRow {
             for col in 0..<terminal.cols {
                 let cell = terminal.cell(row: row, col: col)
                 if cell.width < 1 { continue }
@@ -164,10 +201,7 @@ final class TerminalView: NSView {
             }
         }
 
-        // Selection rendering is now handled by tmux (yellow highlight).
-        // Our native blue selection is disabled.
-
-        if terminal.cursorVisible {
+        if terminal.cursorVisible && terminal.cursorRow >= firstRow && terminal.cursorRow <= lastRow {
             drawCursor(row: terminal.cursorRow, col: terminal.cursorCol, ctx: ctx)
         }
 

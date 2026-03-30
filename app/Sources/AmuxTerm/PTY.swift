@@ -23,6 +23,10 @@ final class PTY {
             // Child process — set env vars and exec
             // TERM must be xterm-256color for tmux to enable extended-keys, truecolor, etc.
             setenv("TERM", "xterm-256color", 1)
+            // macOS .app bundles launch with no locale. Without LANG, tmux
+            // treats the terminal as non-UTF-8 and replaces Unicode characters
+            // (used in border formats, status bar) with underscores.
+            setenv("LANG", "en_US.UTF-8", 0)  // 0 = don't overwrite if already set
             for (key, value) in env {
                 setenv(key, value, 1)
             }

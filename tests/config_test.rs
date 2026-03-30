@@ -20,6 +20,21 @@ fn border_format_uses_explicit_alert_comparison() {
 }
 
 #[test]
+fn border_format_contains_unicode_characters() {
+    let fmt = amux::config::PANE_BORDER_FORMAT;
+    assert!(
+        fmt.contains('▎'),
+        "border format must contain ▎ (LEFT ONE QUARTER BLOCK): {}",
+        fmt
+    );
+    assert!(
+        fmt.contains('●'),
+        "border format must contain ● (BLACK CIRCLE): {}",
+        fmt
+    );
+}
+
+#[test]
 fn status_right_does_not_use_truthy_alert_check() {
     let fmt = amux::config::STATUS_RIGHT_FORMAT;
     // The alert-count check already uses #{>:#{@amux-alert-count},0} which is fine.

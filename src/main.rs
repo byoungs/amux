@@ -119,6 +119,13 @@ fn session_name() -> String {
 }
 
 fn main() -> Result<()> {
+    // Ensure UTF-8 locale is set. macOS .app bundles launch with no LANG,
+    // causing tmux to replace Unicode characters (borders, status bar) with
+    // underscores. Also needed when amux is invoked via tmux run-shell hooks.
+    if std::env::var_os("LANG").is_none() {
+        std::env::set_var("LANG", "en_US.UTF-8");
+    }
+
     let cli = Cli::parse();
 
     // hook-install doesn't need tmux — handle before version check

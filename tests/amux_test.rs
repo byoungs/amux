@@ -69,6 +69,22 @@ fn config_sets_border_style() {
 }
 
 #[test]
+fn config_border_format_preserves_unicode() {
+    let ts = common::TestSession::new(1);
+    let fmt = tmux_option(&ts.name, "pane-border-format");
+    assert!(
+        fmt.contains('▎'),
+        "pane-border-format lost ▎ through tmux round-trip (locale/UTF-8 issue): {}",
+        fmt
+    );
+    assert!(
+        fmt.contains('●'),
+        "pane-border-format lost ● through tmux round-trip (locale/UTF-8 issue): {}",
+        fmt
+    );
+}
+
+#[test]
 fn create_pane_increases_count() {
     let ts = common::TestSession::new(0);
     amux::tmux::create_pane(&ts.name, None).expect("pane");

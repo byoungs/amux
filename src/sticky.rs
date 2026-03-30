@@ -482,9 +482,26 @@ fn compute_resize(current: &[Pane], window_w: u16, window_h: u16) -> Vec<Pane> {
     result
 }
 
-/// Add: compute grid for N+1 panes, match existing panes, new pane gets leftover slot.
+/// Add: compute grid for the new pane count, match existing panes, new pane gets leftover slot.
+///
+/// Handles two cases:
+/// - Normal: new pane not yet in `current` -- grid for `current.len() + 1`
+/// - Already joined: `join-pane` added the new pane before relayout -- new pane is already
+///   in `current`, so grid for `current.len()` (exclude it from matching)
 fn compute_add(current: &[Pane], new_id: u32, window_w: u16, window_h: u16) -> Vec<Pane> {
-    let new_count = current.len() + 1;
+    // Pane IDs in current are unique. If new_id is found, it means
+    // join-pane fired before this relayout call.
+    let already_joined = current.iter().any(|p| p.id == new_id);
+
+    let (existing, new_count, prev_count) = if already_joined {
+        let new_count = current.len();
+        let prev_count = new_count - 1;
+        let existing: Vec<Pane> = current.iter().filter(|p| p.id != new_id).cloned().collect();
+        (existing, new_count, prev_count)
+    } else {
+        (current.to_vec(), current.len() + 1, current.len())
+    };
+
     let rects = crate::layout::grid_positions(new_count, window_w, window_h);
     let slots: Vec<SlotCenter> = rects
         .iter()
@@ -494,7 +511,7 @@ fn compute_add(current: &[Pane], new_id: u32, window_w: u16, window_h: u16) -> V
         })
         .collect();
 
-    let pane_centers: Vec<PaneCenter> = current
+    let pane_centers: Vec<PaneCenter> = existing
         .iter()
         .map(|p| {
             let (cx, cy) = rect_center(p.x, p.y, p.w, p.h);
@@ -508,10 +525,8 @@ fn compute_add(current: &[Pane], new_id: u32, window_w: u16, window_h: u16) -> V
         })
         .collect();
 
-    // Use structural matching for add transitions
-    let matched = match_panes_structural(&pane_centers, &slots, current.len(), new_count);
+    let matched = match_panes_structural(&pane_centers, &slots, prev_count, new_count);
 
-    // Build output: matched panes get new positions, new pane fills empty slot
     let mut result = Vec::new();
     for (si, rect) in rects.iter().enumerate() {
         let id = if si < matched.len() {
@@ -530,16 +545,29 @@ fn compute_add(current: &[Pane], new_id: u32, window_w: u16, window_h: u16) -> V
     result
 }
 
-/// Remove: filter out the removed pane, compute grid for N-1 panes,
+/// Remove: filter out the removed pane, compute grid for surviving panes,
 /// match surviving panes using structural rules.
+///
+/// Handles two cases:
+/// - Normal: removed pane still in `current` -- filter it out, prev_count = `current.len()`
+/// - Already killed: `kill-pane` removed it before relayout -- pane not in `current`,
+///   so `current` IS the surviving set, prev_count = `current.len() + 1`
 fn compute_remove(current: &[Pane], removed_id: u32, window_w: u16, window_h: u16) -> Vec<Pane> {
-    let surviving: Vec<&Pane> = current.iter().filter(|p| p.id != removed_id).collect();
+    let already_killed = !current.iter().any(|p| p.id == removed_id);
+
+    let (surviving, prev_count): (Vec<&Pane>, usize) = if already_killed {
+        (current.iter().collect(), current.len() + 1)
+    } else {
+        (
+            current.iter().filter(|p| p.id != removed_id).collect(),
+            current.len(),
+        )
+    };
+
     let new_count = surviving.len();
     if new_count == 0 {
         return vec![];
     }
-
-    let prev_count = current.len();
 
     // Detect 4→3 right-column removal for right-full layout variant
     let pane_centers: Vec<PaneCenter> = surviving
@@ -828,6 +856,72 @@ mod layout_tests {
         assert_eq!(result[4].id, 14);
         assert_eq!(result[5].id, 15);
         assert_eq!(result[6].id, 99); // new pane takes right column
+    }
+
+    #[test]
+    fn layout_add_6_to_7_already_joined() {
+        // Simulate real create_pane flow: join-pane already added the new pane
+        // to the window BEFORE relayout(Add) is called.
+        let r6 = grid_positions(6, W, H);
+        let mut current = panes_at(6, &[10, 11, 12, 13, 14, 15], W, H);
+        // join-pane placed pane 99 by splitting pane 0's space
+        current.push(Pane {
+            id: 99,
+            x: 0,
+            y: r6[0].h / 2 + 1,
+            w: r6[0].w,
+            h: r6[0].h / 2,
+        });
+        let result = compute_layout(&current, LayoutEvent::Add(99), W, H);
+        assert_eq!(result.len(), 7, "should produce 7-pane layout, not 8");
+        // New pane should take the right column (slot 6)
+        assert_eq!(result[6].id, 99);
+        // Existing panes fill the 3x2 balanced grid
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 12);
+        assert_eq!(result[3].id, 13);
+        assert_eq!(result[4].id, 14);
+        assert_eq!(result[5].id, 15);
+        // Verify geometry matches the 7-pane grid
+        let expected = grid_positions(7, W, H);
+        for (r, e) in result.iter().zip(expected.iter()) {
+            assert_eq!(
+                (r.x, r.y, r.w, r.h),
+                (e.x, e.y, e.w, e.h),
+                "slot geometry mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn layout_add_4_to_5_already_joined() {
+        let r4 = grid_positions(4, W, H);
+        let mut current = panes_at(4, &[10, 11, 12, 13], W, H);
+        current.push(Pane {
+            id: 99,
+            x: 0,
+            y: r4[0].h / 2 + 1,
+            w: r4[0].w,
+            h: r4[0].h / 2,
+        });
+        let result = compute_layout(&current, LayoutEvent::Add(99), W, H);
+        assert_eq!(result.len(), 5, "should produce 5-pane layout, not 6");
+        // Existing panes fill the 2x2 balanced grid
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 12);
+        assert_eq!(result[3].id, 13);
+        assert_eq!(result[4].id, 99); // right column
+                                      // Verify geometry matches the 5-pane grid
+        let expected = grid_positions(5, W, H);
+        for (r, e) in result.iter().zip(expected.iter()) {
+            assert_eq!(
+                (r.x, r.y, r.w, r.h),
+                (e.x, e.y, e.w, e.h),
+                "slot geometry mismatch"
+            );
+        }
     }
 
     #[test]
@@ -1191,5 +1285,122 @@ mod layout_tests {
         assert_eq!(result.len(), 7);
         let ids: Vec<u32> = result.iter().map(|p| p.id).collect();
         assert_eq!(ids, [10, 11, 12, 14, 15, 16, 13]);
+    }
+    // ── Already-killed Remove Tests ──
+
+    #[test]
+    fn layout_remove_7_to_6_already_killed() {
+        // Simulate real kill_pane flow: tmux kill-pane already removed the pane
+        // BEFORE relayout(Remove) is called. Pane 16 (right column) was killed.
+        let r7 = grid_positions(7, W, H);
+        // current has 6 panes — pane 16 is already gone
+        let current = vec![
+            Pane {
+                id: 10,
+                x: r7[0].x,
+                y: r7[0].y,
+                w: r7[0].w,
+                h: r7[0].h,
+            },
+            Pane {
+                id: 11,
+                x: r7[1].x,
+                y: r7[1].y,
+                w: r7[1].w,
+                h: r7[1].h,
+            },
+            Pane {
+                id: 12,
+                x: r7[2].x,
+                y: r7[2].y,
+                w: r7[2].w,
+                h: r7[2].h,
+            },
+            Pane {
+                id: 13,
+                x: r7[3].x,
+                y: r7[3].y,
+                w: r7[3].w,
+                h: r7[3].h,
+            },
+            Pane {
+                id: 14,
+                x: r7[4].x,
+                y: r7[4].y,
+                w: r7[4].w,
+                h: r7[4].h,
+            },
+            Pane {
+                id: 15,
+                x: r7[5].x,
+                y: r7[5].y,
+                w: r7[5].w,
+                h: r7[5].h,
+            },
+        ];
+        let result = compute_layout(&current, LayoutEvent::Remove(16), W, H);
+        assert_eq!(result.len(), 6, "should produce 6-pane layout, not 5");
+        // Verify pane identity — all surviving panes placed correctly
+        assert_eq!(result[0].id, 10);
+        assert_eq!(result[1].id, 11);
+        assert_eq!(result[2].id, 12);
+        assert_eq!(result[3].id, 13);
+        assert_eq!(result[4].id, 14);
+        assert_eq!(result[5].id, 15);
+        // All surviving panes should be placed in a 3x2 balanced grid
+        let expected = grid_positions(6, W, H);
+        for (r, e) in result.iter().zip(expected.iter()) {
+            assert_eq!(
+                (r.x, r.y, r.w, r.h),
+                (e.x, e.y, e.w, e.h),
+                "slot geometry mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn layout_remove_5_to_4_already_killed() {
+        let r5 = grid_positions(5, W, H);
+        // Pane 14 (right column) was already killed by tmux
+        let current = vec![
+            Pane {
+                id: 10,
+                x: r5[0].x,
+                y: r5[0].y,
+                w: r5[0].w,
+                h: r5[0].h,
+            },
+            Pane {
+                id: 11,
+                x: r5[1].x,
+                y: r5[1].y,
+                w: r5[1].w,
+                h: r5[1].h,
+            },
+            Pane {
+                id: 12,
+                x: r5[2].x,
+                y: r5[2].y,
+                w: r5[2].w,
+                h: r5[2].h,
+            },
+            Pane {
+                id: 13,
+                x: r5[3].x,
+                y: r5[3].y,
+                w: r5[3].w,
+                h: r5[3].h,
+            },
+        ];
+        let result = compute_layout(&current, LayoutEvent::Remove(14), W, H);
+        assert_eq!(result.len(), 4, "should produce 4-pane layout, not 3");
+        let expected = grid_positions(4, W, H);
+        for (r, e) in result.iter().zip(expected.iter()) {
+            assert_eq!(
+                (r.x, r.y, r.w, r.h),
+                (e.x, e.y, e.w, e.h),
+                "slot geometry mismatch"
+            );
+        }
     }
 } // close mod layout_tests

@@ -27,36 +27,58 @@ pub fn apply_hooks(session: &str) -> Result<()> {
     let bin = "amux";
 
     // Re-apply layout when a pane exits (shell closes naturally)
-    let _ = Command::new("tmux")
+    let output = Command::new("tmux")
         .args([
             "set-hook",
             "-g",
             "pane-exited",
-            &format!("run-shell \"{} layout #{{session_name}} 2>/dev/null\"", bin),
+            &format!("run-shell \"{} layout #{{session_name}}\"", bin),
         ])
         .output();
+    if let Ok(o) = &output {
+        if !o.status.success() {
+            eprintln!(
+                "amux: failed to register pane-exited hook: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
+    }
 
     // Re-apply layout when the terminal window is resized
-    let _ = Command::new("tmux")
+    let output = Command::new("tmux")
         .args([
             "set-hook",
             "-g",
             "client-resized",
-            &format!("run-shell \"{} layout #{{session_name}} 2>/dev/null\"", bin),
+            &format!("run-shell \"{} layout #{{session_name}}\"", bin),
         ])
         .output();
+    if let Ok(o) = &output {
+        if !o.status.success() {
+            eprintln!(
+                "amux: failed to register client-resized hook: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
+    }
 
     // Update pane title from cwd when focus leaves a pane
-    let _ = Command::new("tmux")
+    let output = Command::new("tmux")
         .args([
             "set-hook",
             "-g",
             "pane-focus-out",
-            &format!(
-                "run-shell \"{bin} update-title #{{pane_index}} '#{{pane_current_path}}' 2>/dev/null\""
-            ),
+            &format!("run-shell \"{bin} update-title #{{pane_index}} '#{{pane_current_path}}'\""),
         ])
         .output();
+    if let Ok(o) = &output {
+        if !o.status.success() {
+            eprintln!(
+                "amux: failed to register pane-focus-out hook: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
+    }
 
     Ok(())
 }

@@ -75,7 +75,7 @@ pub fn create_pane(session: &str, cwd: Option<&str>) -> Result<usize> {
 
     // Apply clean grid layout — pass the new pane's ID so sticky matching knows it was added
     let pane_id: u32 = new_pane_id.trim_start_matches('%').parse().unwrap_or(0);
-    let _ = relayout(session, crate::sticky::LayoutEvent::Add(pane_id));
+    relayout(session, crate::sticky::LayoutEvent::Add(pane_id))?;
     let panes = list_panes(session)?;
     let active = panes
         .iter()
@@ -171,7 +171,7 @@ pub fn kill_pane(session: &str, pane_index: usize) -> Result<()> {
     if !output.status.success() {
         bail!("tmux kill-pane failed");
     }
-    let _ = relayout(session, crate::sticky::LayoutEvent::Remove(pane_id));
+    relayout(session, crate::sticky::LayoutEvent::Remove(pane_id))?;
     Ok(())
 }
 
@@ -379,6 +379,19 @@ pub fn relayout(session: &str, event: crate::sticky::LayoutEvent) -> Result<()> 
         return Ok(());
     }
 
+    // Zoom reconciliation: select-layout auto-unzooms tmux, so if we're
+    // at L3 (fullscreen), drop to L2 first to keep AMUX_LEVEL in sync.
+    // Any relayout with multiple panes is incompatible with zoom.
+    if current.len() > 1 {
+        let level = get_level(session).unwrap_or(2);
+        if level == 3 || is_zoomed(session).unwrap_or(false) {
+            if is_zoomed(session).unwrap_or(false) {
+                let _ = toggle_zoom(session);
+            }
+            let _ = set_level(session, 2);
+        }
+    }
+
     let (w, h) = window_size(session)?;
     let border_top = if has_pane_border_status(session) {
         1u16
@@ -391,10 +404,15 @@ pub fn relayout(session: &str, event: crate::sticky::LayoutEvent) -> Result<()> 
 
     // Build and apply the layout string
     if let Some(ls) = crate::layout::build_layout_string(&new_layout, w, h, border_top) {
-        let _ = Command::new("tmux")
+        let output = Command::new("tmux")
             .args(["select-layout", "-t", session, &ls])
             .output()
             .context("failed to apply layout")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("amux: select-layout failed: {}", stderr);
+            bail!("select-layout failed: {}", stderr);
+        }
     }
 
     // The layout string embeds pane IDs, so tmux's select-layout places
@@ -628,14 +646,28 @@ pub fn enter_split(session: &str, pane_a: usize, pane_b: usize) -> Result<()> {
     let target_split = format!("{}:{}", session, split_window_idx);
 
     // Move pane A to the split window
-    let _ = Command::new("tmux")
+    let output = Command::new("tmux")
         .args(["join-pane", "-s", &id_a, "-t", &target_split, "-h"])
-        .output();
+        .output()
+        .context("failed to move pane A to split")?;
+    if !output.status.success() {
+        eprintln!(
+            "amux: join-pane for split pane A failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     // Move pane B next to pane A
-    let _ = Command::new("tmux")
+    let output = Command::new("tmux")
         .args(["join-pane", "-s", &id_b, "-t", &target_split, "-h"])
-        .output();
+        .output()
+        .context("failed to move pane B to split")?;
+    if !output.status.success() {
+        eprintln!(
+            "amux: join-pane for split pane B failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     // Kill the default pane that was created with new-window
     let split_panes = list_panes_in_window(session, split_window_idx.parse().unwrap_or(1))?;
@@ -643,25 +675,47 @@ pub fn enter_split(session: &str, pane_a: usize, pane_b: usize) -> Result<()> {
         let this_id = pane_id_at_window(session, &split_window_idx, p.index)?;
         if this_id != id_a && this_id != id_b {
             let target = format!("{}:{}.{}", session, split_window_idx, p.index);
-            let _ = Command::new("tmux")
+            let output = Command::new("tmux")
                 .args(["kill-pane", "-t", &target])
                 .output();
+            if let Ok(o) = &output {
+                if !o.status.success() {
+                    eprintln!(
+                        "amux: failed to clean up split phantom pane: {}",
+                        String::from_utf8_lossy(&o.stderr)
+                    );
+                }
+            }
         }
     }
 
     // Apply side-by-side layout
-    let _ = Command::new("tmux")
+    let output = Command::new("tmux")
         .args(["select-layout", "-t", &target_split, "even-horizontal"])
-        .output();
+        .output()
+        .context("failed to apply split layout")?;
+    if !output.status.success() {
+        eprintln!(
+            "amux: split layout failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     // Switch to the split window
-    let _ = Command::new("tmux")
+    let output = Command::new("tmux")
         .args(["select-window", "-t", &target_split])
-        .output();
+        .output()
+        .context("failed to switch to split window")?;
+    if !output.status.success() {
+        eprintln!(
+            "amux: select-window for split failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     // Retile the grid window
     let grid_window = format!("{}:0", session);
-    let _ = relayout(&grid_window, crate::sticky::LayoutEvent::Resize);
+    relayout(&grid_window, crate::sticky::LayoutEvent::Resize)?;
 
     Ok(())
 }
@@ -767,6 +821,15 @@ pub fn active_pane_index(session: &str) -> Result<usize> {
         .unwrap_or(0))
 }
 
+/// Get the active pane's tmux ID (e.g., "%1234").
+pub fn active_pane_id(session: &str) -> Result<String> {
+    let output = Command::new("tmux")
+        .args(["display-message", "-t", session, "-p", "#{pane_id}"])
+        .output()
+        .context("failed to get active pane id")?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// Display a message in the tmux status bar.
 pub fn display_message(session: &str, msg: &str) {
     let _ = Command::new("tmux")
@@ -777,7 +840,7 @@ pub fn display_message(session: &str, msg: &str) {
 /// Resize a specific pane to the given dimensions.
 pub fn resize_pane(session: &str, pane_index: usize, cols: u16, rows: u16) -> Result<()> {
     let target = format!("{}:.{}", session, pane_index);
-    let _ = Command::new("tmux")
+    let output = Command::new("tmux")
         .args([
             "resize-pane",
             "-t",
@@ -787,7 +850,13 @@ pub fn resize_pane(session: &str, pane_index: usize, cols: u16, rows: u16) -> Re
             "-y",
             &rows.to_string(),
         ])
-        .output();
+        .output()
+        .context("failed to resize pane")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("amux: resize-pane failed: {}", stderr);
+        bail!("resize-pane failed: {}", stderr);
+    }
     Ok(())
 }
 
@@ -904,9 +973,34 @@ pub fn send_pane_to_session(from_session: &str, to_session: &str) -> Result<()> 
     }
 
     // Retile both sessions
-    let _ = relayout(from_session, crate::sticky::LayoutEvent::Resize);
-    let _ = relayout(to_session, crate::sticky::LayoutEvent::Resize);
+    relayout(from_session, crate::sticky::LayoutEvent::Resize)?;
+    relayout(to_session, crate::sticky::LayoutEvent::Resize)?;
 
+    Ok(())
+}
+
+/// Kill the default phantom pane left by `create_session` in a freshly-created
+/// session. Call this AFTER `send_pane_to_session` when the target session was
+/// just created and should contain only the sent pane.
+pub fn kill_phantom_pane(session: &str, sent_pane_id: &str) -> Result<()> {
+    let panes = list_panes_in_window(session, 0)?;
+    for p in &panes {
+        let this_id = pane_id_at_window(session, "0", p.index)?;
+        if this_id != sent_pane_id {
+            let target = format!("{}:0.{}", session, p.index);
+            let output = Command::new("tmux")
+                .args(["kill-pane", "-t", &target])
+                .output();
+            if let Ok(o) = &output {
+                if !o.status.success() {
+                    eprintln!(
+                        "amux: failed to clean up phantom pane: {}",
+                        String::from_utf8_lossy(&o.stderr)
+                    );
+                }
+            }
+        }
+    }
     Ok(())
 }
 

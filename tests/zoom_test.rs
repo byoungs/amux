@@ -249,6 +249,34 @@ fn zoom_level_consistent_after_space_operations() {
 }
 
 // ============================================================
+// Relayout zoom reconciliation
+// ============================================================
+
+#[test]
+fn relayout_at_l3_preserves_zoom_invariant() {
+    let ts = common::TestSession::new(3);
+    amux::tmux::set_level(&ts.name, 2).expect("set L2");
+
+    // Zoom in to L3
+    cli::amux_cmd(&ts.name, &["zoom-in"]);
+    assert_eq!(get_level(&ts.name), 3);
+    assert!(is_zoomed(&ts.name));
+
+    // relayout would previously desync the zoom state
+    amux::tmux::relayout(&ts.name, amux::sticky::LayoutEvent::Resize).expect("relayout");
+
+    // Invariant: level and zoom flag must agree
+    let level = get_level(&ts.name);
+    let zoomed = is_zoomed(&ts.name);
+    assert!(
+        (level == 3 && zoomed) || (level != 3 && !zoomed),
+        "zoom invariant broken: level={}, zoomed={}",
+        level,
+        zoomed
+    );
+}
+
+// ============================================================
 // Pane cycling (pane-next / pane-prev)
 // ============================================================
 
@@ -310,4 +338,93 @@ fn pane_prev_at_fullscreen_cycles_while_zoomed() {
     assert_eq!(active_pane(&ts.name), 2, "should wrap to pane 2");
     assert_eq!(get_level(&ts.name), 3, "should stay at L3");
     assert!(is_zoomed(&ts.name), "should still be zoomed");
+}
+
+// ============================================================
+// Bug 1: Zoom desync — "fullscreen, cmd-n, exit terminal, ctrl+ fails"
+// relayout at L3 now unzooms and drops to L2 before applying layout
+// ============================================================
+
+#[test]
+fn create_pane_at_l3_drops_to_l2() {
+    // Exact bug: fullscreen (L3), Ctrl-N (new pane), zoom state desyncs
+    let ts = common::TestSession::new(3);
+    amux::tmux::set_level(&ts.name, 2).expect("set L2");
+
+    // Zoom to L3
+    cli::amux_cmd(&ts.name, &["zoom-in"]);
+    assert_eq!(get_level(&ts.name), 3);
+    assert!(is_zoomed(&ts.name));
+
+    // Create a new pane while zoomed — relayout should drop us to L2
+    amux::tmux::create_pane(&ts.name, None).expect("create pane");
+
+    let level = get_level(&ts.name);
+    let zoomed = is_zoomed(&ts.name);
+    assert_eq!(level, 2, "should drop to L2 after pane creation at L3");
+    assert!(!zoomed, "should not be zoomed after pane creation");
+
+    // Verify we now have 4 panes
+    assert_eq!(amux::tmux::pane_count(&ts.name).expect("count"), 4);
+}
+
+#[test]
+fn kill_pane_at_l3_drops_to_l2() {
+    let ts = common::TestSession::new(3);
+    amux::tmux::set_level(&ts.name, 2).expect("set L2");
+
+    // Zoom to L3
+    cli::amux_cmd(&ts.name, &["zoom-in"]);
+    assert_eq!(get_level(&ts.name), 3);
+
+    // Kill a pane while zoomed
+    amux::tmux::kill_pane(&ts.name, 1).expect("kill pane");
+
+    let level = get_level(&ts.name);
+    let zoomed = is_zoomed(&ts.name);
+    assert_eq!(level, 2, "should drop to L2 after pane kill at L3");
+    assert!(!zoomed, "should not be zoomed after pane kill");
+    assert_eq!(amux::tmux::pane_count(&ts.name).expect("count"), 2);
+}
+
+#[test]
+fn zoom_out_after_create_and_exit_works() {
+    // Full user scenario: L3 → new pane → pane exits → Ctrl-- should zoom out correctly
+    let ts = common::TestSession::new(3);
+    amux::tmux::set_level(&ts.name, 2).expect("set L2");
+
+    // Zoom to L3
+    cli::amux_cmd(&ts.name, &["zoom-in"]);
+    assert_eq!(get_level(&ts.name), 3);
+    assert!(is_zoomed(&ts.name));
+
+    // Create pane (simulates Ctrl-N) — relayout drops to L2
+    amux::tmux::create_pane(&ts.name, None).expect("create pane");
+    assert_eq!(get_level(&ts.name), 2);
+    assert!(!is_zoomed(&ts.name));
+
+    // Kill the new pane (simulates shell exit) — relayout runs again
+    amux::tmux::kill_pane(&ts.name, 3).expect("kill pane");
+    assert_eq!(get_level(&ts.name), 2);
+    assert!(!is_zoomed(&ts.name));
+
+    // Now zoom in — should work correctly (L2 → L3)
+    cli::amux_cmd(&ts.name, &["zoom-in"]);
+    assert_eq!(get_level(&ts.name), 3);
+    assert!(is_zoomed(&ts.name));
+
+    // And zoom out — THIS was the broken path before the fix
+    cli::amux_cmd(&ts.name, &["zoom-out"]);
+    assert_eq!(get_level(&ts.name), 2);
+    assert!(!is_zoomed(&ts.name), "zoom-out should unzoom, not zoom in");
+}
+
+#[test]
+fn relayout_with_single_pane_at_l3_stays_at_l3() {
+    // Edge case: 1 pane at L3 is valid — relayout should not disturb it
+    let ts = common::TestSession::new(1);
+    amux::tmux::set_level(&ts.name, 3).expect("set L3");
+    // Can't actually zoom with 1 pane in tmux, but level should be preserved
+    amux::tmux::relayout(&ts.name, amux::sticky::LayoutEvent::Resize).expect("relayout");
+    assert_eq!(get_level(&ts.name), 3, "single pane at L3 should stay L3");
 }

@@ -705,26 +705,28 @@ fn switch_to_space(target: &str) -> Result<()> {
     tmux::switch_session(target)?;
 
     // Re-equalize layout for the target space (window size may have changed)
-    let _ = tmux::relayout(target, amux::sticky::LayoutEvent::Resize);
+    if let Err(e) = tmux::relayout(target, amux::sticky::LayoutEvent::Resize) {
+        eprintln!("amux: relayout after space switch failed: {}", e);
+    }
 
     match landing {
         amux::alert::LandingTarget::FocusPane { index, level } => {
-            // Unzoom if the window was left zoomed but we're landing at L2
-            if level != 3 && tmux::is_zoomed(target).unwrap_or(false) {
-                tmux::toggle_zoom(target)?;
-            }
             tmux::select_pane(target, index)?;
             dismiss_on_focus(target, index);
+            // Re-zoom if landing at L3 (relayout dropped us to L2)
+            if level == 3 {
+                tmux::toggle_zoom(target)?;
+            }
             tmux::set_level(target, level)?;
         }
         amux::alert::LandingTarget::Resume { level, pane } => {
             // Cap L1 to L2 (bird's eye removed)
             let level = if level == 1 { 2 } else { level };
-            // Unzoom if the window was left zoomed but we're resuming at L2
-            if level != 3 && tmux::is_zoomed(target).unwrap_or(false) {
+            tmux::select_pane(target, pane)?;
+            // Re-zoom if resuming at L3 (relayout dropped us to L2)
+            if level == 3 {
                 tmux::toggle_zoom(target)?;
             }
-            tmux::select_pane(target, pane)?;
             tmux::set_level(target, level)?;
         }
     }
@@ -940,8 +942,17 @@ fn cmd_send() -> Result<()> {
                 let title = auto_title(&cwd.to_string_lossy());
                 tmux::set_title(&name, 0, &title)?;
 
+                // Capture the pane ID before sending so we can clean up the phantom
+                let sent_pane_id = tmux::active_pane_id(&current)?;
+
                 // Send the pane to the new space
                 send_and_follow_if_last(&current, &name)?;
+
+                // Kill the phantom pane left by create_session, then
+                // re-tile so the sent pane fills the space immediately
+                // (don't wait for the async pane-exited hook).
+                tmux::kill_phantom_pane(&name, &sent_pane_id)?;
+                let _ = tmux::relayout(&name, amux::sticky::LayoutEvent::Resize);
                 return Ok(());
             }
             _ => {}

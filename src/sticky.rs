@@ -12,7 +12,7 @@ pub struct Pane {
 
 /// Events that trigger a layout recomputation.
 #[derive(Debug, Clone)]
-pub enum LayoutEvent {
+pub(crate) enum LayoutEvent {
     /// A new pane was added with the given ID.
     Add(u32),
     /// A pane with the given ID was removed.
@@ -114,7 +114,7 @@ fn rect_center(x: u16, y: u16, w: u16, h: u16) -> (i32, i32) {
 ///   column-mate takes the full-height right column. Others fill the balanced part.
 ///
 /// Falls back to geometric matching for cases that don't match these patterns.
-pub fn match_panes_structural(
+pub(crate) fn match_panes_structural(
     panes: &[PaneCenter],
     slots: &[SlotCenter],
     prev_count: usize,
@@ -414,7 +414,7 @@ fn find_lone_column_pane(panes: &[PaneCenter]) -> Option<usize> {
 /// Pure state transition: given current pane positions, an event, and window
 /// dimensions, compute the new layout. This is the single source of truth for
 /// both pane ordering and geometry.
-pub fn compute_layout(
+pub(crate) fn compute_layout(
     current: &[Pane],
     event: LayoutEvent,
     window_w: u16,

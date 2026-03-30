@@ -206,7 +206,7 @@ fn pane_titles_survive_layout_changes() {
     amux::tmux::set_title(&ts.name, 1, "beta").expect("title");
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     amux::tmux::set_title(&ts.name, 2, "gamma").expect("title");
-    amux::tmux::relayout(&ts.name, amux::sticky::LayoutEvent::Resize).expect("tiled");
+    amux::tmux::apply_layout(&ts.name, amux::layout_engine::LayoutEvent::Resize).expect("tiled");
     let panes = amux::tmux::list_panes(&ts.name).expect("list");
     assert!(panes.iter().any(|p| p.title == "alpha"));
     assert!(panes.iter().any(|p| p.title == "beta"));
@@ -629,10 +629,10 @@ fn apply_layout_twice_preserves_centers() {
         amux::tmux::create_pane(&ts.name, None).expect("pane");
     }
 
-    amux::tmux::relayout(&ts.name, amux::sticky::LayoutEvent::Resize).expect("layout 1");
+    amux::tmux::apply_layout(&ts.name, amux::layout_engine::LayoutEvent::Resize).expect("layout 1");
     let positions_1 = pane_positions(&ts.name);
 
-    amux::tmux::relayout(&ts.name, amux::sticky::LayoutEvent::Resize).expect("layout 2");
+    amux::tmux::apply_layout(&ts.name, amux::layout_engine::LayoutEvent::Resize).expect("layout 2");
     let positions_2 = pane_positions(&ts.name);
 
     assert_eq!(

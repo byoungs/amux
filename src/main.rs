@@ -159,7 +159,7 @@ fn main() -> Result<()> {
         Some(Commands::PanePrev) => cmd_pane_prev(),
         Some(Commands::Layout { session }) => {
             std::env::set_var("AMUX_SESSION", &session);
-            tmux::relayout(&session, amux::sticky::LayoutEvent::Resize)
+            tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::Resize)
         }
         None => {
             // Default: start if no session exists, refresh+attach if it does
@@ -208,7 +208,7 @@ fn cmd_start(sessions: &[String]) -> Result<()> {
     }
 
     // Apply tiled layout
-    tmux::relayout(&session, amux::sticky::LayoutEvent::Resize)?;
+    tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::Resize)?;
 
     // Save state
     let state = build_state(&session)?;
@@ -294,7 +294,7 @@ fn cmd_refresh() -> Result<()> {
     }
 
     // Re-apply tiled layout
-    tmux::relayout(&session, amux::sticky::LayoutEvent::Resize)?;
+    tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::Resize)?;
 
     // Migrate L1 (legacy bird's eye) to L2 (working)
     let level = tmux::get_level(&session).unwrap_or(2);
@@ -393,150 +393,34 @@ fn dismiss_on_focus(session: &str, pane_index: usize) {
 /// Context-aware zoom: Ctrl-N behavior
 fn cmd_zoom(target_pane: usize) -> Result<()> {
     let session = session_name();
-    let count = tmux::pane_count(&session)?;
-    if target_pane >= count {
-        tmux::display_message(
-            &session,
-            &format!("Pane {} does not exist (have {})", target_pane + 1, count),
-        );
-        return Ok(());
-    }
-    let level = tmux::get_level(&session)?;
-    let current = tmux::active_pane_index(&session)?;
-    let same_pane = current == target_pane;
-
-    match (level, same_pane) {
-        // L1 + any → select pane, go to L2
-        (1, _) => {
-            tmux::select_pane(&session, target_pane)?;
-            dismiss_on_focus(&session, target_pane);
-            tmux::set_level(&session, 2)?;
-        }
-        // L2 + same pane → go to L3
-        (2, true) => {
-            tmux::toggle_zoom(&session)?;
-            tmux::set_level(&session, 3)?;
-        }
-        // L2 + different pane → switch pane, stay L2
-        (2, false) => {
-            tmux::select_pane(&session, target_pane)?;
-            dismiss_on_focus(&session, target_pane);
-        }
-        // L3 + same pane → stay L3
-        (3, true) => {
-            // Already here, do nothing
-        }
-        // L3 + different pane → unzoom, select pane, go to L2
-        (3, false) => {
-            tmux::toggle_zoom(&session)?; // unzoom
-            tmux::select_pane(&session, target_pane)?;
-            dismiss_on_focus(&session, target_pane);
-            tmux::set_level(&session, 2)?;
-        }
-        _ => {}
-    }
-
-    Ok(())
+    tmux::apply_layout(
+        &session,
+        amux::layout_engine::LayoutEvent::ZoomTo(target_pane),
+    )
 }
 
 /// Ctrl-+ : zoom in one level
 fn cmd_zoom_in() -> Result<()> {
     let session = session_name();
-    let level = tmux::get_level(&session)?;
-    let current = tmux::active_pane_index(&session)?;
-
-    match level {
-        1 | 2 => {
-            // L1/L2 → L3: full screen
-            dismiss_on_focus(&session, current);
-            tmux::toggle_zoom(&session)?;
-            tmux::set_level(&session, 3)?;
-        }
-        3 => {
-            // Already at L3, do nothing
-        }
-        _ => {}
-    }
-
-    Ok(())
+    tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::ZoomIn)
 }
 
 /// Ctrl-- : zoom out one level
 fn cmd_zoom_out() -> Result<()> {
     let session = session_name();
-    let level = tmux::get_level(&session)?;
-
-    match level {
-        1 => {
-            // Already at L1 (spaces), do nothing
-        }
-        2 => {
-            // L2 → spaces picker (replaces bird's eye)
-            tmux::open_spaces_popup()?;
-        }
-        3 => {
-            // L3 → L2: unzoom
-            tmux::toggle_zoom(&session)?;
-            tmux::set_level(&session, 2)?;
-        }
-        _ => {}
-    }
-
-    Ok(())
+    tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::ZoomOut)
 }
 
 /// Cmd-] : switch to next pane (cycles, stays in current level)
 fn cmd_pane_next() -> Result<()> {
     let session = session_name();
-    let level = tmux::get_level(&session)?;
-    let count = tmux::pane_count(&session)?;
-    if count <= 1 {
-        return Ok(());
-    }
-    let current = tmux::active_pane_index(&session)?;
-    let next = (current + 1) % count;
-
-    match level {
-        3 => {
-            // Full screen: unzoom, select next, re-zoom
-            tmux::toggle_zoom(&session)?;
-            tmux::select_pane(&session, next)?;
-            tmux::toggle_zoom(&session)?;
-        }
-        _ => {
-            // Working/bird's eye: just select next
-            tmux::select_pane(&session, next)?;
-        }
-    }
-    dismiss_on_focus(&session, next);
-    Ok(())
+    tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::PaneNext)
 }
 
 /// Cmd-[ : switch to previous pane (cycles, stays in current level)
 fn cmd_pane_prev() -> Result<()> {
     let session = session_name();
-    let level = tmux::get_level(&session)?;
-    let count = tmux::pane_count(&session)?;
-    if count <= 1 {
-        return Ok(());
-    }
-    let current = tmux::active_pane_index(&session)?;
-    let prev = (current + count - 1) % count;
-
-    match level {
-        3 => {
-            // Full screen: unzoom, select prev, re-zoom
-            tmux::toggle_zoom(&session)?;
-            tmux::select_pane(&session, prev)?;
-            tmux::toggle_zoom(&session)?;
-        }
-        _ => {
-            // Working/bird's eye: just select prev
-            tmux::select_pane(&session, prev)?;
-        }
-    }
-    dismiss_on_focus(&session, prev);
-    Ok(())
+    tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::PanePrev)
 }
 
 /// Enter bird's eye mode explicitly (now opens spaces picker)
@@ -705,7 +589,7 @@ fn switch_to_space(target: &str) -> Result<()> {
     tmux::switch_session(target)?;
 
     // Re-equalize layout for the target space (window size may have changed)
-    if let Err(e) = tmux::relayout(target, amux::sticky::LayoutEvent::Resize) {
+    if let Err(e) = tmux::apply_layout(target, amux::layout_engine::LayoutEvent::Resize) {
         eprintln!("amux: relayout after space switch failed: {}", e);
     }
 
@@ -952,7 +836,7 @@ fn cmd_send() -> Result<()> {
                 // re-tile so the sent pane fills the space immediately
                 // (don't wait for the async pane-exited hook).
                 tmux::kill_phantom_pane(&name, &sent_pane_id)?;
-                let _ = tmux::relayout(&name, amux::sticky::LayoutEvent::Resize);
+                let _ = tmux::apply_layout(&name, amux::layout_engine::LayoutEvent::Resize);
                 return Ok(());
             }
             _ => {}

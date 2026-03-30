@@ -3,6 +3,7 @@ pub mod bell;
 pub mod config;
 pub mod hooks;
 pub mod layout;
+pub mod layout_engine;
 pub mod notify;
 pub mod state;
 pub mod sticky;

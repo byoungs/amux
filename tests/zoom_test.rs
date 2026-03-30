@@ -253,7 +253,10 @@ fn zoom_level_consistent_after_space_operations() {
 // ============================================================
 
 #[test]
-fn relayout_at_l3_preserves_zoom_invariant() {
+fn resize_relayout_at_l3_preserves_fullscreen() {
+    // Bug: client-resized hook fires relayout(Resize) while at L3,
+    // which was dropping to L2 and unzooming. Resize at L3 should
+    // skip layout application entirely — tmux handles zoom resize natively.
     let ts = common::TestSession::new(3);
     amux::tmux::set_level(&ts.name, 2).expect("set L2");
 
@@ -262,18 +265,34 @@ fn relayout_at_l3_preserves_zoom_invariant() {
     assert_eq!(get_level(&ts.name), 3);
     assert!(is_zoomed(&ts.name));
 
-    // relayout would previously desync the zoom state
-    amux::tmux::relayout(&ts.name, amux::sticky::LayoutEvent::Resize).expect("relayout");
+    // Resize relayout should preserve L3
+    amux::tmux::apply_layout(&ts.name, amux::layout_engine::LayoutEvent::Resize).expect("relayout");
 
-    // Invariant: level and zoom flag must agree
+    assert_eq!(get_level(&ts.name), 3, "resize at L3 should stay L3");
+    assert!(is_zoomed(&ts.name), "resize at L3 should stay zoomed");
+
+    // Zoom-out should still work correctly after resize
+    cli::amux_cmd(&ts.name, &["zoom-out"]);
+    assert_eq!(get_level(&ts.name), 2, "zoom-out should reach L2");
+    assert!(!is_zoomed(&ts.name), "should be unzoomed at L2");
+}
+
+#[test]
+fn add_relayout_at_l3_drops_to_l2() {
+    // Add event at L3 MUST unzoom — can't show multiple panes while zoomed
+    let ts = common::TestSession::new(3);
+    amux::tmux::set_level(&ts.name, 2).expect("set L2");
+    cli::amux_cmd(&ts.name, &["zoom-in"]);
+    assert_eq!(get_level(&ts.name), 3);
+    assert!(is_zoomed(&ts.name));
+
+    amux::tmux::apply_layout(&ts.name, amux::layout_engine::LayoutEvent::AddPane(99))
+        .expect("relayout");
+
     let level = get_level(&ts.name);
     let zoomed = is_zoomed(&ts.name);
-    assert!(
-        (level == 3 && zoomed) || (level != 3 && !zoomed),
-        "zoom invariant broken: level={}, zoomed={}",
-        level,
-        zoomed
-    );
+    assert_eq!(level, 2, "add at L3 should drop to L2");
+    assert!(!zoomed, "add at L3 should unzoom");
 }
 
 // ============================================================
@@ -425,6 +444,6 @@ fn relayout_with_single_pane_at_l3_stays_at_l3() {
     let ts = common::TestSession::new(1);
     amux::tmux::set_level(&ts.name, 3).expect("set L3");
     // Can't actually zoom with 1 pane in tmux, but level should be preserved
-    amux::tmux::relayout(&ts.name, amux::sticky::LayoutEvent::Resize).expect("relayout");
+    amux::tmux::apply_layout(&ts.name, amux::layout_engine::LayoutEvent::Resize).expect("relayout");
     assert_eq!(get_level(&ts.name), 3, "single pane at L3 should stay L3");
 }

@@ -66,9 +66,12 @@ fn relayout_on_nonexistent_session_is_graceful_noop() {
     // A nonexistent session produces no panes, so relayout returns Ok (empty early return).
     // The error propagation fix is about select-layout failures being surfaced,
     // not about crashing on missing sessions.
-    let result = amux::tmux::relayout("nonexistent-session-xyz", amux::sticky::LayoutEvent::Resize);
+    let result = amux::tmux::apply_layout(
+        "nonexistent-session-xyz",
+        amux::layout_engine::LayoutEvent::Resize,
+    );
     assert!(
         result.is_ok(),
-        "relayout on nonexistent session should be a graceful no-op"
+        "apply_layout on nonexistent session should be a graceful no-op"
     );
 }

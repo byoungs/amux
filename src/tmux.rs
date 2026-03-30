@@ -75,7 +75,7 @@ pub fn create_pane(session: &str, cwd: Option<&str>) -> Result<usize> {
 
     // Apply clean grid layout — pass the new pane's ID so sticky matching knows it was added
     let pane_id: u32 = new_pane_id.trim_start_matches('%').parse().unwrap_or(0);
-    relayout(session, crate::sticky::LayoutEvent::Add(pane_id))?;
+    apply_layout(session, crate::layout_engine::LayoutEvent::AddPane(pane_id))?;
     let panes = list_panes(session)?;
     let active = panes
         .iter()
@@ -171,7 +171,10 @@ pub fn kill_pane(session: &str, pane_index: usize) -> Result<()> {
     if !output.status.success() {
         bail!("tmux kill-pane failed");
     }
-    relayout(session, crate::sticky::LayoutEvent::Remove(pane_id))?;
+    apply_layout(
+        session,
+        crate::layout_engine::LayoutEvent::RemovePane(pane_id),
+    )?;
     Ok(())
 }
 
@@ -371,41 +374,53 @@ pub fn window_size(session: &str) -> Result<(u16, u16)> {
     Ok((w, h))
 }
 
-/// Apply a layout change to the session. This is the single entry point for
-/// all layout operations — add, remove, resize, start, and space-switch.
-pub fn relayout(session: &str, event: crate::sticky::LayoutEvent) -> Result<()> {
-    let current = read_pane_positions(session)?;
-    if current.is_empty() {
-        return Ok(());
-    }
-
-    // Zoom reconciliation: select-layout auto-unzooms tmux, so if we're
-    // at L3 (fullscreen), drop to L2 first to keep AMUX_LEVEL in sync.
-    // Any relayout with multiple panes is incompatible with zoom.
-    if current.len() > 1 {
-        let level = get_level(session).unwrap_or(2);
-        if level == 3 || is_zoomed(session).unwrap_or(false) {
-            if is_zoomed(session).unwrap_or(false) {
-                let _ = toggle_zoom(session);
-            }
-            let _ = set_level(session, 2);
-        }
-    }
-
-    let (w, h) = window_size(session)?;
+/// Gather all tmux state needed by the layout engine into a single snapshot.
+pub fn gather_layout_state(session: &str) -> Result<crate::layout_engine::LayoutState> {
+    let panes = read_pane_positions(session)?;
+    let (window_w, window_h) = window_size(session)?;
     let border_top = if has_pane_border_status(session) {
         1u16
     } else {
         0
     };
-    let effective_h = h.saturating_sub(border_top);
+    let zoom_level = get_level(session).unwrap_or(2);
+    let zoomed = is_zoomed(session).unwrap_or(false);
+    let active_pane = active_pane_index(session).unwrap_or(0);
+    let pane_count = panes.len();
 
-    let new_layout = crate::sticky::compute_layout(&current, event, w, effective_h);
+    Ok(crate::layout_engine::LayoutState {
+        panes,
+        window_w,
+        window_h,
+        border_top,
+        zoom_level,
+        zoomed,
+        active_pane,
+        pane_count,
+    })
+}
 
-    // Build and apply the layout string
-    if let Some(ls) = crate::layout::build_layout_string(&new_layout, w, h, border_top) {
+/// Execute a LayoutAction by issuing tmux commands.
+///
+/// Execution order matters:
+/// 1. Unzoom first (if needed) so select-layout and select-pane work
+/// 2. Apply layout string
+/// 3. Select pane (while unzoomed, so it works)
+/// 4. Zoom in (if needed) — handles PaneNext/Prev at L3: unzoom→select→re-zoom
+/// 5. Set level
+/// 6. Dismiss alert
+/// 7. Error message
+/// 8. Open spaces popup (last, since it blocks)
+pub fn execute_layout(session: &str, action: &crate::layout_engine::LayoutAction) -> Result<()> {
+    // Step 1: Unzoom if needed
+    if action.zoom == Some(false) && is_zoomed(session).unwrap_or(false) {
+        toggle_zoom(session)?;
+    }
+
+    // Step 2: Apply layout
+    if let Some(ref ls) = action.layout_string {
         let output = Command::new("tmux")
-            .args(["select-layout", "-t", session, &ls])
+            .args(["select-layout", "-t", session, ls])
             .output()
             .context("failed to apply layout")?;
         if !output.status.success() {
@@ -415,11 +430,52 @@ pub fn relayout(session: &str, event: crate::sticky::LayoutEvent) -> Result<()> 
         }
     }
 
-    // The layout string embeds pane IDs, so tmux's select-layout places
-    // each pane at its correct position. Pane index order is determined by
-    // the layout tree's DFS walk order, which matches our slot order.
-    // No explicit swap-pane calls are needed.
+    // Step 3: Select pane
+    if let Some(pane) = action.select_pane {
+        select_pane(session, pane)?;
+    }
 
+    // Step 4: Zoom in if needed
+    if action.zoom == Some(true) {
+        if is_zoomed(session).unwrap_or(false) {
+            // PaneNext/Prev at L3: already zoomed, need unzoom→select→re-zoom
+            // Step 3 already selected the pane. Unzoom then re-zoom.
+            toggle_zoom(session)?; // unzoom
+            toggle_zoom(session)?; // re-zoom on the newly selected pane
+        } else {
+            toggle_zoom(session)?;
+        }
+    }
+
+    // Step 5: Set level
+    if let Some(level) = action.new_level {
+        set_level(session, level)?;
+    }
+
+    // Step 6: Dismiss alert
+    if let Some(pane) = action.dismiss_alert {
+        let _ = dismiss_alert(session, pane);
+    }
+
+    // Step 7: Error message
+    if let Some(ref msg) = action.error_message {
+        display_message(session, msg);
+    }
+
+    // Step 8: Open spaces popup (blocks, so last)
+    if action.open_spaces {
+        open_spaces_popup()?;
+    }
+
+    Ok(())
+}
+
+/// The unified layout pipeline: gather → compute → log → execute.
+pub fn apply_layout(session: &str, event: crate::layout_engine::LayoutEvent) -> Result<()> {
+    let state = gather_layout_state(session)?;
+    let action = crate::layout_engine::compute_layout(&state, &event);
+    crate::layout_engine::log::log_transition(session, &state, &event, &action);
+    execute_layout(session, &action)?;
     Ok(())
 }
 
@@ -715,7 +771,7 @@ pub fn enter_split(session: &str, pane_a: usize, pane_b: usize) -> Result<()> {
 
     // Retile the grid window
     let grid_window = format!("{}:0", session);
-    relayout(&grid_window, crate::sticky::LayoutEvent::Resize)?;
+    apply_layout(&grid_window, crate::layout_engine::LayoutEvent::Resize)?;
 
     Ok(())
 }
@@ -727,7 +783,7 @@ pub fn exit_split(session: &str) -> Result<()> {
     let win_count = window_count(session)?;
     if win_count <= 1 {
         // No split to exit
-        relayout(session, crate::sticky::LayoutEvent::Resize)?;
+        apply_layout(session, crate::layout_engine::LayoutEvent::Resize)?;
         return Ok(());
     }
 
@@ -769,7 +825,7 @@ pub fn exit_split(session: &str) -> Result<()> {
         .args(["select-window", "-t", &grid_target])
         .output();
 
-    relayout(session, crate::sticky::LayoutEvent::Resize)?;
+    apply_layout(session, crate::layout_engine::LayoutEvent::Resize)?;
     Ok(())
 }
 
@@ -888,7 +944,7 @@ pub fn restore_tiled(session: &str) -> Result<()> {
     if is_zoomed(session)? {
         toggle_zoom(session)?;
     }
-    relayout(session, crate::sticky::LayoutEvent::Resize)?;
+    apply_layout(session, crate::layout_engine::LayoutEvent::Resize)?;
     Ok(())
 }
 
@@ -973,8 +1029,8 @@ pub fn send_pane_to_session(from_session: &str, to_session: &str) -> Result<()> 
     }
 
     // Retile both sessions
-    relayout(from_session, crate::sticky::LayoutEvent::Resize)?;
-    relayout(to_session, crate::sticky::LayoutEvent::Resize)?;
+    apply_layout(from_session, crate::layout_engine::LayoutEvent::Resize)?;
+    apply_layout(to_session, crate::layout_engine::LayoutEvent::Resize)?;
 
     Ok(())
 }

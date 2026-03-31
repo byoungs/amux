@@ -31,7 +31,7 @@ final class PTY {
                 setenv(key, value, 1)
             }
             let cArgs = args.map { strdup($0) } + [nil]
-            executable.withCString { path in execv(path, cArgs) }
+            _ = executable.withCString { path in execv(path, cArgs) }
             _exit(127)
         }
 
@@ -72,7 +72,7 @@ final class PTY {
     /// Resize the PTY (sends SIGWINCH to child).
     func resize(rows: UInt16, cols: UInt16) {
         var ws = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
-        ioctl(masterFd, TIOCSWINSZ, &ws)
+        _ = ioctl(masterFd, TIOCSWINSZ, &ws)
     }
 
     deinit {

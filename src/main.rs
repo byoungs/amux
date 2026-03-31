@@ -51,17 +51,15 @@ enum Commands {
     SplitExit,
     /// Refresh config and titles on existing session (preserves all panes)
     Refresh,
-    /// Context-aware zoom to pane N (handles level transitions)
+    /// Context-aware zoom to pane N (toggles zoom based on current state)
     Zoom {
         /// Pane index to zoom to
         pane: usize,
     },
-    /// Zoom in one level (Ctrl-+)
+    /// Zoom in (working → full screen, Ctrl-+)
     ZoomIn,
-    /// Zoom out one level (Ctrl--)
+    /// Zoom out (full screen → working, Ctrl--)
     ZoomOut,
-    /// Enter bird's eye mode explicitly
-    BirdEye,
     /// Show space picker popup (Ctrl-P)
     Spaces,
     /// Send current pane to another space (Ctrl-S)
@@ -148,7 +146,6 @@ fn main() -> Result<()> {
         Some(Commands::Zoom { pane }) => cmd_zoom(pane),
         Some(Commands::ZoomIn) => cmd_zoom_in(),
         Some(Commands::ZoomOut) => cmd_zoom_out(),
-        Some(Commands::BirdEye) => cmd_birdeye(),
         Some(Commands::Spaces) => cmd_spaces(),
         Some(Commands::Send) => cmd_send(),
         Some(Commands::AlertPane { pane }) => cmd_alert_pane(pane),
@@ -213,9 +210,6 @@ fn cmd_start(sessions: &[String]) -> Result<()> {
     // Save state
     let state = build_state(&session)?;
     let _ = state.save(&AmuxState::default_path());
-
-    // Start in working mode (L2)
-    tmux::set_level(&session, 2)?;
 
     // Attach to the session
     tmux::attach(&session)?;
@@ -295,12 +289,6 @@ fn cmd_refresh() -> Result<()> {
 
     // Re-apply tiled layout
     tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::Resize)?;
-
-    // Migrate L1 (legacy bird's eye) to L2 (working)
-    let level = tmux::get_level(&session).unwrap_or(2);
-    if level == 1 {
-        tmux::set_level(&session, 2)?;
-    }
 
     eprintln!("Refreshed {} panes in session '{}'", panes.len(), session);
     Ok(())
@@ -399,34 +387,28 @@ fn cmd_zoom(target_pane: usize) -> Result<()> {
     )
 }
 
-/// Ctrl-+ : zoom in one level
+/// Ctrl-+ : zoom in (working → full screen)
 fn cmd_zoom_in() -> Result<()> {
     let session = session_name();
     tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::ZoomIn)
 }
 
-/// Ctrl-- : zoom out one level
+/// Ctrl-- : zoom out (full screen → working, or open spaces)
 fn cmd_zoom_out() -> Result<()> {
     let session = session_name();
     tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::ZoomOut)
 }
 
-/// Cmd-] : switch to next pane (cycles, stays in current level)
+/// Cmd-] : switch to next pane (cycles, stays in current zoom state)
 fn cmd_pane_next() -> Result<()> {
     let session = session_name();
     tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::PaneNext)
 }
 
-/// Cmd-[ : switch to previous pane (cycles, stays in current level)
+/// Cmd-[ : switch to previous pane (cycles, stays in current zoom state)
 fn cmd_pane_prev() -> Result<()> {
     let session = session_name();
     tmux::apply_layout(&session, amux::layout_engine::LayoutEvent::PanePrev)
-}
-
-/// Enter bird's eye mode explicitly (now opens spaces picker)
-fn cmd_birdeye() -> Result<()> {
-    tmux::open_spaces_popup()?;
-    Ok(())
 }
 
 /// Get the current session name directly from tmux (reliable inside popups).
@@ -581,37 +563,30 @@ fn restore_term(orig: &libc::termios) {
 /// Switch to a space with smart landing based on alert state.
 fn switch_to_space(target: &str) -> Result<()> {
     let alert_states = tmux::alert_states(target).unwrap_or_default();
-    let prev_level = tmux::get_level(target).unwrap_or(2);
     let prev_pane = tmux::active_pane_index(target).unwrap_or(0);
 
-    let landing = amux::alert::smart_landing(&alert_states, prev_level, prev_pane);
+    let landing = amux::landing::smart_landing(&alert_states, prev_pane);
 
     tmux::switch_session(target)?;
 
-    // Re-equalize layout for the target space (window size may have changed)
+    // Re-equalize layout for the target space (window size may have changed).
+    // Skipped automatically if the session is zoomed.
     if let Err(e) = tmux::apply_layout(target, amux::layout_engine::LayoutEvent::Resize) {
         eprintln!("amux: relayout after space switch failed: {}", e);
     }
 
     match landing {
-        amux::alert::LandingTarget::FocusPane { index, level } => {
+        amux::landing::LandingTarget::FocusPane { index } => {
+            // Unzoom to show the grid, then focus the alerted pane
+            if tmux::is_zoomed(target).unwrap_or(false) {
+                tmux::toggle_zoom(target)?;
+            }
             tmux::select_pane(target, index)?;
             dismiss_on_focus(target, index);
-            // Re-zoom if landing at L3 (relayout dropped us to L2)
-            if level == 3 {
-                tmux::toggle_zoom(target)?;
-            }
-            tmux::set_level(target, level)?;
         }
-        amux::alert::LandingTarget::Resume { level, pane } => {
-            // Cap L1 to L2 (bird's eye removed)
-            let level = if level == 1 { 2 } else { level };
+        amux::landing::LandingTarget::Resume { pane } => {
+            // tmux preserves zoom state across session switches — nothing to do
             tmux::select_pane(target, pane)?;
-            // Re-zoom if resuming at L3 (relayout dropped us to L2)
-            if level == 3 {
-                tmux::toggle_zoom(target)?;
-            }
-            tmux::set_level(target, level)?;
         }
     }
 
@@ -719,7 +694,6 @@ fn cmd_spaces() -> Result<()> {
 
                 tmux::create_session(&name)?;
                 config::apply_config(&name)?;
-                tmux::set_level(&name, 2)?;
                 tmux::mark_as_managed(&name)?;
 
                 let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
@@ -819,7 +793,6 @@ fn cmd_send() -> Result<()> {
                 // Create the new space
                 tmux::create_session(&name)?;
                 config::apply_config(&name)?;
-                tmux::set_level(&name, 2)?;
                 tmux::mark_as_managed(&name)?;
 
                 let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
@@ -847,18 +820,13 @@ fn cmd_send() -> Result<()> {
 /// Core alert logic: mark a pane, update count, optionally notify.
 /// Used by both alert-pane (Claude Code hook) and bell-watch (pipe-pane).
 fn trigger_alert(session: &str, pane_index: usize) -> Result<()> {
-    // Only skip the active pane if the terminal is frontmost AND the user
-    // is zoomed in (L2/L3). If the terminal isn't frontmost, the user isn't
-    // looking at ANY pane — alert everything. At L1 (bird's eye), the
-    // "active" pane is just the cursor position, not real focus.
-    let terminal_focused = amux::notify::is_terminal_frontmost();
-    if terminal_focused {
-        let level = tmux::get_level(session).unwrap_or(2);
-        if level > 1 {
-            let active = tmux::active_pane_index(session)?;
-            if pane_index == active {
-                return Ok(());
-            }
+    // Skip the active pane if the terminal is frontmost — the user is
+    // already looking at it. If the terminal isn't frontmost, the user
+    // isn't looking at ANY pane — alert everything.
+    if amux::notify::is_terminal_frontmost() {
+        let active = tmux::active_pane_index(session)?;
+        if pane_index == active {
+            return Ok(());
         }
     }
     if tmux::get_alert(session, pane_index)? {

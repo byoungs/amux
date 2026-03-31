@@ -3,6 +3,10 @@
 //! All pane, layout, and zoom state transitions go through `compute_layout`.
 //! It's a pure function: takes a snapshot of current state + an event,
 //! returns the full set of actions the shell should execute.
+//!
+//! Zoom state is derived from tmux's native `window_zoomed_flag` —
+//! there is no separate level variable. Two states: zoomed (full screen)
+//! and not-zoomed (working/grid).
 
 pub mod log;
 
@@ -16,7 +20,6 @@ pub struct LayoutState {
     pub window_w: u16,
     pub window_h: u16,
     pub border_top: u16,
-    pub zoom_level: u8,
     pub zoomed: bool,
     pub active_pane: usize,
     pub pane_count: usize,
@@ -40,7 +43,6 @@ pub enum LayoutEvent {
 pub struct LayoutAction {
     pub layout_string: Option<String>,
     pub zoom: Option<bool>,
-    pub new_level: Option<u8>,
     pub select_pane: Option<usize>,
     pub open_spaces: bool,
     pub dismiss_alert: Option<usize>,
@@ -69,9 +71,8 @@ fn build_grid_layout(state: &LayoutState, sticky_event: sticky::LayoutEvent) -> 
 
 fn compute_add(state: &LayoutState, new_id: u32) -> LayoutAction {
     let mut action = LayoutAction::default();
-    if state.panes.len() > 1 && (state.zoom_level == 3 || state.zoomed) {
+    if state.panes.len() > 1 && state.zoomed {
         action.zoom = Some(false);
-        action.new_level = Some(2);
     }
     action.layout_string = build_grid_layout(state, sticky::LayoutEvent::Add(new_id));
     action
@@ -79,9 +80,8 @@ fn compute_add(state: &LayoutState, new_id: u32) -> LayoutAction {
 
 fn compute_remove(state: &LayoutState, removed_id: u32) -> LayoutAction {
     let mut action = LayoutAction::default();
-    if state.panes.len() > 1 && (state.zoom_level == 3 || state.zoomed) {
+    if state.panes.len() > 1 && state.zoomed {
         action.zoom = Some(false);
-        action.new_level = Some(2);
     }
     action.layout_string = build_grid_layout(state, sticky::LayoutEvent::Remove(removed_id));
     action
@@ -89,7 +89,7 @@ fn compute_remove(state: &LayoutState, removed_id: u32) -> LayoutAction {
 
 fn compute_resize(state: &LayoutState) -> LayoutAction {
     let mut action = LayoutAction::default();
-    if state.zoom_level == 3 || state.zoomed {
+    if state.zoomed {
         return action;
     }
     if state.panes.is_empty() {
@@ -101,28 +101,19 @@ fn compute_resize(state: &LayoutState) -> LayoutAction {
 
 fn compute_zoom_in(state: &LayoutState) -> LayoutAction {
     let mut action = LayoutAction::default();
-    match state.zoom_level {
-        1 | 2 => {
-            action.zoom = Some(true);
-            action.new_level = Some(3);
-            action.dismiss_alert = Some(state.active_pane);
-        }
-        _ => {}
+    if !state.zoomed {
+        action.zoom = Some(true);
+        action.dismiss_alert = Some(state.active_pane);
     }
     action
 }
 
 fn compute_zoom_out(state: &LayoutState) -> LayoutAction {
     let mut action = LayoutAction::default();
-    match state.zoom_level {
-        3 => {
-            action.zoom = Some(false);
-            action.new_level = Some(2);
-        }
-        2 => {
-            action.open_spaces = true;
-        }
-        _ => {}
+    if state.zoomed {
+        action.zoom = Some(false);
+    } else {
+        action.open_spaces = true;
     }
     action
 }
@@ -138,28 +129,20 @@ fn compute_zoom_to(state: &LayoutState, target_pane: usize) -> LayoutAction {
         return action;
     }
     let same_pane = state.active_pane == target_pane;
-    match (state.zoom_level, same_pane) {
-        (1, _) => {
-            action.select_pane = Some(target_pane);
-            action.dismiss_alert = Some(target_pane);
-            action.new_level = Some(2);
-        }
-        (2, true) => {
+    match (state.zoomed, same_pane) {
+        (false, true) => {
             action.zoom = Some(true);
-            action.new_level = Some(3);
         }
-        (2, false) => {
+        (false, false) => {
             action.select_pane = Some(target_pane);
             action.dismiss_alert = Some(target_pane);
         }
-        (3, true) => {}
-        (3, false) => {
+        (true, true) => {}
+        (true, false) => {
             action.zoom = Some(false);
             action.select_pane = Some(target_pane);
             action.dismiss_alert = Some(target_pane);
-            action.new_level = Some(2);
         }
-        _ => {}
     }
     action
 }
@@ -170,15 +153,10 @@ fn compute_pane_next(state: &LayoutState) -> LayoutAction {
         return action;
     }
     let next = (state.active_pane + 1) % state.pane_count;
-    match state.zoom_level {
-        3 => {
-            action.zoom = Some(true);
-            action.select_pane = Some(next);
-        }
-        _ => {
-            action.select_pane = Some(next);
-        }
+    if state.zoomed {
+        action.zoom = Some(true);
     }
+    action.select_pane = Some(next);
     action.dismiss_alert = Some(next);
     action
 }
@@ -189,15 +167,10 @@ fn compute_pane_prev(state: &LayoutState) -> LayoutAction {
         return action;
     }
     let prev = (state.active_pane + state.pane_count - 1) % state.pane_count;
-    match state.zoom_level {
-        3 => {
-            action.zoom = Some(true);
-            action.select_pane = Some(prev);
-        }
-        _ => {
-            action.select_pane = Some(prev);
-        }
+    if state.zoomed {
+        action.zoom = Some(true);
     }
+    action.select_pane = Some(prev);
     action.dismiss_alert = Some(prev);
     action
 }
@@ -206,7 +179,7 @@ fn compute_pane_prev(state: &LayoutState) -> LayoutAction {
 mod tests {
     use super::*;
 
-    fn make_state(pane_count: usize, zoom_level: u8, zoomed: bool) -> LayoutState {
+    fn make_state(pane_count: usize, zoomed: bool) -> LayoutState {
         let panes = crate::layout::grid_positions(pane_count, 280, 80)
             .into_iter()
             .enumerate()
@@ -223,7 +196,6 @@ mod tests {
             window_w: 280,
             window_h: 80,
             border_top: 0,
-            zoom_level,
             zoomed,
             active_pane: 0,
             pane_count,
@@ -232,20 +204,18 @@ mod tests {
 
     #[test]
     fn resize_produces_layout_string() {
-        let state = make_state(4, 2, false);
+        let state = make_state(4, false);
         let action = compute_layout(&state, &LayoutEvent::Resize);
         assert!(action.layout_string.is_some());
         assert!(action.zoom.is_none());
-        assert!(action.new_level.is_none());
     }
 
     #[test]
     fn resize_while_zoomed_skips_layout() {
-        let state = make_state(4, 3, true);
+        let state = make_state(4, true);
         let action = compute_layout(&state, &LayoutEvent::Resize);
         assert!(action.layout_string.is_none());
         assert!(action.zoom.is_none());
-        assert!(action.new_level.is_none());
     }
 
     #[test]
@@ -255,7 +225,6 @@ mod tests {
             window_w: 280,
             window_h: 80,
             border_top: 0,
-            zoom_level: 2,
             zoomed: false,
             active_pane: 0,
             pane_count: 0,
@@ -265,103 +234,94 @@ mod tests {
     }
 
     #[test]
-    fn add_produces_layout_and_unzooms_at_l3() {
-        let state = make_state(4, 3, true);
+    fn add_produces_layout_and_unzooms_when_zoomed() {
+        let state = make_state(4, true);
         let action = compute_layout(&state, &LayoutEvent::AddPane(99));
         assert!(action.layout_string.is_some());
         assert_eq!(action.zoom, Some(false));
-        assert_eq!(action.new_level, Some(2));
     }
 
     #[test]
-    fn add_at_l2_does_not_change_zoom() {
-        let state = make_state(4, 2, false);
+    fn add_at_working_does_not_change_zoom() {
+        let state = make_state(4, false);
         let action = compute_layout(&state, &LayoutEvent::AddPane(99));
         assert!(action.layout_string.is_some());
         assert!(action.zoom.is_none());
-        assert!(action.new_level.is_none());
     }
 
     #[test]
-    fn remove_produces_layout_and_unzooms_at_l3() {
-        let state = make_state(4, 3, true);
+    fn remove_produces_layout_and_unzooms_when_zoomed() {
+        let state = make_state(4, true);
         let action = compute_layout(&state, &LayoutEvent::RemovePane(13));
         assert!(action.layout_string.is_some());
         assert_eq!(action.zoom, Some(false));
-        assert_eq!(action.new_level, Some(2));
     }
 
     #[test]
-    fn zoom_in_from_l2() {
-        let state = make_state(4, 2, false);
+    fn zoom_in_from_working() {
+        let state = make_state(4, false);
         let action = compute_layout(&state, &LayoutEvent::ZoomIn);
         assert_eq!(action.zoom, Some(true));
-        assert_eq!(action.new_level, Some(3));
         assert_eq!(action.dismiss_alert, Some(0));
     }
 
     #[test]
-    fn zoom_in_at_l3_is_noop() {
-        let state = make_state(4, 3, true);
+    fn zoom_in_when_already_zoomed_is_noop() {
+        let state = make_state(4, true);
         let action = compute_layout(&state, &LayoutEvent::ZoomIn);
         assert!(action.zoom.is_none());
-        assert!(action.new_level.is_none());
     }
 
     #[test]
-    fn zoom_out_from_l3() {
-        let state = make_state(4, 3, true);
+    fn zoom_out_from_zoomed() {
+        let state = make_state(4, true);
         let action = compute_layout(&state, &LayoutEvent::ZoomOut);
         assert_eq!(action.zoom, Some(false));
-        assert_eq!(action.new_level, Some(2));
         assert!(!action.open_spaces);
     }
 
     #[test]
-    fn zoom_out_from_l2_opens_spaces() {
-        let state = make_state(4, 2, false);
+    fn zoom_out_from_working_opens_spaces() {
+        let state = make_state(4, false);
         let action = compute_layout(&state, &LayoutEvent::ZoomOut);
         assert!(action.open_spaces);
         assert!(action.zoom.is_none());
     }
 
     #[test]
-    fn zoom_to_same_pane_at_l2_zooms_in() {
-        let state = make_state(4, 2, false);
+    fn zoom_to_same_pane_at_working_zooms_in() {
+        let state = make_state(4, false);
         let action = compute_layout(&state, &LayoutEvent::ZoomTo(0));
         assert_eq!(action.zoom, Some(true));
-        assert_eq!(action.new_level, Some(3));
     }
 
     #[test]
-    fn zoom_to_different_pane_at_l2_selects() {
-        let state = make_state(4, 2, false);
+    fn zoom_to_different_pane_at_working_selects() {
+        let state = make_state(4, false);
         let action = compute_layout(&state, &LayoutEvent::ZoomTo(2));
         assert_eq!(action.select_pane, Some(2));
         assert!(action.zoom.is_none());
-        assert!(action.new_level.is_none());
     }
 
     #[test]
-    fn zoom_to_different_pane_at_l3_unzooms() {
-        let mut state = make_state(4, 3, true);
+    fn zoom_to_different_pane_when_zoomed_unzooms() {
+        let mut state = make_state(4, true);
         state.active_pane = 0;
         let action = compute_layout(&state, &LayoutEvent::ZoomTo(2));
         assert_eq!(action.zoom, Some(false));
         assert_eq!(action.select_pane, Some(2));
-        assert_eq!(action.new_level, Some(2));
     }
 
     #[test]
     fn zoom_to_nonexistent_pane_returns_error() {
-        let state = make_state(4, 2, false);
+        let state = make_state(4, false);
         let action = compute_layout(&state, &LayoutEvent::ZoomTo(10));
         assert!(action.error_message.is_some());
     }
 
     #[test]
-    fn pane_next_at_l2() {
-        let mut state = make_state(3, 2, false);
+    fn pane_next_at_working() {
+        let mut state = make_state(3, false);
         state.active_pane = 0;
         let action = compute_layout(&state, &LayoutEvent::PaneNext);
         assert_eq!(action.select_pane, Some(1));
@@ -370,15 +330,15 @@ mod tests {
 
     #[test]
     fn pane_next_wraps() {
-        let mut state = make_state(3, 2, false);
+        let mut state = make_state(3, false);
         state.active_pane = 2;
         let action = compute_layout(&state, &LayoutEvent::PaneNext);
         assert_eq!(action.select_pane, Some(0));
     }
 
     #[test]
-    fn pane_next_at_l3_stays_zoomed() {
-        let mut state = make_state(3, 3, true);
+    fn pane_next_when_zoomed_stays_zoomed() {
+        let mut state = make_state(3, true);
         state.active_pane = 0;
         let action = compute_layout(&state, &LayoutEvent::PaneNext);
         assert_eq!(action.select_pane, Some(1));
@@ -386,8 +346,8 @@ mod tests {
     }
 
     #[test]
-    fn pane_prev_at_l2() {
-        let mut state = make_state(3, 2, false);
+    fn pane_prev_at_working() {
+        let mut state = make_state(3, false);
         state.active_pane = 1;
         let action = compute_layout(&state, &LayoutEvent::PanePrev);
         assert_eq!(action.select_pane, Some(0));
@@ -395,7 +355,7 @@ mod tests {
 
     #[test]
     fn pane_prev_wraps() {
-        let mut state = make_state(3, 2, false);
+        let mut state = make_state(3, false);
         state.active_pane = 0;
         let action = compute_layout(&state, &LayoutEvent::PanePrev);
         assert_eq!(action.select_pane, Some(2));
@@ -403,7 +363,7 @@ mod tests {
 
     #[test]
     fn single_pane_next_is_noop() {
-        let state = make_state(1, 2, false);
+        let state = make_state(1, false);
         let action = compute_layout(&state, &LayoutEvent::PaneNext);
         assert!(action.select_pane.is_none());
     }

@@ -2,6 +2,7 @@ pub mod alert;
 pub mod bell;
 pub mod config;
 pub mod hooks;
+pub mod landing;
 pub mod layout;
 pub mod layout_engine;
 pub mod notify;

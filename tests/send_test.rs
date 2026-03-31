@@ -11,7 +11,6 @@ fn send_to_new_space_has_one_pane() {
     let target = format!("{}-target", ts.name);
     amux::tmux::create_session(&target).expect("create target");
     amux::config::apply_config(&target).expect("apply config");
-    amux::tmux::set_level(&target, 2).expect("set level");
     amux::tmux::mark_as_managed(&target).expect("mark managed");
 
     // Capture the pane ID before sending

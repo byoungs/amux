@@ -53,12 +53,11 @@ fn format_entry(
     };
     format!(
         "[{}] session={} event={:?}\n  \
-         state: level={} zoomed={} panes={} active={} window={}x{} border={}\n  \
-         action: layout={} zoom={} level={:?} select={:?} spaces={}",
+         state: zoomed={} panes={} active={} window={}x{} border={}\n  \
+         action: layout={} zoom={} select={:?} spaces={}",
         now,
         session,
         event,
-        state.zoom_level,
         state.zoomed,
         state.panes.len(),
         state.active_pane,
@@ -67,7 +66,6 @@ fn format_entry(
         state.border_top,
         layout_action,
         zoom_action,
-        action.new_level,
         action.select_pane,
         action.open_spaces,
     )

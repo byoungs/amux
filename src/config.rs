@@ -156,9 +156,7 @@ fn apply_status_bar(session: &str) -> Result<()> {
         "status-left",
         "#[fg=colour43,bold] amux #[fg=colour238]│ ",
     )?;
-    // Status right shows current zoom level
-    // AMUX_LEVEL env var: 1=bird's eye, 2=working, 3=full screen
-    // Use nested conditionals to display the right mode
+    // Status right: shows WORKING or FULL SCREEN based on window_zoomed_flag
     tmux_set(session, "status-right", STATUS_RIGHT_FORMAT)?;
     tmux_set(session, "status-left-length", "20")?;
     tmux_set(session, "status-right-length", "100")?;
@@ -182,12 +180,12 @@ fn apply_key_bindings(_session: &str) -> Result<()> {
         eprintln!("Run: cargo install --path .");
     }
 
-    // === Zoom controls (call amux CLI for level-aware logic) ===
+    // === Zoom controls ===
 
-    // Ctrl-+ : zoom in one level
+    // Ctrl-+ : zoom in (working → full screen)
     tmux_bind_root("C-=", &format!(r#"run-shell "{} zoom-in""#, bin))?;
 
-    // Ctrl-- : zoom out one level (also handles split exit)
+    // Ctrl-- : zoom out (full screen → working, or open spaces picker; also handles split exit)
     tmux_bind_root(
         "C--",
         &format!(
@@ -203,55 +201,6 @@ fn apply_key_bindings(_session: &str) -> Result<()> {
             &format!(r#"run-shell "{} zoom {}""#, bin, i - 1),
         )?;
     }
-
-    // === Bird's Eye key table (Level 1) ===
-    // Arrow keys navigate between panes and stay in bird's eye
-    tmux_bind_table(
-        "amux-birdeye",
-        "Left",
-        r#"run-shell "tmux select-pane -L && tmux switch-client -T amux-birdeye""#,
-    )?;
-    tmux_bind_table(
-        "amux-birdeye",
-        "Right",
-        r#"run-shell "tmux select-pane -R && tmux switch-client -T amux-birdeye""#,
-    )?;
-    tmux_bind_table(
-        "amux-birdeye",
-        "Up",
-        r#"run-shell "tmux select-pane -U && tmux switch-client -T amux-birdeye""#,
-    )?;
-    tmux_bind_table(
-        "amux-birdeye",
-        "Down",
-        r#"run-shell "tmux select-pane -D && tmux switch-client -T amux-birdeye""#,
-    )?;
-
-    // Ctrl-+ in bird's eye → zoom in (go to L2)
-    tmux_bind_table(
-        "amux-birdeye",
-        "C-=",
-        &format!(r#"run-shell "{} zoom-in""#, bin),
-    )?;
-
-    // Ctrl-1..9 in bird's eye → zoom to pane N (go to L2)
-    for i in 1..=9 {
-        tmux_bind_table(
-            "amux-birdeye",
-            &format!("C-{}", i),
-            &format!(r#"run-shell "{} zoom {}""#, bin, i - 1),
-        )?;
-    }
-
-    // Ctrl-n in bird's eye → create new pane
-    tmux_bind_table(
-        "amux-birdeye",
-        "C-n",
-        &format!(r#"run-shell "cd '#{{pane_current_path}}' && {} new""#, bin),
-    )?;
-
-    // Any other key in bird's eye exits to L2 (the key is consumed)
-    // tmux auto-exits the key table on unbound keys
 
     // === Pane cycling (Cmd-[ / Cmd-]) ===
     // With extended-keys, tmux can distinguish C-[ from bare Escape.

@@ -148,7 +148,6 @@ fn key_bindings_are_installed() {
     assert!(keys.contains("C--"), "Ctrl-- (zoom out) missing");
     assert!(keys.contains("C-n"), "Ctrl-n missing");
     assert!(keys.contains("amux zoom-in"), "zoom-in command missing");
-    assert!(keys.contains("amux-birdeye"), "birdeye table missing");
 }
 
 // === STRESS TESTS ===
@@ -285,48 +284,6 @@ fn split_requires_at_least_three_panes() {
     amux::tmux::create_pane(&ts.name, None).expect("pane");
     let result = amux::tmux::enter_split(&ts.name, 0, 1);
     assert!(result.is_err(), "split should require at least 3 panes");
-}
-
-// === THREE-LEVEL ZOOM TESTS ===
-
-#[test]
-fn zoom_level_starts_at_default() {
-    let ts = common::TestSession::new(0);
-    // Default level is 2 when not explicitly set
-    let level = amux::tmux::get_level(&ts.name).expect("get");
-    assert_eq!(level, 2);
-}
-
-#[test]
-fn zoom_level_transitions() {
-    let ts = common::TestSession::new(0);
-    amux::tmux::create_pane(&ts.name, None).expect("pane");
-
-    // Set to L1
-    amux::tmux::set_level(&ts.name, 1).expect("set");
-    assert_eq!(amux::tmux::get_level(&ts.name).expect("get"), 1);
-
-    // L1 → L2 via smart_resize
-    amux::tmux::smart_resize(&ts.name, 0, amux::MIN_PANE_COLS, amux::MIN_PANE_ROWS)
-        .expect("resize");
-    amux::tmux::set_level(&ts.name, 2).expect("set");
-    assert_eq!(amux::tmux::get_level(&ts.name).expect("get"), 2);
-
-    // L2 → L3 via zoom
-    amux::tmux::toggle_zoom(&ts.name).expect("zoom");
-    amux::tmux::set_level(&ts.name, 3).expect("set");
-    assert_eq!(amux::tmux::get_level(&ts.name).expect("get"), 3);
-    assert!(amux::tmux::is_zoomed(&ts.name).expect("check"));
-
-    // L3 → L2 via unzoom
-    amux::tmux::toggle_zoom(&ts.name).expect("unzoom");
-    amux::tmux::set_level(&ts.name, 2).expect("set");
-    assert!(!amux::tmux::is_zoomed(&ts.name).expect("check"));
-
-    // L2 → L1 via restore_tiled
-    amux::tmux::restore_tiled(&ts.name).expect("restore");
-    amux::tmux::set_level(&ts.name, 1).expect("set");
-    assert_eq!(amux::tmux::get_level(&ts.name).expect("get"), 1);
 }
 
 #[test]

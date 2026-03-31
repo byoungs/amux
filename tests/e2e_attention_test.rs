@@ -81,24 +81,6 @@ fn cli_alert_pane_skips_active_pane_when_terminal_frontmost() {
 }
 
 #[test]
-fn cli_alert_pane_allows_active_pane_at_birdeye() {
-    let ts = common::TestSession::new(2);
-
-    // Set level 1 (bird's eye) — "active" pane is just cursor position
-    amux::tmux::set_level(&ts.name, 1).expect("set level");
-
-    // Alert pane 0 even though it's active — at L1 this should work
-    let status = cli::amux_cmd(&ts.name, &["alert-pane", "0"]).status;
-    assert!(status.success());
-
-    assert!(
-        get_alert(&ts.name, 0),
-        "at bird's eye, active pane SHOULD be alerted"
-    );
-    assert_eq!(get_alert_count(&ts.name), 1);
-}
-
-#[test]
 fn cli_alert_pane_skips_already_alerted() {
     let ts = common::TestSession::new(2);
 
@@ -209,8 +191,7 @@ fn zoom_to_alerted_pane_clears_alert() {
 fn zoom_in_clears_alert_on_current_pane() {
     let ts = common::TestSession::new(2);
 
-    // Set to level 2 (working), alert pane 0
-    amux::tmux::set_level(&ts.name, 2).expect("set level");
+    // Alert pane 0 (working/unzoomed state)
     amux::tmux::set_alert(&ts.name, 0, true).expect("set");
     amux::tmux::set_alert_count(&ts.name, 1).expect("count");
 

@@ -133,16 +133,17 @@ fn alert_counts_per_session() {
 
 #[test]
 fn smart_landing_integration() {
-    use amux::alert::{smart_landing, LandingTarget};
+    use amux::landing::{smart_landing, LandingTarget};
 
-    let result = smart_landing(&[false, false, true], 2, 0);
-    assert_eq!(result, LandingTarget::FocusPane { index: 2, level: 2 });
+    let result = smart_landing(&[false, false, true], 0);
+    assert_eq!(result, LandingTarget::FocusPane { index: 2 });
 
-    let result = smart_landing(&[false, false], 3, 1);
-    assert_eq!(result, LandingTarget::Resume { level: 2, pane: 1 });
+    let result = smart_landing(&[false, false], 1);
+    assert_eq!(result, LandingTarget::Resume { pane: 1 });
 
-    let result = smart_landing(&[true, true, false], 1, 0);
-    assert_eq!(result, LandingTarget::Resume { level: 2, pane: 0 });
+    // Multiple alerts: focuses first alerted pane
+    let result = smart_landing(&[true, true, false], 0);
+    assert_eq!(result, LandingTarget::FocusPane { index: 0 });
 }
 
 #[test]

@@ -24,7 +24,7 @@ back out. You never lose your place. You never miss a prompt.
 
 ### Download (macOS)
 
-1. Download `amux.dmg` from the [latest release](https://github.com/byoungs/amux/releases/latest)
+1. [**Download amux.dmg**](https://github.com/byoungs/amux/releases/latest/download/amux.dmg)
 2. Open the DMG and drag **amux** to Applications
 3. Launch amux from Applications (or Spotlight)
 

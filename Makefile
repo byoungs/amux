@@ -179,7 +179,9 @@ publish:
 	fi; \
 	git tag -a "v$(VERSION)" -m "v$(VERSION)"; \
 	git push origin "v$(VERSION)"; \
-	gh release create "v$(VERSION)" $$ASSETS --title "amux v$(VERSION)" --generate-notes
+	gh release create "v$(VERSION)" $$ASSETS --title "amux v$(VERSION)" --generate-notes; \
+	gh release delete-asset "v$(VERSION)" "amux-$(VERSION).tar.gz" --yes 2>/dev/null; \
+	gh release delete-asset "v$(VERSION)" "amux-$(VERSION).zip" --yes 2>/dev/null
 	@echo "✓ Published amux v$(VERSION) to GitHub"
 
 # ── Demo ──────────────────────────────────────────────

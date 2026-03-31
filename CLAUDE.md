@@ -23,6 +23,11 @@ Flow: worktree
 - Use /stage to wrap up (prepares clean commit for wtr landing)
 - Brian reviews and lands via wtr (ff-only merge → validate → push)
 
+## Linear
+- Workspace: penfield-six
+- Team: Penfield Six (key: PEN)
+- Project: amux
+
 ## What Goes Live Instantly vs Needs Refresh
 
 | Change type | Live on build? | Needs `make refresh`? |

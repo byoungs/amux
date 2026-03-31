@@ -2,3 +2,6 @@
 /target-wt
 /build
 .worktrees/
+.claude/
+.DS_Store
+demo/*.gif

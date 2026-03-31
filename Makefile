@@ -9,6 +9,7 @@
 # make refresh  Re-apply tmux config (after changing format strings/keybindings)
 # make release  Build and validate a release DMG
 # make publish  Tag and publish to GitHub (requires gh, clean tree)
+# make demo     Record the demo GIF (requires vhs, Pillow)
 # make clean    Remove build artifacts
 
 # Detect main worktree (always first in porcelain output)
@@ -21,7 +22,7 @@ BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 SHORT_SHA := $(shell git rev-parse --short HEAD)
 VERSION := $(shell awk -F'"' '/^\[package\]/{p=1} p && /^version/{print $$2; exit}' Cargo.toml)
 
-.PHONY: dev test validate fmt lint refresh clean setup setup-rust setup-tmux setup-hook app app-dev app-test app-clean tmux-bundle dmg release publish
+.PHONY: dev test validate fmt lint refresh clean setup setup-rust setup-tmux setup-hook app app-dev app-test app-clean tmux-bundle dmg release publish demo
 
 # ── Build ──────────────────────────────────────────────
 
@@ -169,8 +170,18 @@ publish:
 	@$(MAKE) release
 	git tag -a "v$(VERSION)" -m "v$(VERSION)"
 	git push origin "v$(VERSION)"
-	gh release create "v$(VERSION)" build/amux.dmg --title "amux v$(VERSION)" --generate-notes
+	gh release create "v$(VERSION)" build/amux.dmg demo/demo.gif --title "amux v$(VERSION)" --generate-notes
 	@echo "✓ Published amux v$(VERSION) to GitHub"
+
+# ── Demo ──────────────────────────────────────────────
+
+# Record the demo GIF (requires vhs and Pillow)
+demo:
+	bash demo/setup.sh
+	vhs -o demo/demo-raw.gif demo/demo.tape
+	python3 demo/overlay.py demo/demo-raw.gif demo/demo.gif
+	rm -f demo/demo-raw.gif
+	@echo "✓ Demo GIF: demo/demo.gif"
 
 # ── Convenience ────────────────────────────────────────
 

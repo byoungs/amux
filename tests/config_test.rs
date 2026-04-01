@@ -1,3 +1,5 @@
+mod common;
+
 /// The pane-border-format must use explicit value comparison (#{==:#{@amux-alert},1})
 /// not truthy checks (#{?@amux-alert,...}). Tmux's #{?...} treats any non-empty
 /// string — including "0" — as true, which causes dismissed alerts to stay amber.
@@ -43,5 +45,36 @@ fn status_right_does_not_use_truthy_alert_check() {
         !fmt.contains("#{?@amux-alert,"),
         "status-right must not use truthy check on @amux-alert, found: {}",
         fmt
+    );
+}
+
+#[test]
+fn key_bindings_pass_session_flag() {
+    let _ts = common::TestSession::new(2);
+
+    let output = std::process::Command::new("tmux")
+        .args(["list-keys", "-T", "root"])
+        .output()
+        .expect("list-keys");
+    let keys = String::from_utf8_lossy(&output.stdout);
+
+    // C-= is Ctrl-+ (zoom-in)
+    let zoom_in_line = keys
+        .lines()
+        .find(|l| l.contains("C-=") && l.contains("amux"));
+    assert!(
+        zoom_in_line.is_some_and(|l| l.contains("--session")),
+        "C-= binding should include --session flag. Found: {:?}",
+        zoom_in_line
+    );
+
+    // C-1 should be zoom with --session
+    let zoom_1_line = keys
+        .lines()
+        .find(|l| l.contains("C-1") && l.contains("amux"));
+    assert!(
+        zoom_1_line.is_some_and(|l| l.contains("--session")),
+        "C-1 binding should include --session flag. Found: {:?}",
+        zoom_1_line
     );
 }

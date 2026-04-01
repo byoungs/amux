@@ -168,9 +168,18 @@ publish:
 		exit 1; \
 	fi
 	@$(MAKE) release
-	git tag -a "v$(VERSION)" -m "v$(VERSION)"
-	git push origin "v$(VERSION)"
-	gh release create "v$(VERSION)" build/amux.dmg demo/demo.gif --title "amux v$(VERSION)" --generate-notes
+	@ASSETS="build/amux.dmg"; \
+	if [ -f demo/demo.gif ]; then \
+		ASSETS="$$ASSETS demo/demo.gif"; \
+	else \
+		echo "⚠  demo/demo.gif not found — run 'make demo' to include it in the release"; \
+		printf "Publish without demo GIF? [y/N] "; \
+		read -r ans; \
+		if [ "$$ans" != "y" ]; then echo "Aborted."; exit 1; fi; \
+	fi; \
+	git tag -a "v$(VERSION)" -m "v$(VERSION)"; \
+	git push origin "v$(VERSION)"; \
+	gh release create "v$(VERSION)" $$ASSETS --title "amux v$(VERSION)" --generate-notes
 	@echo "✓ Published amux v$(VERSION) to GitHub"
 
 # ── Demo ──────────────────────────────────────────────

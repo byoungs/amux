@@ -16,6 +16,10 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
+    /// Target session name (passed by tmux key bindings via #{session_name})
+    #[arg(long, global = true)]
+    session: Option<String>,
+
     /// Session names to create on startup
     #[arg(short, long)]
     sessions: Vec<String>,
@@ -125,6 +129,15 @@ fn main() -> Result<()> {
     }
 
     let cli = Cli::parse();
+
+    // --session flag takes highest priority: propagate it to session_name()
+    // by setting AMUX_SESSION (which session_name() already checks).
+    // This avoids threading the flag through every cmd_* function.
+    if let Some(ref s) = cli.session {
+        if !s.is_empty() {
+            std::env::set_var("AMUX_SESSION", s);
+        }
+    }
 
     // hook-install doesn't need tmux — handle before version check
     if matches!(cli.command, Some(Commands::HookInstall)) {

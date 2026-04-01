@@ -24,13 +24,22 @@ pub fn apply_config(session: &str) -> Result<()> {
 pub fn apply_hooks(session: &str) -> Result<()> {
     crate::tmux::setup_all_bell_watches(session)?;
 
+    // Clean up stale global hooks from before session-scoping was added.
+    // Without this, old -g hooks linger in tmux and fire for all sessions.
+    for hook in ["pane-exited", "client-resized", "pane-focus-out"] {
+        let _ = Command::new("tmux")
+            .args(["set-hook", "-gu", hook])
+            .output();
+    }
+
     let bin = "amux";
 
     // Re-apply layout when a pane exits (shell closes naturally)
     let output = Command::new("tmux")
         .args([
             "set-hook",
-            "-g",
+            "-t",
+            session,
             "pane-exited",
             &format!("run-shell \"{} layout #{{session_name}}\"", bin),
         ])
@@ -48,7 +57,8 @@ pub fn apply_hooks(session: &str) -> Result<()> {
     let output = Command::new("tmux")
         .args([
             "set-hook",
-            "-g",
+            "-t",
+            session,
             "client-resized",
             &format!("run-shell \"{} layout #{{session_name}}\"", bin),
         ])
@@ -66,7 +76,8 @@ pub fn apply_hooks(session: &str) -> Result<()> {
     let output = Command::new("tmux")
         .args([
             "set-hook",
-            "-g",
+            "-t",
+            session,
             "pane-focus-out",
             &format!("run-shell \"{bin} update-title #{{pane_index}} '#{{pane_current_path}}'\""),
         ])
@@ -169,6 +180,8 @@ fn apply_status_bar(session: &str) -> Result<()> {
 /// No "command mode" — each action has its own dedicated key binding.
 fn apply_key_bindings(_session: &str) -> Result<()> {
     let bin = "amux";
+    // #{session_name} is expanded by tmux at keypress time
+    let sflag = "--session #{session_name}";
 
     // Verify the binary is on PATH
     let which = Command::new("which").arg(bin).output();
@@ -183,14 +196,13 @@ fn apply_key_bindings(_session: &str) -> Result<()> {
     // === Zoom controls ===
 
     // Ctrl-+ : zoom in (working → full screen)
-    tmux_bind_root("C-=", &format!(r#"run-shell "{} zoom-in""#, bin))?;
+    tmux_bind_root("C-=", &format!(r#"run-shell "{bin} {sflag} zoom-in""#))?;
 
     // Ctrl-- : zoom out (full screen → working, or open spaces picker; also handles split exit)
     tmux_bind_root(
         "C--",
         &format!(
-            r#"run-shell "if [ $(tmux display-message -p '#{{window_index}}') -gt 0 ]; then {} split-exit; else {} zoom-out; fi""#,
-            bin, bin
+            r#"run-shell "if [ $(tmux display-message -p '#{{window_index}}') -gt 0 ]; then {bin} {sflag} split-exit; else {bin} {sflag} zoom-out; fi""#,
         ),
     )?;
 
@@ -198,7 +210,7 @@ fn apply_key_bindings(_session: &str) -> Result<()> {
     for i in 1..=9 {
         tmux_bind_root(
             &format!("C-{}", i),
-            &format!(r#"run-shell "{} zoom {}""#, bin, i - 1),
+            &format!(r#"run-shell "{bin} {sflag} zoom {}""#, i - 1),
         )?;
     }
 
@@ -206,37 +218,31 @@ fn apply_key_bindings(_session: &str) -> Result<()> {
     // With extended-keys, tmux can distinguish C-[ from bare Escape.
     // Cmd-[ sends CSI u for codepoint 91 with ctrl modifier.
     // Cmd-] sends CSI u for codepoint 93 with ctrl modifier.
-    tmux_bind_root("C-[", &format!(r#"run-shell "{} pane-prev""#, bin))?;
-    tmux_bind_root("C-]", &format!(r#"run-shell "{} pane-next""#, bin))?;
+    tmux_bind_root("C-[", &format!(r#"run-shell "{bin} {sflag} pane-prev""#))?;
+    tmux_bind_root("C-]", &format!(r#"run-shell "{bin} {sflag} pane-next""#))?;
 
     // === Pane lifecycle ===
     // Ctrl-n: create pane via amux (sets title, handles layout internally)
     tmux_bind_root(
         "C-n",
-        &format!(r#"run-shell "cd '#{{pane_current_path}}' && {} new""#, bin),
+        &format!(r#"run-shell "cd '#{{pane_current_path}}' && {bin} {sflag} new""#),
     )?;
 
     // === Spaces ===
     // Ctrl-P: Space picker (popup centered over tmux)
     tmux_bind_root(
         "C-p",
-        &format!(
-            r#"display-popup -E -w 70 -h 20 -T " Spaces " "{} spaces""#,
-            bin
-        ),
+        &format!(r#"display-popup -E -w 70 -h 20 -T " Spaces " "{bin} {sflag} spaces""#,),
     )?;
 
     // Ctrl-S: Send pane to another space (popup)
     tmux_bind_root(
         "C-s",
-        &format!(
-            r#"display-popup -E -w 70 -h 20 -T " Send to Space " "{} send""#,
-            bin
-        ),
+        &format!(r#"display-popup -E -w 70 -h 20 -T " Send to Space " "{bin} {sflag} send""#,),
     )?;
 
     // === Split view ===
-    tmux_bind_root("C-l", &format!(r#"run-shell "{} split-start""#, bin))?;
+    tmux_bind_root("C-l", &format!(r#"run-shell "{bin} {sflag} split-start""#))?;
 
     tmux_bind_table("amux-split-pick", "C-Left", "select-pane -L")?;
     tmux_bind_table("amux-split-pick", "C-Right", "select-pane -R")?;
@@ -246,21 +252,20 @@ fn apply_key_bindings(_session: &str) -> Result<()> {
         "amux-split-pick",
         "Enter",
         &format!(
-            r#"run-shell "{} split-pick $(tmux display-message -p '#{{pane_index}}')""#,
-            bin
+            r#"run-shell "{bin} {sflag} split-pick $(tmux display-message -p '#{{pane_index}}')""#,
         ),
     )?;
     for i in 1..=9 {
         tmux_bind_table(
             "amux-split-pick",
             &format!("C-{}", i),
-            &format!(r#"run-shell "{} split-pick {}""#, bin, i - 1),
+            &format!(r#"run-shell "{bin} {sflag} split-pick {}""#, i - 1),
         )?;
     }
     tmux_bind_table(
         "amux-split-pick",
         "Escape",
-        &format!(r#"run-shell "{} split-cancel""#, bin),
+        &format!(r#"run-shell "{bin} {sflag} split-cancel""#),
     )?;
 
     Ok(())

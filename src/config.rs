@@ -32,7 +32,7 @@ pub fn apply_hooks(session: &str) -> Result<()> {
             .output();
     }
 
-    let bin = "amux";
+    let bin = crate::tmux::find_amux_binary();
 
     // Re-apply layout when a pane exits (shell closes naturally)
     let output = Command::new("tmux")
@@ -179,19 +179,9 @@ fn apply_status_bar(session: &str) -> Result<()> {
 /// All bindings are global (tmux doesn't support session-scoped bindings).
 /// No "command mode" — each action has its own dedicated key binding.
 fn apply_key_bindings(_session: &str) -> Result<()> {
-    let bin = "amux";
+    let bin = crate::tmux::find_amux_binary();
     // #{session_name} is expanded by tmux at keypress time
     let sflag = "--session #{session_name}";
-
-    // Verify the binary is on PATH
-    let which = Command::new("which").arg(bin).output();
-    if which.is_err() || !which.unwrap().status.success() {
-        eprintln!(
-            "Warning: '{}' not found on PATH. Key bindings may not work.",
-            bin
-        );
-        eprintln!("Run: cargo install --path .");
-    }
 
     // === Zoom controls ===
 

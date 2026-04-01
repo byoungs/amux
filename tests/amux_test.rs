@@ -182,10 +182,7 @@ fn rapid_zoom_unzoom_cycles() {
 
 #[test]
 fn zoom_each_pane_individually() {
-    let ts = common::TestSession::new(0);
-    for _ in 0..3 {
-        amux::tmux::create_pane(&ts.name, None).expect("pane");
-    }
+    let ts = common::TestSession::new(4);
     for i in 0..4 {
         amux::tmux::select_pane(&ts.name, i)
             .unwrap_or_else(|e| panic!("select pane {} failed: {}", i, e));

@@ -301,14 +301,19 @@ pub fn is_zoomed(session: &str) -> Result<bool> {
 
 pub fn select_pane(session: &str, pane_index: usize) -> Result<()> {
     let target = format!("{}:.{}", session, pane_index);
-    let output = Command::new("tmux")
-        .args(["select-pane", "-t", &target])
-        .output()
-        .context("failed to select pane")?;
-    if !output.status.success() {
-        bail!("tmux select-pane failed");
+    for attempt in 0..3 {
+        let output = Command::new("tmux")
+            .args(["select-pane", "-t", &target])
+            .output()
+            .context("failed to select pane")?;
+        if output.status.success() {
+            return Ok(());
+        }
+        if attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
-    Ok(())
+    bail!("tmux select-pane failed after retries");
 }
 
 /// Read current pane positions from tmux as Pane structs.
@@ -1052,7 +1057,7 @@ pub fn set_startup_spaces_hook(session: &str) -> Result<()> {
 
 /// Set up pipe-pane on a pane to watch for BEL characters.
 pub fn setup_bell_watch(session: &str, pane_index: usize) -> Result<()> {
-    let bin = "amux";
+    let bin = find_amux_binary();
     let target = format!("{}:.{}", session, pane_index);
     let _ = Command::new("tmux")
         .args([
@@ -1066,6 +1071,32 @@ pub fn setup_bell_watch(session: &str, pane_index: usize) -> Result<()> {
         ])
         .output();
     Ok(())
+}
+
+/// Find the amux binary path. Checks common locations in order:
+/// 1. Next to the current executable (works in tests and .app bundle)
+/// 2. ~/.cargo/bin/amux (dev install via make dev)
+/// 3. ~/.local/bin/amux (app install)
+/// 4. Falls back to bare "amux" (relies on PATH)
+pub fn find_amux_binary() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("amux");
+            if candidate.exists() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    for path in [
+        format!("{}/.cargo/bin/amux", home),
+        format!("{}/.local/bin/amux", home),
+    ] {
+        if std::path::Path::new(&path).exists() {
+            return path;
+        }
+    }
+    "amux".to_string()
 }
 
 /// Set up bell watchers on all panes in a session.

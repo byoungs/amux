@@ -78,3 +78,14 @@ fn key_bindings_pass_session_flag() {
         zoom_1_line
     );
 }
+
+/// The apply_hooks function must register after-select-pane (not pane-focus-out)
+/// because pane-focus-out is silently ignored in tmux next-3.7.
+#[test]
+fn apply_hooks_source_uses_after_select_pane() {
+    let source = std::fs::read_to_string("src/config.rs").unwrap();
+    assert!(
+        source.contains("\"after-select-pane\""),
+        "config.rs must use after-select-pane hook (pane-focus-out is silently ignored in tmux next-3.7)"
+    );
+}

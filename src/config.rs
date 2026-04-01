@@ -72,20 +72,24 @@ pub fn apply_hooks(session: &str) -> Result<()> {
         }
     }
 
-    // Update pane title from cwd when focus leaves a pane
+    // Update the selected pane's title from its cwd on focus change.
+    // Uses after-select-pane because pane-focus-out is silently ignored
+    // in tmux next-3.7 (accepted but never fires).
+    // Session-scoped (not -g) so it only fires for this session's panes,
+    // avoiding contention when multiple sessions run in parallel (e.g. tests).
     let output = Command::new("tmux")
         .args([
             "set-hook",
             "-t",
             session,
-            "pane-focus-out",
-            &format!("run-shell \"{bin} update-title #{{pane_index}} '#{{pane_current_path}}'\""),
+            "after-select-pane",
+            &format!("run-shell \"AMUX_SESSION=#{{session_name}} {bin} update-title #{{pane_index}} '#{{pane_current_path}}'\""),
         ])
         .output();
     if let Ok(o) = &output {
         if !o.status.success() {
             eprintln!(
-                "amux: failed to register pane-focus-out hook: {}",
+                "amux: failed to register after-select-pane hook: {}",
                 String::from_utf8_lossy(&o.stderr)
             );
         }

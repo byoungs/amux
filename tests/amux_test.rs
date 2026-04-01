@@ -95,7 +95,7 @@ fn create_pane_increases_count() {
 #[test]
 fn pane_title_is_set() {
     let ts = common::TestSession::new(0);
-    amux::tmux::set_title(&ts.name, 0, "my-project").expect("title");
+    amux::tmux::set_title(&ts.name, 0, "my-project", "test").expect("title");
     let panes = tmux_list_panes(&ts.name);
     assert!(
         panes[0].contains("my-project"),
@@ -109,7 +109,7 @@ fn four_panes_in_tiled_layout() {
     let ts = common::TestSession::new(1);
     for i in 1..4 {
         let idx = amux::tmux::create_pane(&ts.name, None).expect("pane");
-        amux::tmux::set_title(&ts.name, idx, &format!("pane-{}", i)).expect("title");
+        amux::tmux::set_title(&ts.name, idx, &format!("pane-{}", i), "test").expect("title");
     }
     let panes = tmux_list_panes(&ts.name);
     assert_eq!(panes.len(), 4);
@@ -197,11 +197,11 @@ fn zoom_each_pane_individually() {
 #[test]
 fn pane_titles_survive_layout_changes() {
     let ts = common::TestSession::new(0);
-    amux::tmux::set_title(&ts.name, 0, "alpha").expect("title");
+    amux::tmux::set_title(&ts.name, 0, "alpha", "test").expect("title");
     amux::tmux::create_pane(&ts.name, None).expect("pane");
-    amux::tmux::set_title(&ts.name, 1, "beta").expect("title");
+    amux::tmux::set_title(&ts.name, 1, "beta", "test").expect("title");
     amux::tmux::create_pane(&ts.name, None).expect("pane");
-    amux::tmux::set_title(&ts.name, 2, "gamma").expect("title");
+    amux::tmux::set_title(&ts.name, 2, "gamma", "test").expect("title");
     amux::tmux::apply_layout(&ts.name, amux::layout_engine::LayoutEvent::Resize).expect("tiled");
     let panes = amux::tmux::list_panes(&ts.name).expect("list");
     assert!(panes.iter().any(|p| p.title == "alpha"));

@@ -178,7 +178,11 @@ pub fn kill_pane(session: &str, pane_index: usize) -> Result<()> {
     Ok(())
 }
 
-pub fn set_title(session: &str, pane_index: usize, title: &str) -> Result<()> {
+pub fn set_title(session: &str, pane_index: usize, title: &str, caller: &str) -> Result<()> {
+    let old = get_title(session, pane_index).unwrap_or_default();
+    let cwd = pane_cwd(session, pane_index).unwrap_or_default();
+    crate::title_log::log_change(session, pane_index, &old, title, caller, &cwd);
+
     let target = format!("{}:.{}", session, pane_index);
     // Set the custom @amux-title option which Claude Code can't override
     let output = Command::new("tmux")
@@ -192,6 +196,16 @@ pub fn set_title(session: &str, pane_index: usize, title: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Read the current @amux-title for a pane. Returns empty string if unset.
+pub fn get_title(session: &str, pane_index: usize) -> Result<String> {
+    let target = format!("{}:.{}", session, pane_index);
+    let output = Command::new("tmux")
+        .args(["display-message", "-t", &target, "-p", "#{@amux-title}"])
+        .output()
+        .context("failed to get @amux-title")?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Set or clear the alert flag on a pane.
@@ -1171,7 +1185,7 @@ mod tests {
     fn set_pane_title() {
         let guard = TestGuard::new();
         create_session(&guard.name).expect("create");
-        set_title(&guard.name, 0, "my-project").expect("title");
+        set_title(&guard.name, 0, "my-project", "test").expect("title");
         // Verify via tmux show-options that @amux-title was set
         let output = Command::new("tmux")
             .args([
@@ -1186,6 +1200,15 @@ mod tests {
             .expect("show-options");
         let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
         assert_eq!(title, "my-project");
+    }
+
+    #[test]
+    fn get_title_returns_empty_for_unset() {
+        let guard = TestGuard::new();
+        create_session(&guard.name).expect("create");
+        let title = get_title(&guard.name, 0).unwrap();
+        // New pane has no @amux-title set, should be empty
+        assert!(title.is_empty(), "expected empty, got: {title}");
     }
 
     #[test]

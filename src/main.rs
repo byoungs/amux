@@ -83,7 +83,7 @@ enum Commands {
     },
     /// Install Claude Code notification hook (called by make setup)
     HookInstall,
-    /// Update a pane's title from its current directory (called by pane-focus-out hook)
+    /// Update a pane's title from its current directory (called by after-select-pane hook)
     UpdateTitle {
         /// Pane index to update
         pane: usize,
@@ -209,12 +209,12 @@ fn cmd_start(sessions: &[String]) -> Result<()> {
     };
 
     // The session starts with one default pane — set its title
-    tmux::set_title(&session, 0, &names[0])?;
+    tmux::set_title(&session, 0, &names[0], "start")?;
 
     // Create additional panes
     for name in &names[1..] {
         let idx = tmux::create_pane(&session, Some(&cwd_str))?;
-        tmux::set_title(&session, idx, name)?;
+        tmux::set_title(&session, idx, name, "start")?;
     }
 
     // Apply tiled layout
@@ -237,7 +237,7 @@ fn cmd_new(name: Option<String>) -> Result<()> {
 
     let title = name.unwrap_or_else(|| auto_title(&cwd_str));
     let idx = tmux::create_pane(&session, Some(&cwd_str))?;
-    tmux::set_title(&session, idx, &title)?;
+    tmux::set_title(&session, idx, &title, "new")?;
 
     // Save state
     let state = build_state(&session)?;
@@ -296,7 +296,7 @@ fn cmd_refresh() -> Result<()> {
         let cwd = tmux::pane_cwd(&session, pane.index)?;
         if !cwd.is_empty() {
             let title = auto_title(&cwd);
-            tmux::set_title(&session, pane.index, &title)?;
+            tmux::set_title(&session, pane.index, &title, "refresh")?;
         }
     }
 
@@ -310,7 +310,7 @@ fn cmd_refresh() -> Result<()> {
 fn cmd_update_title(pane_index: usize, cwd: &str) -> Result<()> {
     let session = session_name();
     let title = auto_title(cwd);
-    tmux::set_title(&session, pane_index, &title)?;
+    tmux::set_title(&session, pane_index, &title, "update-title")?;
     Ok(())
 }
 
@@ -711,7 +711,7 @@ fn cmd_spaces() -> Result<()> {
 
                 let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
                 let title = auto_title(&cwd.to_string_lossy());
-                tmux::set_title(&name, 0, &title)?;
+                tmux::set_title(&name, 0, &title, "spaces")?;
 
                 tmux::switch_session(&name)?;
                 return Ok(());
@@ -810,7 +810,7 @@ fn cmd_send() -> Result<()> {
 
                 let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
                 let title = auto_title(&cwd.to_string_lossy());
-                tmux::set_title(&name, 0, &title)?;
+                tmux::set_title(&name, 0, &title, "send")?;
 
                 // Capture the pane ID before sending so we can clean up the phantom
                 let sent_pane_id = tmux::active_pane_id(&current)?;

@@ -8,6 +8,7 @@ pub mod layout_engine;
 pub mod notify;
 pub mod state;
 pub mod sticky;
+pub mod title_log;
 pub mod tmux;
 pub mod util;
 

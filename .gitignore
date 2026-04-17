@@ -1,7 +1,4 @@
-/target
-/target-wt
 /build
-.worktrees/
-.claude/
 .DS_Store
-demo/*.gif
+app/.build
+app/.swiftpm

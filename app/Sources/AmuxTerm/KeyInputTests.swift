@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import AmuxLib
 
 enum KeyInputTests {
     static func runAll() {
@@ -53,29 +54,33 @@ enum KeyInputTests {
 
         // Scroll up sends button 64
         check("scroll-up-button",
-              KeyInput.scrollBytes(deltaY: 10, col: 5, row: 3, cellHeight: 17, precise: false)[0],
+              KeyInput.scrollBytes(deltaY: 10, col: 5, row: 3, cellHeight: 17, precise: false, visibleRows: 30)[0],
               "\u{1B}[<64;6;4M".data(using: .utf8)!)
 
         // Scroll down sends button 65
         check("scroll-down-button",
-              KeyInput.scrollBytes(deltaY: -10, col: 5, row: 3, cellHeight: 17, precise: false)[0],
+              KeyInput.scrollBytes(deltaY: -10, col: 5, row: 3, cellHeight: 17, precise: false, visibleRows: 30)[0],
               "\u{1B}[<65;6;4M".data(using: .utf8)!)
 
-        // Mouse wheel sends exactly 3 events
-        let mouseWheel = KeyInput.scrollBytes(deltaY: 1, col: 0, row: 0, cellHeight: 17, precise: false)
+        // Mouse wheel sends 3 events at 30 rows (~10% = 3)
+        let mouseWheel = KeyInput.scrollBytes(deltaY: 1, col: 0, row: 0, cellHeight: 17, precise: false, visibleRows: 30)
         check("scroll-mouse-count", Data([UInt8(mouseWheel.count)]), Data([3]))
 
+        // Small pane (15 rows): scroll speed scales down to 1 line
+        let smallPane = KeyInput.scrollBytes(deltaY: 1, col: 0, row: 0, cellHeight: 17, precise: false, visibleRows: 15)
+        check("scroll-small-pane", Data([UInt8(smallPane.count)]), Data([1]))
+
         // Trackpad with small delta sends 1 event
-        let trackpadSmall = KeyInput.scrollBytes(deltaY: 5, col: 0, row: 0, cellHeight: 17, precise: true)
+        let trackpadSmall = KeyInput.scrollBytes(deltaY: 5, col: 0, row: 0, cellHeight: 17, precise: true, visibleRows: 30)
         check("scroll-trackpad-small", Data([UInt8(trackpadSmall.count)]), Data([1]))
 
-        // Trackpad capped at 3 events
-        let trackpadLarge = KeyInput.scrollBytes(deltaY: 200, col: 0, row: 0, cellHeight: 17, precise: true)
+        // Trackpad capped at maxLines (3 at 30 rows)
+        let trackpadLarge = KeyInput.scrollBytes(deltaY: 200, col: 0, row: 0, cellHeight: 17, precise: true, visibleRows: 30)
         check("scroll-trackpad-cap", Data([UInt8(trackpadLarge.count)]), Data([3]))
 
         // SGR coordinates are 1-indexed
         check("scroll-1indexed",
-              KeyInput.scrollBytes(deltaY: 1, col: 0, row: 0, cellHeight: 17, precise: false)[0],
+              KeyInput.scrollBytes(deltaY: 1, col: 0, row: 0, cellHeight: 17, precise: false, visibleRows: 30)[0],
               "\u{1B}[<64;1;1M".data(using: .utf8)!)
 
         print("KeyInput tests: \(passed) passed, \(failed) failed")

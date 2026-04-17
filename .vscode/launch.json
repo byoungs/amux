@@ -1,0 +1,64 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:cmd-l-redesign}/app",
+      "name": "Debug amux-integration-tests (app)",
+      "target": "amux-integration-tests",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug amux-integration-tests (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:cmd-l-redesign}/app",
+      "name": "Release amux-integration-tests (app)",
+      "target": "amux-integration-tests",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release amux-integration-tests (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:cmd-l-redesign}/app",
+      "name": "Debug amux-app (app)",
+      "target": "amux-app",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug amux-app (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:cmd-l-redesign}/app",
+      "name": "Release amux-app (app)",
+      "target": "amux-app",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release amux-app (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:cmd-l-redesign}/app",
+      "name": "Debug amux-cli (app)",
+      "target": "amux-cli",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug amux-cli (app)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:cmd-l-redesign}/app",
+      "name": "Release amux-cli (app)",
+      "target": "amux-cli",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release amux-cli (app)"
+    }
+  ]
+}

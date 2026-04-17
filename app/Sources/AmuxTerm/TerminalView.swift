@@ -1,4 +1,5 @@
 import AppKit
+import AmuxLib
 import CoreText
 import CVterm
 
@@ -27,6 +28,30 @@ final class TerminalView: NSView {
     private var lineCacheGeneration: Int = 0
 
     private let defaultBg = CGColor(gray: 0, alpha: 1)
+
+    // Cmd-Click link detection (uses LinkDetector for testable regex scanning)
+    private var detectedLinks: [DetectedLink] = []
+    private var cmdHeld = false
+
+    /// The tmux session name. Set by AppDelegate after construction.
+    /// Used to update @amux-cmd-held when Cmd is pressed/released.
+    var session: String = ""
+
+    // Pane border color overlay.
+    // Overrides border cell foreground colors for panes with colored states.
+    struct PaneBorderOverlay {
+        let top: Int, left: Int, width: Int, height: Int
+        let r: UInt8, g: UInt8, b: UInt8  // RGB color for this pane's borders
+    }
+    var borderOverlays: [PaneBorderOverlay] = []
+
+    // Legacy single-pane property (kept for AppDelegate callback compatibility)
+    struct PaneBounds {
+        let top: Int, left: Int, width: Int, height: Int
+    }
+    var splitSelectedPaneBounds: PaneBounds? = nil {
+        didSet { rebuildOverlays() }
+    }
 
     // Latency profiling (stderr output, #if DEBUG only)
     #if DEBUG
@@ -125,9 +150,32 @@ final class TerminalView: NSView {
         super.viewDidMoveToWindow()
         if window != nil && displayLink == nil {
             startDisplayLink()
+            // Clear Cmd-held state if the app loses focus (Cmd-Tab away).
+            // Without this, the underlines + bright status bar persist after
+            // returning because the app misses the Cmd-up while inactive.
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(appDidResignActive),
+                name: NSApplication.didResignActiveNotification,
+                object: nil
+            )
         } else if window == nil {
             displayLink?.invalidate()
             displayLink = nil
+            NotificationCenter.default.removeObserver(self)
+        }
+    }
+
+    @objc private func appDidResignActive() {
+        guard cmdHeld else { return }
+        cmdHeld = false
+        if !session.isEmpty {
+            setCmdHeld(session: session, held: false)
+        }
+        if !detectedLinks.isEmpty {
+            detectedLinks = []
+            NSCursor.pop()
+            needsDisplay = true
         }
     }
 
@@ -236,6 +284,70 @@ final class TerminalView: NSView {
         return line
     }
 
+    /// Rebuild border overlays from current state.
+    ///
+    /// Queries tmux for pane positions and alert/split-selected state.
+    /// Creates overlays that color the TOP BORDER ROW ONLY for:
+    ///   - split-selected panes → red
+    ///   - alert panes → amber
+    ///
+    /// tmux handles active (teal) vs inactive (gray) via pane-border-format.
+    /// This overlay recolors the tmux-rendered title text for alert/split
+    /// states without affecting side or bottom borders.
+    func rebuildOverlays() {
+        var overlays: [PaneBorderOverlay] = []
+
+        // Split-selected pane (from AppController callback)
+        if let bounds = splitSelectedPaneBounds {
+            overlays.append(PaneBorderOverlay(
+                top: bounds.top, left: bounds.left,
+                width: bounds.width, height: bounds.height,
+                r: 255, g: 0, b: 0))  // red
+        }
+
+        // Alert panes (query tmux for positions + alert + active state)
+        // Skip active pane — tmux renders it teal, and alert is dismissed on focus.
+        let panesStr = Tmux.runRaw(["list-panes", "-F",
+            "#{pane_top} #{pane_left} #{pane_width} #{pane_height} #{@amux-alert} #{pane_active}"])
+        for line in panesStr.split(separator: "\n") {
+            let parts = line.split(separator: " ")
+            guard parts.count >= 6,
+                  let top = Int(parts[0]), let left = Int(parts[1]),
+                  let width = Int(parts[2]), let height = Int(parts[3]) else { continue }
+            let alert = String(parts[4])
+            let active = String(parts[5])
+            if alert == "1" && active != "1" {
+                // Don't overlay if this pane is also split-selected (red wins)
+                if let sp = splitSelectedPaneBounds,
+                   sp.top == top && sp.left == left { continue }
+                overlays.append(PaneBorderOverlay(
+                    top: top, left: left, width: width, height: height,
+                    r: 214, g: 135, b: 0))  // amber
+            }
+        }
+
+        borderOverlays = overlays
+    }
+
+    /// Find the overlay color for a border cell, if any.
+    ///
+    /// Only matches the TOP border row of each overlay pane. Side and bottom
+    /// borders are not colored — this keeps the visual indicator on the title
+    /// bar without extending into adjacent panes.
+    private func borderOverlayColor(row: Int, col: Int) -> (UInt8, UInt8, UInt8)? {
+        for overlay in borderOverlays {
+            let t = overlay.top
+            let l = overlay.left
+            let r = l + overlay.width
+
+            // Top border row only (the title bar row is one row above pane content)
+            if row == t - 1 && col >= l - 1 && col <= r {
+                return (overlay.r, overlay.g, overlay.b)
+            }
+        }
+        return nil
+    }
+
     private func drawCell(_ cell: VTermScreenCell, row: Int, col: Int, ctx: CGContext) {
         let x = CGFloat(col) * cellWidth
         let y = CGFloat(row) * cellHeight
@@ -243,8 +355,13 @@ final class TerminalView: NSView {
         let rect = CGRect(x: x, y: y, width: w, height: cellHeight)
 
         let isReverse = cell.attrs.reverse != 0
-        let (fgR, fgG, fgB) = VTerminal.colorRGB(cell.fg, screen: terminal.screen)
+        var (fgR, fgG, fgB) = VTerminal.colorRGB(cell.fg, screen: terminal.screen)
         let (bgR, bgG, bgB) = VTerminal.colorRGB(cell.bg, screen: terminal.screen)
+
+        // Override border cell color for panes with colored states
+        if let color = borderOverlayColor(row: row, col: col) {
+            fgR = color.0; fgG = color.1; fgB = color.2
+        }
 
         let bgNSColor = isReverse
             ? VTerminal.cachedColor(r: fgR, g: fgG, b: fgB)
@@ -294,6 +411,17 @@ final class TerminalView: NSView {
             ctx.addLine(to: CGPoint(x: x + w, y: strikeY))
             ctx.strokePath()
         }
+
+        // Cmd-held link underline (blue, like iTerm2)
+        if cmdHeld && isLinkCell(row: row, col: col) {
+            let underY = y + fontAscent + 2
+            let linkBlue = CGColor(red: 0.2, green: 0.5, blue: 1.0, alpha: 1.0)
+            ctx.setStrokeColor(linkBlue)
+            ctx.setLineWidth(1)
+            ctx.move(to: CGPoint(x: x, y: underY))
+            ctx.addLine(to: CGPoint(x: x + w, y: underY))
+            ctx.strokePath()
+        }
     }
 
     private func drawCursor(row: Int, col: Int, ctx: CGContext) {
@@ -318,6 +446,17 @@ final class TerminalView: NSView {
     // and integrates with tmux's copy mode.
 
     override func mouseDown(with event: NSEvent) {
+        // Cmd-Click: open link at cursor position
+        if event.modifierFlags.contains(.command) {
+            let pos = cellPosition(for: event)
+            // Always scan fresh on click (don't rely on flagsChanged having fired)
+            let freshLinks = scanForLinks()
+            if let link = freshLinks.first(where: { $0.row == pos.row && pos.col >= $0.startCol && pos.col <= $0.endCol }) {
+                openLink(link.url)
+                return
+            }
+        }
+
         let pos = cellPosition(for: event)
         let col = pos.col + 1  // SGR is 1-indexed
         let row = pos.row + 1
@@ -348,6 +487,113 @@ final class TerminalView: NSView {
         }
     }
 
+    // MARK: - Cmd-Click link detection
+
+    override func flagsChanged(with event: NSEvent) {
+        let cmdNow = event.modifierFlags.contains(.command)
+        if cmdNow && !cmdHeld {
+            // Cmd pressed — scan for links, show underlines, brighten status bar
+            cmdHeld = true
+            if !session.isEmpty {
+                setCmdHeld(session: session, held: true)
+            }
+            detectedLinks = scanForLinks()
+            if !detectedLinks.isEmpty {
+                NSCursor.pointingHand.push()
+                needsDisplay = true
+            }
+        } else if !cmdNow && cmdHeld {
+            // Cmd released — clear underlines, dim status bar
+            cmdHeld = false
+            if !session.isEmpty {
+                setCmdHeld(session: session, held: false)
+            }
+            if !detectedLinks.isEmpty {
+                detectedLinks = []
+                NSCursor.pop()
+                needsDisplay = true
+            }
+        }
+        super.flagsChanged(with: event)
+    }
+
+    /// Scan all visible rows for URL/path patterns using LinkDetector.
+    /// Uses per-cell color info so colored filenames (e.g., from Claude or
+    /// `make`) with spaces in them are detected correctly.
+    private func scanForLinks() -> [DetectedLink] {
+        var rows: [String] = []
+        var colors: [[LinkDetector.CellColor]] = []
+        for row in 0..<terminal.rows {
+            let (text, rowColors) = extractRow(row)
+            rows.append(text)
+            colors.append(rowColors)
+        }
+        return LinkDetector.scanRows(rows, colors: colors)
+    }
+
+    /// Extract text + per-cell color info from a terminal row.
+    private func extractRow(_ row: Int) -> (String, [LinkDetector.CellColor]) {
+        var text = ""
+        var colors: [LinkDetector.CellColor] = []
+        colors.reserveCapacity(terminal.cols)
+        for col in 0..<terminal.cols {
+            let cell = terminal.cell(row: row, col: col)
+            let ch = VTerminal.cellString(cell)
+            text += ch.isEmpty ? " " : ch
+            let (r, g, b) = VTerminal.colorRGB(cell.fg, screen: terminal.screen)
+            // VTERM_COLOR_DEFAULT_FG = 0x02
+            let isDefault = (cell.fg.type & 0x02) != 0
+            let rgb = (UInt32(r) << 16) | (UInt32(g) << 8) | UInt32(b)
+            colors.append(LinkDetector.CellColor(rgb: rgb, isDefault: isDefault))
+        }
+        // Trim trailing spaces from text only (keep colors aligned by index)
+        while text.hasSuffix(" ") { text.removeLast() }
+        return (text, colors)
+    }
+
+    /// Text-only row extraction (used for click logging).
+    private func extractRowText(_ row: Int) -> String {
+        extractRow(row).0
+    }
+
+    /// Find a detected link at the given cell position.
+    private func linkAt(row: Int, col: Int) -> DetectedLink? {
+        // If we haven't scanned yet (Cmd might not have triggered flagsChanged before click),
+        // scan now
+        let links = detectedLinks.isEmpty ? scanForLinks() : detectedLinks
+        return links.first(where: { $0.row == row && col >= $0.startCol && col <= $0.endCol })
+    }
+
+    /// Check if a cell is part of a detected link (for rendering underline).
+    private func isLinkCell(row: Int, col: Int) -> Bool {
+        detectedLinks.contains(where: { $0.row == row && col >= $0.startCol && col <= $0.endCol })
+    }
+
+    /// Open a detected link.
+    private func openLink(_ url: String) {
+        if url.hasPrefix("http://") || url.hasPrefix("https://") {
+            if let nsURL = URL(string: url) {
+                NSWorkspace.shared.open(nsURL)
+            }
+        } else if url.hasPrefix("file:") {
+            let filePath = String(url.dropFirst(5))
+
+            // Resolve relative paths against the active pane's working directory
+            let paneCwd = Tmux.runRaw(["display-message", "-p", "#{pane_current_path}"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let basePath = paneCwd.isEmpty ? FileManager.default.currentDirectoryPath : paneCwd
+            let resolvedPath = filePath.hasPrefix("/") ? filePath : basePath + "/" + filePath
+
+            // Open in VS Code (works for all file types)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["code", resolvedPath]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
+        }
+    }
+
     override func scrollWheel(with event: NSEvent) {
         let pos = cellPosition(for: event)
         let sequences = KeyInput.scrollBytes(
@@ -355,7 +601,8 @@ final class TerminalView: NSView {
             col: pos.col,
             row: pos.row,
             cellHeight: cellHeight,
-            precise: event.hasPreciseScrollingDeltas
+            precise: event.hasPreciseScrollingDeltas,
+            visibleRows: terminal.rows
         )
         for data in sequences {
             pty.write(data)

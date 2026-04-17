@@ -7,6 +7,9 @@ import Darwin
 final class PTY {
     let masterFd: Int32
     let childPid: pid_t
+    /// The slave TTY device path (e.g., /dev/ttys005). Used to identify
+    /// our tmux client when resolving the current session.
+    private(set) var slavePath: String?
     private var dispatchIO: DispatchIO?
     var onOutput: ((Data) -> Void)?
     var onExit: (() -> Void)?
@@ -15,8 +18,10 @@ final class PTY {
     init?(executable: String, args: [String], rows: UInt16, cols: UInt16, env: [String: String] = [:]) {
         var master: Int32 = 0
         var ws = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
+        var nameBuf = [CChar](repeating: 0, count: 1024)
 
-        let pid = forkpty(&master, nil, nil, &ws)
+        let pid = forkpty(&master, &nameBuf, nil, &ws)
+        self.slavePath = nil  // initialized here; set to real value below if parent
         guard pid >= 0 else { return nil }
 
         if pid == 0 {
@@ -37,6 +42,8 @@ final class PTY {
 
         self.masterFd = master
         self.childPid = pid
+        let name = String(cString: nameBuf)
+        self.slavePath = name.isEmpty ? nil : name
     }
 
     /// Start reading output asynchronously on the main queue.

@@ -24,17 +24,33 @@ let package = Package(
             publicHeadersPath: "include",
             cSettings: [
                 .headerSearchPath("src"),
-                // Suppress libvterm's DEBUG_LOG spam (Unknown DEC mode 2026, etc.)
-                // Swift debug builds define DEBUG, which enables fprintf to stderr
-                // for every unrecognized terminal mode. We don't need these.
                 .unsafeFlags(["-UDEBUG"]),
             ]
         ),
+        // Shared library: tmux wrappers, layout engine, config, algorithms.
+        // No AppKit dependency — usable from both the app and tests.
+        .target(
+            name: "AmuxLib",
+            path: "Sources/AmuxLib"
+        ),
+        // Native macOS app (terminal emulator + keyboard dispatch)
         .executableTarget(
             name: "amux-app",
-            dependencies: ["CVterm"],
+            dependencies: ["CVterm", "AmuxLib"],
             path: "Sources/AmuxTerm",
             resources: [.copy("amux.icns")]
+        ),
+        // CLI for tmux hooks (layout, update-title, alert-pane, bell-watch)
+        .executableTarget(
+            name: "amux-cli",
+            dependencies: ["AmuxLib"],
+            path: "Sources/AmuxCLI"
+        ),
+        // Integration tests — call AmuxLib functions directly against real tmux
+        .executableTarget(
+            name: "amux-integration-tests",
+            dependencies: ["AmuxLib"],
+            path: "Tests"
         ),
     ]
 )

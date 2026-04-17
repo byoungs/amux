@@ -2,112 +2,105 @@
 
 ## Setup
 
-### One-Line Install
-
-```bash
-curl -sSL https://raw.githubusercontent.com/byoungs/amux/main/scripts/install.sh | bash
-```
-
-### Manual Install
-
 ```bash
 git clone https://github.com/byoungs/amux.git
 cd amux
 make setup
-amux
 ```
 
-### What Setup Does
+`make setup` is idempotent — safe to re-run anytime.
 
-`make setup` prepares your environment (safe to re-run anytime):
+## Build & Run
 
-1. **Rust toolchain** — verifies `cargo` is on PATH
-2. **tmux** — checks version, warns if tmux HEAD is needed for flicker-free rendering
-3. **Build** — compiles the release binary
-4. **Symlink** — links `~/.cargo/bin/amux` to the built binary
-5. **Claude Code hook** — installs the notification hook in `~/.claude/settings.json`
+```bash
+make dev       # Build debug app + CLI, launch AmuxTerm
+make test      # Unit tests (no tmux needed)
+make validate  # Full suite: unit + tmux integration tests
+make refresh   # Re-apply tmux config (border formats, hooks, status bar)
+make clean     # Remove build artifacts
+```
 
-If you move the repo directory, re-run `make setup` to update the symlink.
+### What Goes Live When
 
-## How Live Reload Works
+| Change type | Live on build? | Needs `make refresh`? |
+|------------|---------------|----------------------|
+| App logic (zoom, alert, layout, keyboard) | Yes (restart app) | No |
+| CLI commands (spaces, send, help, hooks) | Yes (next tmux hook/popup) | No |
+| Border format, status bar, key bindings (Config.swift) | No | Yes |
 
-amux has no long-running daemon. tmux key bindings and hooks shell out to
-the `amux` binary on every invocation (`run-shell "amux zoom-in"`, etc.).
-The binary at `~/.cargo/bin/amux` is a symlink to `target/release/amux`.
+The app must be quit and relaunched to pick up Swift code changes.
+CLI changes are live immediately because tmux shells out to `amux-cli`
+on every hook invocation.
 
-This means: run `make dev`, and the next keypress in tmux uses the new code.
-No restart, no refresh, no reconnect.
+## Project Structure
 
-**Exception:** tmux caches configuration strings (border formats, status bar,
-key bindings). If you change these in `src/config.rs`, run `make refresh`
-to re-apply them.
+```
+app/
+  Sources/
+    AmuxTerm/         # macOS GUI app (TerminalView, KeyInput, AppDelegate)
+    AmuxLib/          # Shared library (AppController, Tmux, Layout, etc.)
+    AmuxCLI/          # CLI tool for tmux hooks and popups
+    CVterm/           # C bridge to libvterm
+  Tests/              # Integration tests (need tmux)
+  Resources/          # App icon, Info.plist
+docs/                 # Architecture and feature documentation
+Makefile              # Build, test, release targets
+```
 
 ## Worktree Development
 
 All changes happen on branches in git worktrees. Main stays clean.
 
-### Create a worktree
-
 ```bash
-git worktree add -b fix-alert-dismiss .worktrees/fix-alert-dismiss main
-cd .worktrees/fix-alert-dismiss
+# Create a worktree (or use Claude Code's /dev command)
+git worktree add -b fix-something .claude/worktrees/fix-something main
 ```
 
-### Develop
+Develop in the worktree:
 
 ```bash
-# Edit code...
-make dev      # Build — live on next keypress
-make test     # Run tests
-make refresh  # Only if you changed config strings
+make dev        # Build and launch
+make test       # Unit tests
+make validate   # Full test suite (before claiming done)
 ```
 
-All worktrees share a single `target/` directory (the main checkout's).
-Cargo serializes concurrent builds via file lock — no corruption risk.
-The last `make dev` wins; it prints the branch and commit so you know
-what's running.
+Merge via `wtr` (ff-only merge → validate → push).
 
-### Complete and merge
+## Testing
+
+### Unit tests (`make test`)
+
+Run via `amux-app --run-tests`. No tmux needed. Tests use FakeTmux
+(in-memory executor) so they run fast and don't affect live tmux.
+
+Covers: KeyInput, Layout, LayoutEngine, Sticky, Bell, AppController,
+PaneStyle, LinkDetector, FakeTmux, SplitRestore.
+
+### Integration tests (`make validate`)
+
+Run via `amux-integration-tests`. Requires tmux. Tests run on an isolated
+tmux server (custom socket via `-L`) so they can't leak sessions or
+messages to the user's live tmux.
+
+Covers: smoke tests, config, zoom, alert, attention, send, split mode,
+session resolution, border formats, Cmd-L scenarios, help content.
+
+## Release
 
 ```bash
-# Squash work into a single commit on the branch
-# Rebase onto current main (needed if other branches merged since you branched)
-git rebase main
-
-# From the main checkout:
-cd ~/src/amux   # or wherever your main checkout lives
-git merge --ff-only fix-alert-dismiss
-make dev
-git worktree remove .worktrees/fix-alert-dismiss
-git branch -d fix-alert-dismiss
+make release    # Build + validate + create DMG
+make publish    # Tag + push + GitHub release
 ```
-
-## Rollback
-
-If a bad build breaks tmux key bindings:
-
-```bash
-# Option 1: rebuild from main
-cd ~/src/amux
-git checkout main
-make dev
-
-# Option 2: restore previous binary (available after 2+ builds)
-cp target/release/amux.prev target/release/amux
-```
-
-`make dev` saves the previous binary as `target/release/amux.prev` before
-each build.
 
 ## Make Targets
 
 | Target | What it does |
 |--------|-------------|
-| `make setup` | Full environment setup (idempotent) |
-| `make dev` | Build release binary — live on next keypress |
-| `make test` | Run all tests (unit + integration) |
-| `make check` | Lint + test + build — pre-merge gate |
-| `make fmt` | Auto-format code |
-| `make lint` | clippy + format check |
+| `make dev` | Build and launch app in debug mode |
+| `make test` | Unit tests (fast, no tmux) |
+| `make validate` | Full test suite (unit + integration) |
 | `make refresh` | Re-apply tmux config |
+| `make release` | Build release DMG |
+| `make publish` | Tag and publish to GitHub |
 | `make clean` | Remove build artifacts |
+| `make setup` | Full environment setup (idempotent) |

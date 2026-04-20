@@ -5,6 +5,7 @@
 /// and spaces/send.
 
 import Foundation
+import AmuxLib
 
 // MARK: - Helpers
 
@@ -268,22 +269,41 @@ enum AmuxTests {
         }
 
         // --- key_bindings_are_installed ---
+        //
+        // In the Swift port, Cmd-keys are dispatched by the native app via
+        // KeyInput/KeyCommand (app/Sources/AmuxTerm/KeyInput.swift and
+        // app/Sources/AmuxLib/KeyAction.swift). They are NOT bound in tmux
+        // anymore, so inspecting `tmux list-keys` is meaningless.
+        //
+        // These checks verify the pure character→command mapping that
+        // KeyInput delegates to. No tmux session required.
         do {
-            let _ = TestSession(paneCount: 1)
-            let result = tmux("list-keys")
-            let keys = result.stdout
-            check("keyBindingsCtrlPlus",
-                  keys.contains("C-="),
-                  "Ctrl-+ (zoom in) missing")
-            check("keyBindingsCtrlMinus",
-                  keys.contains("C--"),
-                  "Ctrl-- (zoom out) missing")
-            check("keyBindingsCtrlN",
-                  keys.contains("C-n"),
-                  "Ctrl-n missing")
-            check("keyBindingsZoomInCommand",
-                  keys.contains("amux zoom-in"),
-                  "zoom-in command missing")
+            check("keyBindingCmdEqualsMapsToZoomIn",
+                  KeyCommand.amuxCommand(for: "=") == .zoomIn,
+                  "Cmd-= should map to .zoomIn, got \(String(describing: KeyCommand.amuxCommand(for: "=")))")
+            check("keyBindingCmdMinusMapsToZoomOut",
+                  KeyCommand.amuxCommand(for: "-") == .zoomOut,
+                  "Cmd-- should map to .zoomOut, got \(String(describing: KeyCommand.amuxCommand(for: "-")))")
+            check("keyBindingCmdNMapsToNewPane",
+                  KeyCommand.amuxCommand(for: "n") == .newPane,
+                  "Cmd-N should map to .newPane, got \(String(describing: KeyCommand.amuxCommand(for: "n")))")
+            // Historically a separate check verified the "amux zoom-in"
+            // command string appeared in the tmux binding. In the Swift
+            // port the command is dispatched end-to-end: KeyCommand maps
+            // the character → AmuxCommand, then AppController turns it
+            // into a layout event via Tmux.applyLayout. Preserve the
+            // audit trail by testing the downstream half — an explicit
+            // zoomIn layout event against a real session actually zooms
+            // the window. This complements the pure-mapping check above
+            // and would catch a regression like "AppController drops
+            // zoomIn" or "Tmux.applyLayout misroutes the event".
+            do {
+                let ts = TestSession(paneCount: 2)
+                try? Tmux.applyLayout(ts.name, event: .zoomIn)
+                check("keyBindingZoomInCommandIsDispatched",
+                      isZoomed(ts.name),
+                      "zoomIn layout event should zoom the session")
+            }
         }
 
         // === STRESS TESTS ===

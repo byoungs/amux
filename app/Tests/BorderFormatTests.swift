@@ -159,7 +159,13 @@ enum BorderFormatTests {
                   "global format should NOT check split-selected (overlay handles it)")
         }
 
-        // === 8. resetBorderStyles sets both borders to dark ===
+        // === 8. resetBorderStyles: active teal, inactive dark ===
+        //
+        // Active border lines are teal (colour43); this colors the vertical
+        // and bottom border fill around the active pane as well as the fill
+        // after the format text on the top row. Inactive borders are dark
+        // (colour235). TerminalView's overlay paints alert/split-selected
+        // on the top row over whichever base color tmux has drawn.
         do {
             let _ts = TestSession(paneCount: 1)
             _ = _ts
@@ -168,9 +174,11 @@ enum BorderFormatTests {
             let activeResult = tmux("show-options", "-gv", "pane-active-border-style")
             let inactiveResult = tmux("show-options", "-gv", "pane-border-style")
             check("resetBorderStyles-active",
-                  activeResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "fg=colour235")
+                  activeResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "fg=colour43",
+                  "active border should be teal (colour43)")
             check("resetBorderStyles-inactive",
-                  inactiveResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "fg=colour235")
+                  inactiveResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "fg=colour235",
+                  "inactive border should be dark (colour235)")
         }
 
         // === 9. Full split-start → cancel flow ===

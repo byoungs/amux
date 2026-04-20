@@ -109,6 +109,8 @@ public class FakeTmux: TmuxExecutor {
             return try handleKillPane(args)
         case "join-pane":
             return try handleJoinPane(args)
+        case "split-window":
+            return try handleSplitWindow(args)
         case "set-option", "set":
             return try handleSetOption(args)
         case "show-options":
@@ -326,8 +328,36 @@ public class FakeTmux: TmuxExecutor {
     }
 
     private func handleListSessions(_ args: [String]) throws -> String {
-        // Format is always #{session_name} in the codebase
-        return sessions.keys.sorted().joined(separator: "\n")
+        let names = sessions.keys.sorted()
+        guard let format = flagValue(args, "-F") else {
+            return names.joined(separator: "\n")
+        }
+        return names.map { evaluateFormatForSession(format, sessionName: $0) }
+            .joined(separator: "\n")
+    }
+
+    /// Format evaluator for session-level format strings used with
+    /// `list-sessions -F`. Handles `#{session_name}` and user options
+    /// `#{@KEY}` from the session's option map.
+    private func evaluateFormatForSession(
+        _ format: String, sessionName: String
+    ) -> String {
+        var result = format
+        result = result.replacingOccurrences(
+            of: "#{session_name}", with: sessionName)
+
+        let optionPattern = try! NSRegularExpression(pattern: "#\\{@([^}]+)\\}")
+        let nsResult = result as NSString
+        let matches = optionPattern.matches(
+            in: result, range: NSRange(location: 0, length: nsResult.length))
+        for match in matches.reversed() {
+            let keyRange = match.range(at: 1)
+            let key = nsResult.substring(with: keyRange)
+            let value = sessions[sessionName]?.options["@\(key)"] ?? ""
+            result = (result as NSString).replacingCharacters(
+                in: match.range, with: value)
+        }
+        return result
     }
 
     // MARK: - Window handlers
@@ -354,6 +384,44 @@ public class FakeTmux: TmuxExecutor {
             return evaluateFormatForPane(
                 format, sessionName: sessName, window: win, paneIndex: 0, pane: pane
             )
+        }
+        return ""
+    }
+
+    private func handleSplitWindow(_ args: [String]) throws -> String {
+        guard let target = flagValue(args, "-t") else {
+            throw AmuxError.tmux("split-window: missing -t")
+        }
+        let t = parseTarget(target)
+        guard let sess = sessions[t.session] else {
+            throw AmuxError.tmux("split-window: no session \(t.session)")
+        }
+        let win: Window?
+        if let wIdx = t.window {
+            win = sess.windows.first(where: { $0.index == wIdx })
+        } else {
+            win = sess.windows.first
+        }
+        guard let w = win else {
+            throw AmuxError.tmux("split-window: no window for \(target)")
+        }
+
+        let pane = FakePane(id: allocatePaneId())
+        if let cwd = flagValue(args, "-c") {
+            pane.cwd = cwd
+        }
+        w.panes.append(pane)
+        let newIndex = w.panes.count - 1
+
+        // Real tmux: new pane becomes active unless -d is passed.
+        if !hasFlag(args, "-d") {
+            w.activePaneIndex = newIndex
+        }
+
+        if let format = flagValue(args, "-F") {
+            return evaluateFormatForPane(
+                format, sessionName: t.session, window: w,
+                paneIndex: newIndex, pane: pane)
         }
         return ""
     }

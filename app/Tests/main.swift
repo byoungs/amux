@@ -65,6 +65,12 @@ run("Help", HelpTests.runAll)
 // and all state transitions. These tests run against real tmux.
 run("BorderFormat", BorderFormatTests.runAll)
 
+// Dev bundle assembly tests: verify `make build-dev-bundle` produces a
+// valid .app with the bundle identifier UNUserNotificationCenter needs.
+// Covers the exact regression where raw Mach-O launch silently disabled
+// every notification post.
+run("DevBundle", DevBundleTests.runAll)
+
 print("\n=== Integration Tests: \(totalPassed) passed, \(totalFailed) failed ===")
 
 if totalFailed > 0 {

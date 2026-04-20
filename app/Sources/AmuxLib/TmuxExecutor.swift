@@ -31,6 +31,24 @@ public protocol TmuxExecutor {
 public class LiveTmux: TmuxExecutor {
     private let socket: String?
 
+    /// Serializes Process.run()/readback/waitUntilExit across all LiveTmux
+    /// calls in this process.
+    ///
+    /// Foundation's `Process` uses an internal GCD signal source for SIGCHLD
+    /// plus shared per-process state for pipe fd inheritance during
+    /// `posix_spawn`. When many `Process` + `Pipe` pairs are launched and
+    /// torn down in rapid succession (as the integration-test runner does —
+    /// ~30 tmux subprocesses per TestSession, hundreds of sessions per run),
+    /// those internals race and the parent ends up calling
+    /// `readDataToEndOfFile` on a pipe FD that Foundation has already closed
+    /// underneath us. That surfaces as `NSPOSIXErrorDomain Code=9`
+    /// ("Bad file descriptor"), which breaks `try!` expressions in tests and
+    /// aborts the runner. A single process-wide lock around the Process
+    /// lifecycle sidesteps the race entirely at negligible cost — tmux
+    /// commands here are small and fast, so serializing them through one
+    /// lock is effectively free.
+    private static let processLock = NSLock()
+
     public init(socket: String? = nil) {
         self.socket = socket
     }
@@ -44,6 +62,9 @@ public class LiveTmux: TmuxExecutor {
     }
 
     public func execute(_ args: [String]) throws -> String {
+        LiveTmux.processLock.lock()
+        defer { LiveTmux.processLock.unlock() }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = tmuxArgs(args)
@@ -52,18 +73,34 @@ public class LiveTmux: TmuxExecutor {
         process.standardOutput = outPipe
         process.standardError = errPipe
         try process.run()
+
+        // Read BEFORE waitUntilExit so a large child output can't fill the
+        // pipe buffer and deadlock, and so we read via the FileHandle we
+        // still own rather than racing tmux/Foundation teardown.
+        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+
+        // Release the parent's read-end FDs immediately rather than
+        // waiting for ARC. (Foundation itself closes the parent's
+        // write-end after spawn; the read-end is ours.) Leaving read
+        // FDs to ARC dealloc delays their release and lets the next
+        // Process.run() race with this one's teardown.
+        try? outPipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForReading.close()
+
         guard process.terminationStatus == 0 else {
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
             let stderr = String(data: errData, encoding: .utf8) ?? ""
             throw AmuxError.tmux(stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)?
+        return String(data: outData, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     public func launch(_ args: [String]) {
+        LiveTmux.processLock.lock()
+        defer { LiveTmux.processLock.unlock() }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = tmuxArgs(args)

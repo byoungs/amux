@@ -10,6 +10,8 @@
 /// These tests call amux CLI commands to verify state transitions.
 /// The actual keyboard interception (KeyInput.swift) is tested separately.
 
+import AmuxLib
+
 enum CmdLScenarioTests {
     static func runAll() -> (passed: Int, failed: Int) {
         var passed = 0
@@ -140,9 +142,15 @@ enum CmdLScenarioTests {
 
             amuxCmd(session: ts.name, args: ["split-start"])
 
-            // Label for pane 0 should show "1" (1-based)
+            // Label for pane 0 should show "1" (1-based).
+            //
+            // The label is set by split-start as "\(active+1) \(title)". For a
+            // fresh pane with no @amux-title, the title part is empty and the
+            // label stores as "1 " (with a trailing space). Strip only the
+            // output newline — keep internal whitespace so we can verify the
+            // "1-then-space" 1-based formatting.
             let label = tmux("show-options", "-t", ts.name, "-v", "@amux-split-first-label")
-                .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                .stdout.trimmingCharacters(in: .newlines)
             check("oneBasedNumbers-label", label.hasPrefix("1 "),
                   "pane 0 label should start with '1 ' (1-based), got '\(label)'")
 
@@ -161,23 +169,46 @@ enum CmdLScenarioTests {
         }
 
         // === Scenario 7: Red border on selected pane ===
+        //
+        // Architecture note: the red border for split-selected is NOT rendered
+        // by the tmux pane-border-format any more. TerminalView.rebuildOverlays
+        // paints RGB(255,0,0) over the top border row of any pane whose
+        // @amux-split-selected=1 pane option is set. The tmux format itself
+        // only branches on pane_active (teal vs dark); split-selected and
+        // alert are overlay-rendered so they can fully recolor the top row
+        // including the fill characters tmux draws after the format text.
+        //
+        // The original Rust-era checks verified format ordering and the use
+        // of colour196 in the format. Translated to the new arch: verify the
+        // format does NOT reference split-selected (the overlay owns it) and
+        // that setPaneStyle writes the pane option the overlay reads.
         do {
-            _ = TestSession(paneCount: 3)
+            let ts = TestSession(paneCount: 3)
 
-            // Border format should check split-selected BEFORE pane_active
             let borderFormat = tmux("show-options", "-gv", "pane-border-format")
                 .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            // split-selected check should appear before pane_active in the format
-            let splitSelectedPos = borderFormat.range(of: "@amux-split-selected")?.lowerBound
-            let paneActivePos = borderFormat.range(of: "pane_active")?.lowerBound
             check("redBorder-orderMatters",
-                  splitSelectedPos != nil && paneActivePos != nil && splitSelectedPos! < paneActivePos!,
-                  "split-selected must be checked before pane_active in border format")
+                  !borderFormat.contains("@amux-split-selected"),
+                  "split-selected must NOT be in tmux format — rendered by TerminalView overlay")
 
-            // colour196 (red) should be used for split-selected
-            check("redBorder-usesRed", borderFormat.contains("colour196"),
-                  "border format should use colour196 (red) for split-selected")
+            // setPaneStyle(splitSelected: true) writes the @amux-split-selected
+            // pane option that the overlay reads to decide the red color.
+            setPaneStyle(session: ts.name, pane: 0, splitSelected: true)
+            let selected = tmux("show-options", "-p", "-t", "\(ts.name):.0", "-v", "@amux-split-selected")
+                .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            check("splitSelectedPaneOptionSet", selected == "1",
+                  "setPaneStyle(splitSelected: true) should set @amux-split-selected=1 on the pane")
+
+            // Positive red assertion — this is what the old
+            // `redBorder-usesRed` check guarded. The tmux format no longer
+            // paints it, but the overlay engine must still choose red for
+            // split-selected. If someone changes the color or deletes the
+            // branch, this fails.
+            check("redBorder-usesRed",
+                  overlayColor(alert: false, splitSelected: true, active: false)
+                    == OverlayColor(r: 255, g: 0, b: 0),
+                  "overlay engine must paint red (255,0,0) for split-selected pane")
         }
 
         // === Scenario 8: Status bar shows pick instructions ===

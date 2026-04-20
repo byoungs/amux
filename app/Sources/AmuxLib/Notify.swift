@@ -75,21 +75,6 @@ public enum Notify {
         return String(rest.dropLast())
     }
 
-    /// Send a macOS notification via osascript.
-    public static func sendNotification(title: String, message: String) throws {
-        let escapedTitle = title.replacingOccurrences(of: "\"", with: "\\\"")
-        let escapedMessage = message.replacingOccurrences(of: "\"", with: "\\\"")
-        let script = "display notification \"\(escapedMessage)\" with title \"\(escapedTitle)\""
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        process.waitUntilExit()
-    }
-
     /// Format a human-readable notification message from alert count.
     public static func formatMessage(count: Int) -> String {
         switch count {

@@ -497,8 +497,6 @@ func main() throws {
         try Tmux.setTitle(session, paneIndex: paneIndex, title: title)
 
     case "alert-pane":
-        // amux-cli alert-pane PANE_INDEX
-        // Called by Claude Code notification hook
         guard args.count >= 2 else {
             fputs("Usage: amux-cli alert-pane PANE_INDEX\n", stderr)
             exit(1)
@@ -509,30 +507,22 @@ func main() throws {
             exit(1)
         }
 
-        // Skip the active pane if terminal is frontmost
-        if Notify.isTerminalFrontmost() {
-            let active = try Tmux.activePaneIndex(session)
-            if paneIndex == active { exit(0) }
-        }
+        // Update tmux state (pane option + session alert count).
+        // applyAlertState is idempotent — re-asserting on an already-alerted
+        // pane is a no-op.
+        try applyAlertState(session: session, pane: paneIndex)
 
-        // Skip if already alerted
-        if try Tmux.getAlert(session, paneIndex: paneIndex) { exit(0) }
-
-        // Set alert state (TerminalView overlay handles coloring)
-        try Tmux.setAlert(session, paneIndex: paneIndex, alert: true)
-        let states = try Tmux.alertStates(session)
-        let count = countAlerts(states)
-        Tmux.setAlertCount(session, count: count)
-
-        // System notification if terminal not frontmost
-        if !Notify.isTerminalFrontmost() {
-            let elapsed = (try? Tmux.getLastNotificationElapsed(session)) ?? UInt64.max
-            if elapsed >= 30 {
-                let msg = Notify.formatMessage(count: count)
-                try? Notify.sendNotification(title: "amux", message: msg)
-                Tmux.setLastNotificationTime(session)
-            }
-        }
+        // Fire-and-forget: notify amux-app (if running) to post the macOS
+        // notification. amux-app owns UNUserNotificationCenter so clicks
+        // route back here. If amux-app isn't listening, we just miss the
+        // system notification — the amber pane overlay still works.
+        let event = AlertEvent(
+            session: session,
+            pane: paneIndex,
+            terminalFrontmost: Notify.isTerminalFrontmost()
+        )
+        let client = UnixSocketAlertEventClient(socketPath: defaultAlertSocketPath())
+        try? client.send(event)
 
     case "bell-watch":
         // amux-cli bell-watch --session SESSION PANE_INDEX
@@ -561,18 +551,21 @@ func main() throws {
             let bytes = Array(UnsafeBufferPointer(start: buf, count: n))
             let bells = scanBytes(state: state, buf: bytes)
             if bells > 0 {
-                // Trigger alert (same logic as alert-pane)
-                if Notify.isTerminalFrontmost() {
-                    if let active = try? Tmux.activePaneIndex(session), paneIndex == active {
-                        continue
-                    }
-                }
-                if (try? Tmux.getAlert(session, paneIndex: paneIndex)) == true { continue }
-                try? Tmux.setAlert(session, paneIndex: paneIndex, alert: true)
-                if let states = try? Tmux.alertStates(session) {
-                    let count = countAlerts(states)
-                    Tmux.setAlertCount(session, count: count)
-                }
+                // Same pipeline as `alert-pane`: mutate tmux state locally,
+                // then fire a one-shot event to amux-app so it posts the
+                // macOS notification via UNUserNotificationCenter (amux-cli
+                // is short-lived and can't own UN notifications itself).
+                // If amux-app isn't listening, the event send is a silent
+                // no-op — the amber overlay still works.
+                try? applyAlertState(session: session, pane: paneIndex)
+                let event = AlertEvent(
+                    session: session,
+                    pane: paneIndex,
+                    terminalFrontmost: Notify.isTerminalFrontmost()
+                )
+                let client = UnixSocketAlertEventClient(
+                    socketPath: defaultAlertSocketPath())
+                try? client.send(event)
             }
         }
 

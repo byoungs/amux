@@ -4,6 +4,7 @@
 /// CLI binary, tmux hooks, subprocess context.
 
 import Foundation
+import AmuxLib
 
 enum E2EAttentionTests {
     /// Read @amux-alert for a pane.
@@ -110,9 +111,17 @@ enum E2EAttentionTests {
 
             let pane1ID = paneID(ts.name, 1)
             let bin = amuxBin()
-            let hookCmd = "AMUX_SESSION=$(tmux display-message -t \(pane1ID) -p '#{session_name}') \(bin) alert-pane $(tmux display-message -t \(pane1ID) -p '#{pane_index}')"
+            let hookCmd = "AMUX_SESSION=$(tmux -L \(testTmuxSocket) display-message -t \(pane1ID) -p '#{session_name}') \(bin) alert-pane $(tmux -L \(testTmuxSocket) display-message -t \(pane1ID) -p '#{pane_index}')"
 
-            let result = runShell(hookCmd, environment: ["TMUX_PANE": pane1ID])
+            // Point any bare `tmux` calls (inside amux-cli) at the isolated
+            // test server by setting $TMUX to the test socket path. tmux
+            // parses `$TMUX` as `socket_path,pid,session_id`; the pid/session
+            // components are ignored for server selection.
+            let socketPath = "/private/tmp/tmux-\(getuid())/\(testTmuxSocket)"
+            let result = runShell(hookCmd, environment: [
+                "TMUX_PANE": pane1ID,
+                "TMUX": "\(socketPath),0,0",
+            ])
             check("hookCommandAlertsCorrectPane-succeeds", result.success,
                   "hook command should succeed: \(result.stderr)")
             check("hookCommandAlertsCorrectPane-pane0", !getAlert(ts.name, 0),
@@ -128,9 +137,14 @@ enum E2EAttentionTests {
             let ts = TestSession(paneCount: 2)
             let pane0ID = paneID(ts.name, 0)
             let bin = amuxBin()
-            let hookCmd = "AMUX_SESSION=$(tmux display-message -t \(pane0ID) -p '#{session_name}') \(bin) alert-pane $(tmux display-message -t \(pane0ID) -p '#{pane_index}')"
+            let hookCmd = "AMUX_SESSION=$(tmux -L \(testTmuxSocket) display-message -t \(pane0ID) -p '#{session_name}') \(bin) alert-pane $(tmux -L \(testTmuxSocket) display-message -t \(pane0ID) -p '#{pane_index}')"
 
-            let result = runShell(hookCmd, environment: ["TMUX_PANE": pane0ID])
+            // Point bare `tmux` calls inside amux-cli at the isolated test server.
+            let socketPath = "/private/tmp/tmux-\(getuid())/\(testTmuxSocket)"
+            let result = runShell(hookCmd, environment: [
+                "TMUX_PANE": pane0ID,
+                "TMUX": "\(socketPath),0,0",
+            ])
             check("hookCommandSkipsActiveFrontmost-succeeds", result.success)
             let alerted = getAlert(ts.name, 0)
             if !alerted {
@@ -288,21 +302,40 @@ enum E2EAttentionTests {
                   "count should be zero after full cycle, got \(getAlertCount(ts.name))")
         }
 
-        // border_format_has_three_states
+        // border_format_handles_active_inactive; alert is overlay-rendered
+        //
+        // Architecture note: tmux format handles only pane_active (teal) vs
+        // inactive (dark). Alert state is tracked as the @amux-alert pane
+        // option and rendered by TerminalView.rebuildOverlays() painting
+        // amber over the top border row — not by the tmux format string.
         do {
-            let ts = TestSession(paneCount: 1)
+            let ts = TestSession(paneCount: 2)
             let result = tmux("show-options", "-gv", "pane-border-format")
             let fmt = result.stdout
             check("borderFormatThreeStates-paneActive", fmt.contains("pane_active"),
-                  "should check pane_active")
-            check("borderFormatThreeStates-amuxAlert", fmt.contains("@amux-alert"),
-                  "should check @amux-alert")
+                  "format should branch on pane_active")
             check("borderFormatThreeStates-teal", fmt.contains("colour43"),
-                  "should have teal for active")
-            check("borderFormatThreeStates-amber", fmt.contains("colour214"),
-                  "should have amber for alert")
+                  "format should have teal for active")
             check("borderFormatThreeStates-dark", fmt.contains("colour236"),
-                  "should have dark for inactive")
+                  "format should have dark for inactive")
+            check("alertRenderedAsOverlayNotInFormat", !fmt.contains("@amux-alert"),
+                  "alert state must NOT be in tmux format — rendered by TerminalView overlay")
+
+            // Verify the architectural contract: setPaneStyle writes
+            // @amux-alert as a pane option that the overlay layer reads.
+            setPaneStyle(session: ts.name, pane: 1, alert: true)
+            check("alertStateTrackedAsPaneOption", getAlert(ts.name, 1),
+                  "setPaneStyle(alert: true) must set @amux-alert=1 on the pane")
+
+            // Positive amber assertion — this is what the old
+            // `borderFormatThreeStates-amber` check guarded. The tmux format
+            // no longer paints it, but the overlay engine must still choose
+            // amber for a non-active alerted pane. If someone changes the
+            // overlay color or deletes the alert branch, this fails.
+            check("borderFormatThreeStates-amber",
+                  overlayColor(alert: true, splitSelected: false, active: false)
+                    == OverlayColor(r: 214, g: 135, b: 0),
+                  "overlay engine must paint amber (214,135,0) for non-active alerted pane")
         }
 
         // status_bar_has_alert_badge
@@ -315,6 +348,60 @@ enum E2EAttentionTests {
             check("statusBarAlertBadge-indicator",
                   status.contains("\u{25CF}") || status.contains("colour214"),
                   "should have alert indicator styling")
+        }
+
+        // Cross-session global alert count (bug: macOS notification body
+        // must reflect all Claudes waiting across all amux spaces, not
+        // just the originating session's count).
+        //
+        // Run against real tmux + listSpacesWithAlerts, which is what
+        // the live notification poster in amux-app consumes.
+        do {
+            let tsA = TestSession(paneCount: 2)
+            let tsB = TestSession(paneCount: 3)
+            Tmux.markAsManaged(tsA.name)
+            Tmux.markAsManaged(tsB.name)
+
+            setPaneStyle(session: tsA.name, pane: 1, alert: true)
+            Tmux.setAlertCount(tsA.name, count: 1)
+            setPaneStyle(session: tsB.name, pane: 0, alert: true)
+            setPaneStyle(session: tsB.name, pane: 2, alert: true)
+            Tmux.setAlertCount(tsB.name, count: 2)
+
+            let spaces = try! Tmux.listSpacesWithAlerts()
+            check("globalCount-bothManagedListed",
+                  spaces.sessions.contains(tsA.name) && spaces.sessions.contains(tsB.name),
+                  "listSpacesWithAlerts must return every managed session (got: \(spaces.sessions))")
+            check("globalCount-perSessionPreserved",
+                  spaces.alertCounts[tsA.name] == 1 && spaces.alertCounts[tsB.name] == 2,
+                  "per-session counts must be preserved for the status-bar badge")
+            check("globalCount-sumsAcrossSessions",
+                  globalAlertCount(spaces.alertCounts) == 3,
+                  "global count must be the sum (1+2=3) — this is the number the macOS notification body should report")
+        }
+
+        // Only managed sessions contribute to the global count. A bare
+        // tmux session that wasn't marked by amux (say the user started
+        // a tmux session outside amux entirely) must not leak into the
+        // notification body.
+        do {
+            let managed = TestSession(paneCount: 2)
+            let foreign = TestSession(paneCount: 2)
+            Tmux.markAsManaged(managed.name)
+            // foreign deliberately NOT marked managed.
+
+            setPaneStyle(session: managed.name, pane: 1, alert: true)
+            Tmux.setAlertCount(managed.name, count: 1)
+            setPaneStyle(session: foreign.name, pane: 1, alert: true)
+            Tmux.setAlertCount(foreign.name, count: 99)   // obvious wrong
+
+            let spaces = try! Tmux.listSpacesWithAlerts()
+            check("globalCount-excludesUnmanagedSession",
+                  !spaces.sessions.contains(foreign.name),
+                  "unmanaged session must not appear in listSpacesWithAlerts")
+            check("globalCount-onlyManagedSummed",
+                  globalAlertCount(spaces.alertCounts) == 1,
+                  "global count must only sum managed sessions (1), not include the 99 from the foreign session")
         }
 
         // Deferred to Phase 4: notification_messages (pure function, no CLI)

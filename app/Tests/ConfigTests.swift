@@ -4,6 +4,7 @@
 /// are adapted to read the values from tmux after amux applies its config.
 
 import Foundation
+import AmuxLib
 
 enum ConfigTests {
     static func runAll() -> (passed: Int, failed: Int) {
@@ -23,16 +24,38 @@ enum ConfigTests {
         do {
             let ts = TestSession(paneCount: 2)
 
-            // border_format_uses_explicit_alert_comparison
+            // Alert state: tmux format no longer references @amux-alert
+            // (TerminalView.rebuildOverlays reads the option and paints overlays).
+            // Verify (a) the format doesn't touch @amux-alert at all, and
+            // (b) setPaneStyle(alert: true) sets @amux-alert=1 on the pane —
+            // which is exactly what TerminalView reads when building overlays.
             do {
                 let result = tmux("show-options", "-gv", "pane-border-format")
                 let fmt = result.stdout
-                check("borderFormatNoTruthyAlertCheck",
-                      !fmt.contains("#{?@amux-alert"),
-                      "border format must not use truthy check on @amux-alert")
-                check("borderFormatExplicitAlertComparison",
-                      fmt.contains("#{==:#{@amux-alert},1}"),
-                      "border format must use explicit ==1 comparison for @amux-alert")
+                check("borderFormatDoesNotReferenceAlert",
+                      !fmt.contains("@amux-alert"),
+                      "border format must not reference @amux-alert — TerminalView overlays render alert state")
+
+                setPaneStyle(session: ts.name, pane: 1, alert: true)
+                let alertOpt = tmux("show-options", "-p", "-t", "\(ts.name):.1", "-v", "@amux-alert")
+                    .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                check("setPaneStyleAlertSetsPaneOption",
+                      alertOpt == "1",
+                      "setPaneStyle(alert: true) must set @amux-alert=1 on the pane (got: \(alertOpt))")
+
+                // Positive color assertion: the overlay engine must paint amber
+                // for a non-active alerted pane. This is the actual
+                // user-observable behavior the old "amber" tests guarded.
+                check("alertRendersAmberOverlay",
+                      overlayColor(alert: true, splitSelected: false, active: false)
+                        == OverlayColor(r: 214, g: 135, b: 0),
+                      "alert on non-active pane must render amber (214,135,0)")
+                check("activeAlertedPaneNoOverlay",
+                      overlayColor(alert: true, splitSelected: false, active: true) == nil,
+                      "alert on active pane must not render overlay (alert clears on focus)")
+
+                // Reset so later checks see a clean state.
+                setPaneStyle(session: ts.name, pane: 1, alert: false)
             }
 
             // border_format_contains_unicode_characters
@@ -68,31 +91,52 @@ enum ConfigTests {
                       "status-right must have cmd-held color conditional")
             }
 
-            // border_format_has_split_selected_state
+            // Split-selected state: same architectural split as alert —
+            // tmux format doesn't mention @amux-split-selected; TerminalView
+            // paints the red overlay. Verify the pane option is still the
+            // contract that setPaneStyle writes and TerminalView reads.
             do {
                 let result = tmux("show-options", "-gv", "pane-border-format")
                 let fmt = result.stdout
-                check("borderFormatHasSplitSelectedState",
-                      fmt.contains("#{==:#{@amux-split-selected},1}"),
-                      "border format must check @amux-split-selected with explicit ==1 comparison")
+                check("borderFormatDoesNotReferenceSplitSelected",
+                      !fmt.contains("@amux-split-selected"),
+                      "border format must not reference @amux-split-selected — TerminalView overlays render split-selected state")
+
+                setPaneStyle(session: ts.name, pane: 0, splitSelected: true)
+                let splitOpt = tmux("show-options", "-p", "-t", "\(ts.name):.0", "-v", "@amux-split-selected")
+                    .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                check("setPaneStyleSplitSelectedSetsPaneOption",
+                      splitOpt == "1",
+                      "setPaneStyle(splitSelected: true) must set @amux-split-selected=1 on the pane (got: \(splitOpt))")
+
+                // Positive color assertion: the overlay engine must paint red
+                // for a split-selected pane, regardless of active state.
+                check("splitSelectedRendersRedOverlay",
+                      overlayColor(alert: false, splitSelected: true, active: false)
+                        == OverlayColor(r: 255, g: 0, b: 0),
+                      "split-selected must render red (255,0,0)")
+                check("splitSelectedWinsOverAlert",
+                      overlayColor(alert: true, splitSelected: true, active: false)
+                        == OverlayColor(r: 255, g: 0, b: 0),
+                      "split-selected must win over alert (red, not amber)")
+
+                setPaneStyle(session: ts.name, pane: 0, splitSelected: false)
             }
 
-            // key_bindings_pass_session_flag
+            // Key bindings moved from tmux to the Swift app (KeyInput.swift).
+            // Verify the pure character→command mapping that KeyInput delegates to:
+            //   Cmd-= → zoomIn,  Cmd-1 → zoomTo(0).
+            // The session is resolved at dispatch time by the caller, so there's
+            // no "--session" flag to check anymore — the AmuxCommand itself carries
+            // the intent and the caller binds it to the active session.
             do {
-                let result = tmux("list-keys", "-T", "root")
-                let keys = result.stdout
+                check("cmdEqualsMapsToZoomIn",
+                      KeyCommand.amuxCommand(for: "=") == .zoomIn,
+                      "Cmd-= must map to AmuxCommand.zoomIn (got: \(String(describing: KeyCommand.amuxCommand(for: "="))))")
 
-                let zoomInLine = keys.components(separatedBy: "\n")
-                    .first { $0.contains("C-=") && $0.contains("amux") }
-                check("keyBindingZoomInHasSessionFlag",
-                      zoomInLine?.contains("--session") ?? false,
-                      "C-= binding should include --session flag. Found: \(zoomInLine ?? "nil")")
-
-                let zoom1Line = keys.components(separatedBy: "\n")
-                    .first { $0.contains("C-1") && $0.contains("amux") }
-                check("keyBindingZoom1HasSessionFlag",
-                      zoom1Line?.contains("--session") ?? false,
-                      "C-1 binding should include --session flag. Found: \(zoom1Line ?? "nil")")
+                check("cmd1MapsToZoomToPane0",
+                      KeyCommand.amuxCommand(for: "1") == .zoomTo(0),
+                      "Cmd-1 must map to AmuxCommand.zoomTo(0) (got: \(String(describing: KeyCommand.amuxCommand(for: "1"))))")
             }
 
             // status_right_has_picking_mode

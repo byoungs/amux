@@ -805,13 +805,26 @@ public enum Tmux {
 
     /// Record the current time as the last system notification timestamp.
     public static func setLastNotificationTime(_ session: String) {
-        let now = Int(Date().timeIntervalSince1970)
-        runIgnoring(["set-environment", "-t", session, "AMUX_LAST_NOTIFY", String(now)])
+        setLastNotificationTime(session, at: UInt64(Date().timeIntervalSince1970))
+    }
+
+    /// Record a specific timestamp as the last notification time. The
+    /// explicit overload lets tests pin the clock without stubbing `Date`.
+    public static func setLastNotificationTime(_ session: String, at seconds: UInt64) {
+        runIgnoring(["set-environment", "-t", session, "AMUX_LAST_NOTIFY", String(seconds)])
     }
 
     /// Get seconds elapsed since the last system notification.
     /// Returns UInt64.max if no notification has been sent.
     public static func getLastNotificationElapsed(_ session: String) throws -> UInt64 {
+        try getLastNotificationElapsed(session, now: UInt64(Date().timeIntervalSince1970))
+    }
+
+    /// Overload with an explicit clock so tests can pin "now" without
+    /// stubbing `Date`.
+    public static func getLastNotificationElapsed(
+        _ session: String, now: UInt64
+    ) throws -> UInt64 {
         let stdout = try run(["show-environment", "-t", session, "AMUX_LAST_NOTIFY"])
         let timestampStr = stdout.hasPrefix("AMUX_LAST_NOTIFY=")
             ? String(stdout.dropFirst("AMUX_LAST_NOTIFY=".count))
@@ -819,8 +832,29 @@ public enum Tmux {
         guard let ts = timestampStr, let timestamp = UInt64(ts), timestamp > 0 else {
             return UInt64.max
         }
-        let now = UInt64(Date().timeIntervalSince1970)
         return now >= timestamp ? now - timestamp : 0
+    }
+
+    /// Record the global alert count at the moment of the last posted
+    /// notification. `processAlertTrigger` uses this to decide whether
+    /// the count has actually increased since the last ping, so that
+    /// re-asserting an existing alert or dismissing-and-re-alerting
+    /// another pane within the debounce window doesn't re-notify.
+    public static func setLastNotifiedGlobalCount(_ session: String, count: Int) {
+        runIgnoring([
+            "set-environment", "-t", session,
+            "AMUX_LAST_NOTIFIED_GLOBAL", String(count)
+        ])
+    }
+
+    /// Get the global alert count recorded at the last posted notification.
+    /// Returns 0 if no notification has been sent yet.
+    public static func getLastNotifiedGlobalCount(_ session: String) throws -> Int {
+        let stdout = try run(["show-environment", "-t", session, "AMUX_LAST_NOTIFIED_GLOBAL"])
+        let valueStr = stdout.hasPrefix("AMUX_LAST_NOTIFIED_GLOBAL=")
+            ? String(stdout.dropFirst("AMUX_LAST_NOTIFIED_GLOBAL=".count))
+            : nil
+        return valueStr.flatMap { Int($0) } ?? 0
     }
 
     // MARK: - Pane operations

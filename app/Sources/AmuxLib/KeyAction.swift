@@ -52,3 +52,35 @@ public enum InputMode: Equatable {
     /// Split-pick mode: arrows navigate, numbers pick, Esc cancels
     case picking
 }
+
+/// Pure mapping from a Cmd+key character to the corresponding KeyAction.
+///
+/// Lives in AmuxLib (not AmuxTerm) so it can be tested without AppKit.
+/// KeyInput in AmuxTerm translates NSEvents into characters and delegates
+/// here; AppKit-free test targets can call it directly with literal strings.
+///
+/// Unknown Cmd-key → `.sendToPTY(ctrlBytes)` fallback is handled by the
+/// caller since it requires the byte encoder in AmuxTerm.
+public enum KeyCommand {
+    /// Returns the amux action for a Cmd-key character, or nil if the
+    /// character doesn't bind to an amux command.
+    public static func amuxCommand(for chars: String) -> AmuxCommand? {
+        switch chars {
+        case "=":  return .zoomIn          // Cmd-+ (zoom in)
+        case "-":  return .zoomOut         // Cmd-- (zoom out / spaces)
+        case "n":  return .newPane         // Cmd-N (new pane)
+        case "p":  return .spaces          // Cmd-P (spaces picker)
+        case "s":  return .send            // Cmd-S (send to space)
+        case "l":  return .splitStart      // Cmd-L (split start)
+        case "[":  return .panePrev        // Cmd-[ (previous pane)
+        case "]":  return .paneNext        // Cmd-] (next pane)
+        case "/":  return .help            // Cmd-/ (help)
+        default:
+            // Cmd-1..9 → zoom to pane (0-indexed internally)
+            if let digit = Int(chars), digit >= 1 && digit <= 9 {
+                return .zoomTo(digit - 1)
+            }
+            return nil
+        }
+    }
+}

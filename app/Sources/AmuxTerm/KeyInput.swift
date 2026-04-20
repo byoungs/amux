@@ -44,24 +44,16 @@ enum KeyInput {
     }
 
     /// Map Cmd+key to an amux command.
+    ///
+    /// Delegates to the AppKit-free `KeyCommand.amuxCommand` in AmuxLib for
+    /// the character→command mapping, then falls back to PTY bytes for
+    /// characters that don't bind to an amux action.
     private static func amuxAction(for chars: String) -> KeyAction {
-        switch chars {
-        case "=":  return .amux(.zoomIn)        // Cmd-+ (zoom in)
-        case "-":  return .amux(.zoomOut)        // Cmd-- (zoom out / spaces)
-        case "n":  return .amux(.newPane)        // Cmd-N (new pane)
-        case "p":  return .amux(.spaces)         // Cmd-P (spaces picker)
-        case "s":  return .amux(.send)           // Cmd-S (send to space)
-        case "l":  return .amux(.splitStart)     // Cmd-L (split start)
-        case "[":  return .amux(.panePrev)       // Cmd-[ (previous pane)
-        case "]":  return .amux(.paneNext)       // Cmd-] (next pane)
-        default:
-            // Cmd-1..9 → zoom to pane (0-indexed internally)
-            if let digit = Int(chars), digit >= 1 && digit <= 9 {
-                return .amux(.zoomTo(digit - 1))
-            }
-            // Unknown Cmd-key — send as Ctrl-key to PTY for compatibility
-            return .sendToPTY(ctrlBytes(for: chars))
+        if let cmd = KeyCommand.amuxCommand(for: chars) {
+            return .amux(cmd)
         }
+        // Unknown Cmd-key — send as Ctrl-key to PTY for compatibility
+        return .sendToPTY(ctrlBytes(for: chars))
     }
 
     /// Handle keys in picking mode.

@@ -82,3 +82,44 @@ public func setSessionStatus(
 public func setCmdHeld(session: String, held: Bool) {
     Tmux.runRaw(["set-option", "-t", session, "@amux-cmd-held", held ? "1" : "0"])
 }
+
+/// 24-bit RGB color for a top-border overlay.
+public struct OverlayColor: Equatable {
+    public let r: UInt8
+    public let g: UInt8
+    public let b: UInt8
+
+    public init(r: UInt8, g: UInt8, b: UInt8) {
+        self.r = r
+        self.g = g
+        self.b = b
+    }
+}
+
+/// Pure decision: given a pane's state, what color (if any) should its top
+/// border row be painted? Returns nil for "let tmux draw it" (active teal or
+/// inactive dark via pane-border-format).
+///
+/// Rules:
+///   - split-selected wins over alert (red always takes precedence on picking)
+///   - alert only paints on non-active panes (alert clears on focus, so an
+///     active+alerted pane is a transient state that shouldn't render amber)
+///   - otherwise nil — tmux renders the active/inactive base color itself
+///
+/// Factored out of `TerminalView.rebuildOverlays` so integration tests can
+/// pin the color values without constructing a TerminalView (which pulls in
+/// AppKit). TerminalView remains responsible for querying tmux for pane
+/// positions and dispatching the paint — only the color decision lives here.
+public func overlayColor(
+    alert: Bool,
+    splitSelected: Bool,
+    active: Bool
+) -> OverlayColor? {
+    if splitSelected {
+        return OverlayColor(r: 255, g: 0, b: 0)    // red
+    }
+    if alert && !active {
+        return OverlayColor(r: 214, g: 135, b: 0)  // amber
+    }
+    return nil
+}

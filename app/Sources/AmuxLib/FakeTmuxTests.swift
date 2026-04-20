@@ -330,6 +330,61 @@ public enum FakeTmuxTests {
                   && fake.launchedCommands[0] == ["display-popup", "-t", "test", "-E", "echo hi"])
         }
 
+        // --- split-window ---
+
+        do {
+            let tmux = FakeTmux()
+            tmux.addSession("s", panes: 2)
+
+            let result = try tmux.execute([
+                "split-window", "-t", "s:0", "-d", "-P", "-F", "#{pane_id}",
+                "-c", "/foo",
+            ])
+            check(
+                "split-window appends pane",
+                tmux.sessions["s"]?.windows.first?.panes.count == 3,
+                "expected 3 panes, got \(tmux.sessions["s"]?.windows.first?.panes.count ?? -1)")
+            check(
+                "split-window returns new pane id",
+                result.hasPrefix("%"),
+                "expected %N id, got '\(result)'")
+            check(
+                "split-window -d keeps original active pane",
+                tmux.sessions["s"]?.windows.first?.activePaneIndex == 0)
+            check(
+                "split-window -c sets cwd on new pane",
+                tmux.sessions["s"]?.windows.first?.panes.last?.cwd == "/foo")
+        } catch {
+            failed += 1
+            print("FAIL: split-window — \(error)")
+        }
+
+        do {
+            let tmux = FakeTmux()
+            tmux.addSession("s", panes: 2)
+            _ = try? tmux.execute(["split-window", "-t", "s:0"])
+            check(
+                "split-window without -d activates new pane",
+                tmux.sessions["s"]?.windows.first?.activePaneIndex == 2)
+        }
+
+        do {
+            let tmux = FakeTmux()
+            tmux.addSession("s", panes: 1)
+            var threw = false
+            do { _ = try tmux.execute(["split-window"]) }
+            catch { threw = true }
+            check("split-window missing -t throws", threw)
+        }
+
+        do {
+            let tmux = FakeTmux()
+            var threw = false
+            do { _ = try tmux.execute(["split-window", "-t", "nope:0"]) }
+            catch { threw = true }
+            check("split-window unknown session throws", threw)
+        }
+
         print("FakeTmuxTests: \(passed) passed, \(failed) failed")
         if failed > 0 { fatalError("\(failed) FakeTmux tests failed") }
     }

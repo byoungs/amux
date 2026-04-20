@@ -1,6 +1,7 @@
 import AppKit
 import AmuxLib
 import CVterm
+import UserNotifications
 
 @main
 struct AmuxTermApp {
@@ -14,6 +15,7 @@ struct AmuxTermApp {
             BellTests.runAll()
             LandingTests.runAll()
             AlertTests.runAll()
+            AlertNotificationTests.runAll()
             LayoutEngineTests.runAll()
             StickyTests.runAll()
             FakeTmuxTests.runAll()
@@ -21,6 +23,8 @@ struct AmuxTermApp {
             SplitRestoreTests.runAll()
             PaneStyleTests.runAll()
             LinkDetectorTests.runAll()
+            AlertEventTransportTests.runAll()
+            ClickDispatchTests.runAll()
             print("All tests passed")
             #else
             print("Tests only available in debug builds")
@@ -35,10 +39,29 @@ struct AmuxTermApp {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+/// Activator that raises the amux app via NSApp.activate. Used by
+/// the notification click dispatcher to ensure the click brings amux
+/// to the foreground even when Claude Code (or any other app) is
+/// frontmost at click time.
+private final class NSAppActivator: AppActivator {
+    func activateApp() {
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     var window: NSWindow?
     var termView: TerminalView?
     var controller: AppController?
+
+    // Alert-notification plumbing. The poster owns the
+    // UNUserNotificationCenter side (bug 1 fix: clicks route to this
+    // process, not AppleScript). The server receives AlertEvents from
+    // amux-cli (which fires them on bells / Claude-Code hooks) and
+    // decides whether to post via `processAlertTrigger`.
+    private let notificationPoster = UNNotificationPoster()
+    private var alertServer: UnixSocketAlertEventServer?
+    private let clickActivator = NSAppActivator()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -212,6 +235,79 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         NSApp.activate(ignoringOtherApps: true)
+
+        // Wire alert notifications. Ordering matters: set the delegate
+        // BEFORE requesting authorization so the OS knows who to call
+        // back when the user grants permission, and BEFORE binding the
+        // socket so the first event doesn't race delegate registration.
+        UNUserNotificationCenter.current().delegate = self
+        notificationPoster.requestAuthorization()
+
+        startAlertEventServer()
+    }
+
+    private func startAlertEventServer() {
+        let path = defaultAlertSocketPath()
+        let server = UnixSocketAlertEventServer(socketPath: path)
+        self.alertServer = server
+        do {
+            try server.start { [weak self] event in
+                // Server handler runs on a background thread. Hop to
+                // main before touching Tmux.executor / UN APIs, both
+                // of which are main-thread-affine.
+                DispatchQueue.main.async {
+                    guard let poster = self?.notificationPoster else { return }
+                    let now = UInt64(Date().timeIntervalSince1970)
+                    try? processAlertTrigger(event, nowSeconds: now, poster: poster)
+                }
+            }
+            // Success log so integration tests (and users debugging)
+            // can wait for a concrete "server is ready" signal instead
+            // of sleeping and hoping.
+            fputs("amux: alert-event server listening at \(path)\n", stderr)
+        } catch {
+            fputs("amux: failed to start alert-event server: \(error)\n", stderr)
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        alertServer?.stop()
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    /// Show the notification banner even when amux itself is in the
+    /// foreground (the user can be in a different space / focused on
+    /// a non-amux window within amux's app). Without this, macOS
+    /// silently suppresses the banner while amux is frontmost.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+
+    /// Click handler: route the click back to the originating session
+    /// and pane via the pure click router, then dispatch.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        defer { completionHandler() }
+
+        // userInfo is [AnyHashable: Any]; our payload uses [String: String].
+        var userInfo: [String: String] = [:]
+        for (k, v) in response.notification.request.content.userInfo {
+            if let ks = k as? String, let vs = v as? String {
+                userInfo[ks] = vs
+            }
+        }
+
+        let managed = (try? Tmux.listSpacesWithAlerts().sessions) ?? []
+        let action = routeNotificationClick(userInfo: userInfo, managedSessions: managed)
+        try? performClickAction(action, activator: clickActivator)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

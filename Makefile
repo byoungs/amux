@@ -55,13 +55,34 @@ app:
 	@echo "Built amux-app — run: app/.build/release/amux-app"
 
 SWIFT_BUILD_DIR := app/.build/arm64-apple-macosx/debug
+DEV_APP := build/amux-dev.app
 
-app-dev:
+# Assemble the dev .app bundle. Standalone target so integration tests
+# can invoke it. UNUserNotificationCenter requires Bundle.main.bundleIdentifier;
+# raw Mach-O binaries have none, and UN silently drops every post in that
+# state — that's the regression this target exists to prevent.
+#
+# The binary is a symlink into the swift-build output so `make dev` after
+# a code change picks up the new binary without re-copying.
+#
+# DEV_APP can be overridden per-invocation (tests use a temp path).
+build-dev-bundle:
 	cd app && swift build
-	@# Symlink amux-cli to ~/.local/bin so hooks can find it
+	@mkdir -p $(DEV_APP)/Contents/MacOS
+	@mkdir -p $(DEV_APP)/Contents/Resources
+	@cp app/Resources/Info.plist $(DEV_APP)/Contents/Info.plist
+	@cp app/Resources/amux.icns $(DEV_APP)/Contents/Resources/amux.icns
+	@ln -sf $(CURDIR)/$(SWIFT_BUILD_DIR)/amux-app $(DEV_APP)/Contents/MacOS/amux-app
+
+app-dev: build-dev-bundle
+	@# Symlink amux-cli to ~/.local/bin so tmux hooks can find it
 	@mkdir -p $(HOME)/.local/bin
 	@ln -sf $(CURDIR)/$(SWIFT_BUILD_DIR)/amux-cli $(HOME)/.local/bin/amux-cli
-	$(SWIFT_BUILD_DIR)/amux-app
+	@# Kill any running dev instance so the fresh binary is what launches
+	@killall amux-app 2>/dev/null || true
+	@sleep 0.3
+	@# Launch via LaunchServices so macOS treats it as a proper bundled app
+	open $(DEV_APP)
 
 app-test:
 	cd app && swift build

@@ -297,16 +297,19 @@ final class TerminalView: NSView {
     func rebuildOverlays() {
         var overlays: [PaneBorderOverlay] = []
 
-        // Split-selected pane (from AppController callback)
-        if let bounds = splitSelectedPaneBounds {
+        // Split-selected pane (from AppController callback).
+        // Color decision delegated to AmuxLib.overlayColor — single source of
+        // truth so integration tests can pin the exact RGB values without
+        // constructing a TerminalView.
+        if let bounds = splitSelectedPaneBounds,
+           let color = overlayColor(alert: false, splitSelected: true, active: false) {
             overlays.append(PaneBorderOverlay(
                 top: bounds.top, left: bounds.left,
                 width: bounds.width, height: bounds.height,
-                r: 255, g: 0, b: 0))  // red
+                r: color.r, g: color.g, b: color.b))
         }
 
-        // Alert panes (query tmux for positions + alert + active state)
-        // Skip active pane — tmux renders it teal, and alert is dismissed on focus.
+        // Alert panes (query tmux for positions + alert + active state).
         let panesStr = Tmux.runRaw(["list-panes", "-F",
             "#{pane_top} #{pane_left} #{pane_width} #{pane_height} #{@amux-alert} #{pane_active}"])
         for line in panesStr.split(separator: "\n") {
@@ -314,15 +317,22 @@ final class TerminalView: NSView {
             guard parts.count >= 6,
                   let top = Int(parts[0]), let left = Int(parts[1]),
                   let width = Int(parts[2]), let height = Int(parts[3]) else { continue }
-            let alert = String(parts[4])
-            let active = String(parts[5])
-            if alert == "1" && active != "1" {
-                // Don't overlay if this pane is also split-selected (red wins)
-                if let sp = splitSelectedPaneBounds,
-                   sp.top == top && sp.left == left { continue }
+            let alert = String(parts[4]) == "1"
+            let active = String(parts[5]) == "1"
+
+            // Don't stack amber on a pane already painted red by split-selected
+            // (the pure decision function already returns red for splitSelected,
+            // but splitSelectedPaneBounds is tracked out-of-band so we compare
+            // bounds directly here).
+            let alreadyRed = splitSelectedPaneBounds.map {
+                $0.top == top && $0.left == left
+            } ?? false
+            if alreadyRed { continue }
+
+            if let color = overlayColor(alert: alert, splitSelected: false, active: active) {
                 overlays.append(PaneBorderOverlay(
                     top: top, left: left, width: width, height: height,
-                    r: 214, g: 135, b: 0))  // amber
+                    r: color.r, g: color.g, b: color.b))
             }
         }
 

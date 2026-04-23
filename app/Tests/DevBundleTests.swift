@@ -129,25 +129,41 @@ enum DevBundleTests {
               pkgType == "APPL",
               "CFBundlePackageType should be 'APPL', got '\(pkgType)'")
 
-        // MARK: - Binary is current (symlink resolves to the debug build)
+        // MARK: - Binary is a real file, not a symlink
+        //
+        // dyld resolves the executable path through any symlinks before
+        // computing Bundle.main. A symlink into .build/ makes
+        // mainBundle.bundleURL point at the build dir (no Info.plist),
+        // which makes UNUserNotificationCenter.current() abort with
+        // "bundleProxyForCurrentProcess is nil" on macOS 15.7+.
+        let isSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: binary)) != nil
+        check("bundle-binaryNotSymlink", !isSymlink,
+              "binary at \(binary) is a symlink — dyld will resolve it and break Bundle.main")
+        let attrs = try? FileManager.default.attributesOfItem(atPath: binary)
+        let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+        check("bundle-binaryNonEmpty", size > 0,
+              "binary at \(binary) has zero size")
 
-        // We don't just want the binary to exist — we want it to be
-        // the SAME build the unit-test suite ran against, so tests
-        // and manual dev use the same code path. The Makefile uses
-        // an arch-specific subdir; resolve both.
-        if let resolved = try? FileManager.default.destinationOfSymbolicLink(atPath: binary) {
-            check("bundle-binaryIsSymlink-resolvesToDebugBuild",
-                  resolved.contains(".build")
-                  && resolved.hasSuffix("/amux-app"),
-                  "symlink target looks wrong: '\(resolved)'")
-        } else {
-            // Non-symlink is acceptable too (release DMG path); just
-            // verify it's a real file.
-            let attrs = try? FileManager.default.attributesOfItem(atPath: binary)
-            let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
-            check("bundle-binaryNonEmpty", size > 0,
-                  "binary at \(binary) has zero size")
-        }
+        // MARK: - Stale-symlink upgrade
+        //
+        // Simulate a bundle left over from the old Makefile (which used
+        // ln -sf). A naive `cp` fails with "SRC and DST are identical"
+        // because the symlink already points at SRC — leaving the bundle
+        // with the stale symlink and a failing make target. Assert that
+        // re-running build-dev-bundle over a pre-existing symlink
+        // succeeds and replaces it with a real file.
+        let swiftBinary = "\(repoRoot)/app/.build/arm64-apple-macosx/debug/amux-app"
+        try? FileManager.default.removeItem(atPath: binary)
+        try? FileManager.default.createSymbolicLink(
+            atPath: binary, withDestinationPath: swiftBinary)
+        let rerunResult = runShell(
+            "make -C \(shellEscape(repoRoot)) build-dev-bundle DEV_APP=\(shellEscape(bundlePath))")
+        check("make-build-dev-bundle-overStaleSymlink-succeeds",
+              rerunResult.success,
+              "make failed over stale symlink (exit \(rerunResult.status)): \(rerunResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
+        let isStillSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: binary)) != nil
+        check("bundle-staleSymlinkReplacedWithRealFile", !isStillSymlink,
+              "binary at \(binary) is still a symlink after rerun")
 
         print("DevBundleTests: \(passed) passed, \(failed) failed")
         return (passed, failed)

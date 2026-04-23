@@ -58,12 +58,15 @@ SWIFT_BUILD_DIR := app/.build/arm64-apple-macosx/debug
 DEV_APP := build/amux-dev.app
 
 # Assemble the dev .app bundle. Standalone target so integration tests
-# can invoke it. UNUserNotificationCenter requires Bundle.main.bundleIdentifier;
-# raw Mach-O binaries have none, and UN silently drops every post in that
-# state — that's the regression this target exists to prevent.
+# can invoke it. UNUserNotificationCenter requires Bundle.main to resolve
+# to the .app bundle (for Info.plist's CFBundleIdentifier). On macOS 15.7+
+# UN asserts "bundleProxyForCurrentProcess is nil" and aborts if it can't;
+# older OSes silently dropped posts. Either way, the bundle must be real.
 #
-# The binary is a symlink into the swift-build output so `make dev` after
-# a code change picks up the new binary without re-copying.
+# The executable is COPIED (not symlinked) because dyld resolves the
+# executable path via its symlink before computing Bundle.main — a symlink
+# into .build/ makes mainBundle.bundleURL point at .build/..., not the
+# .app, so Info.plist is never found.
 #
 # DEV_APP can be overridden per-invocation (tests use a temp path).
 build-dev-bundle:
@@ -72,7 +75,10 @@ build-dev-bundle:
 	@mkdir -p $(DEV_APP)/Contents/Resources
 	@cp app/Resources/Info.plist $(DEV_APP)/Contents/Info.plist
 	@cp app/Resources/amux.icns $(DEV_APP)/Contents/Resources/amux.icns
-	@ln -sf $(CURDIR)/$(SWIFT_BUILD_DIR)/amux-app $(DEV_APP)/Contents/MacOS/amux-app
+	@# rm first so a leftover symlink from an older Makefile version doesn't
+	@# make cp bail with "SRC and DST are identical (not copied)".
+	@rm -f $(DEV_APP)/Contents/MacOS/amux-app
+	@cp $(CURDIR)/$(SWIFT_BUILD_DIR)/amux-app $(DEV_APP)/Contents/MacOS/amux-app
 
 app-dev: build-dev-bundle
 	@# Symlink amux-cli to ~/.local/bin so tmux hooks can find it

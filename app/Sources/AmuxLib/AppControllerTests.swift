@@ -273,6 +273,10 @@ public enum AppControllerTests {
             check("newPane-increases",
                   count == 3,
                   "should have 3 panes after adding one, got \(count)")
+            let active = fake.sessions["test"]?.windows.first?.activePaneIndex ?? -1
+            check("newPane-focusesNewPane",
+                  active == count - 1,
+                  "new pane should be active, got index \(active) of \(count) panes")
         }
 
         // ============================================================

@@ -262,10 +262,20 @@ public enum Tmux {
             args.append(contentsOf: ["-c", dir])
         }
         let newPaneId = try runChecked(args, context: "tmux split-window failed")
+        let trimmedId = newPaneId.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Apply clean grid layout with the new pane's ID
-        let paneIdNumeric = Int(newPaneId.trimmingCharacters(in: CharacterSet(charactersIn: "%"))) ?? 0
+        let paneIdNumeric = Int(trimmedId.trimmingCharacters(in: CharacterSet(charactersIn: "%"))) ?? 0
         try applyLayout(session, event: .addPane(paneIdNumeric))
+
+        // Focus the newly created pane. split-window -d creates it detached
+        // so the surrounding layout pipeline can run cleanly; we then move
+        // focus to it so the user's cursor lands in the new pane.
+        try runChecked(
+            ["select-pane", "-t", trimmedId],
+            context: "tmux select-pane failed for new pane"
+        )
+
         let panes = try listPanes(session)
         let active = panes.first(where: { $0.active })?.index ?? 0
         try setupBellWatch(session, paneIndex: active)

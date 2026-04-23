@@ -7,14 +7,14 @@ make dev       # Build release binary — live on next tmux keypress
 make test      # Lint + fast tests + release build — runs anywhere, no tmux needed
 make validate  # Full test suite including tmux integration tests (parallel-safe)
 make fmt       # Auto-format code
-make lint      # clippy + format check
+make lint      # swift-format lint + format check
 make refresh   # Re-apply tmux config (border formats, keybindings, status bar)
 make clean     # Remove build artifacts
 make setup     # Full environment setup (idempotent)
 ```
 
-**Never use `cargo install --path .`** — it overwrites the symlink that
-`make dev` manages. Always use `make dev` to build.
+**Never use `swift build` directly to install** — it bypasses the symlink
+that `make dev` manages. Always use `make dev` to build.
 
 ## Dev Flow
 Flow: worktree
@@ -33,27 +33,47 @@ Flow: worktree
 | Change type | Live on build? | Needs `make refresh`? |
 |------------|---------------|----------------------|
 | Zoom/alert/layout/notification logic | Yes | No |
-| Border format, status bar, key bindings (config.rs) | No | Yes |
+| Border format, status bar, key bindings (`Config.swift`) | No | Yes |
 
 tmux caches config strings. Code changes are live because tmux shells out
-to `amux` on every keypress.
+to `amux-cli` on every keypress.
 
 ## Architecture
 
-Single Rust binary. tmux does all rendering. amux configures tmux and
-handles CLI commands invoked by tmux key bindings and hooks.
+Swift macOS app that embeds tmux. A native terminal view (AmuxTerm)
+drives a PTY running tmux; AmuxLib is the business logic layer that
+shells out to tmux via the `TmuxExecutor` protocol. AmuxCLI is a
+separate binary invoked from tmux key bindings and hooks.
 
-- `src/main.rs` — CLI entry point, zoom state machine, picker UIs
-- `src/config.rs` — tmux configuration (borders, status bar, key bindings)
-- `src/tmux.rs` — tmux command wrappers
-- `src/alert.rs` — pure alert decision logic
-- `src/layout.rs` — grid layout engine
-- `src/sticky.rs` — spatial pane matching
-- `src/notify.rs` — macOS notifications
-- `src/hooks.rs` — Claude Code hook installation
-- `src/bell.rs` — BEL character scanner
-- `src/state.rs` — state persistence
-- `src/util.rs` — auto-title generation
+**AmuxTerm** (`app/Sources/AmuxTerm/`) — NSApp, terminal view, PTY
+- `AppDelegate.swift` — app lifecycle, window management
+- `TerminalView.swift` — NSView subclass rendering VT output
+- `VTerminal.swift` — vt100/xterm emulation state
+- `PTY.swift` — pseudoterminal I/O
+- `KeyInput.swift` — NSEvent → KeyAction translation
+- `LinkDetector.swift` — Cmd-click URL/file detection
+- `UNNotificationPoster.swift` — macOS notification delivery
+
+**AmuxLib** (`app/Sources/AmuxLib/`) — tmux orchestration + pure logic
+- `AppController.swift` — action dispatch (zoom, new pane, split, etc.)
+- `Tmux.swift` — tmux command wrappers (live via `TmuxExecutor`)
+- `TmuxExecutor.swift` — protocol for tmux process execution
+- `FakeTmux.swift` — in-memory tmux for tests
+- `Config.swift` — tmux configuration (borders, status bar, key bindings)
+- `LayoutEngine.swift` — pure layout state machine
+- `Layout.swift` / `Sticky.swift` — grid geometry + spatial matching
+- `Alert.swift` / `AlertNotification.swift` / `AlertEventTransport.swift` — attention alerts
+- `Bell.swift` — BEL character scanner
+- `Notify.swift` — macOS notification wrappers
+- `Hooks.swift` — Claude Code hook installation
+- `State.swift` — state persistence
+- `PaneStyle.swift` — pane visual state
+- `KeyAction.swift` — pure key → action mapping
+- `Util.swift` — auto-title generation
+- `HelpContent.swift` / `Landing.swift` — in-app screens
+
+**AmuxCLI** (`app/Sources/AmuxCLI/`) — CLI invoked from tmux key bindings
+- `main.swift` — dispatches to AmuxLib actions
 
 ## Testing
 

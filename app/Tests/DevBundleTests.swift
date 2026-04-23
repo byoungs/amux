@@ -104,9 +104,9 @@ enum DevBundleTests {
               bundleIdResult.success && !bundleId.isEmpty,
               "CFBundleIdentifier missing or empty. plutil output: " +
               "'\(bundleIdResult.stdout)' / stderr: '\(bundleIdResult.stderr)'")
-        check("bundle-identifierIsAmux",
-              bundleId == "com.byoungs.amux",
-              "expected com.byoungs.amux, got '\(bundleId)'")
+        check("bundle-identifierIsAmuxDev",
+              bundleId == "com.byoungs.amux.dev",
+              "expected com.byoungs.amux.dev, got '\(bundleId)'")
 
         // CFBundleExecutable must match the actual binary name or
         // LaunchServices won't find it.
@@ -164,6 +164,25 @@ enum DevBundleTests {
         let isStillSymlink = (try? FileManager.default.destinationOfSymbolicLink(atPath: binary)) != nil
         check("bundle-staleSymlinkReplacedWithRealFile", !isStillSymlink,
               "binary at \(binary) is still a symlink after rerun")
+
+        // MARK: - Code signing identifier matches bundle ID
+        //
+        // adhoc signing defaults to "amux-app-<hash>". For UN and other
+        // bundle-ID-keyed subsystems to consistently identify the app,
+        // the signing identifier must match CFBundleIdentifier. The
+        // Makefile's codesign --identifier step enforces this.
+        let codesignResult = runShell(
+            "codesign -dv \(shellEscape(bundlePath)) 2>&1")
+        let identifierLine = codesignResult.stdout
+            .split(separator: "\n")
+            .first(where: { $0.hasPrefix("Identifier=") })
+            .map(String.init) ?? ""
+        let codesignId = identifierLine
+            .replacingOccurrences(of: "Identifier=", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        check("bundle-codesignIdentifierMatchesBundleId",
+              codesignId == "com.byoungs.amux.dev",
+              "codesign Identifier should be com.byoungs.amux.dev, got '\(codesignId)'")
 
         print("DevBundleTests: \(passed) passed, \(failed) failed")
         return (passed, failed)

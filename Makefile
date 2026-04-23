@@ -68,22 +68,40 @@ DEV_APP := build/amux-dev.app
 # into .build/ makes mainBundle.bundleURL point at .build/..., not the
 # .app, so Info.plist is never found.
 #
+# The dev bundle uses a separate bundle ID (com.byoungs.amux.dev) from the
+# release (com.byoungs.amux) for two reasons:
+#   1. macOS keeps UNUserNotification auth state keyed by bundle ID. If a
+#      developer ever denied the release app's permission prompt, the dev
+#      bundle inherits that denial forever and requestAuthorization returns
+#      UNErrorCode 1 without re-prompting. Separate IDs give dev its own
+#      permission decision, independent of release.
+#   2. Installed release and dev can coexist without clobbering each other.
+#
+# Code signing uses the same --identifier as the bundle ID. Without this,
+# adhoc signing uses "amux-app-<hash>" which macOS treats as a distinct
+# identity from the bundle and some subsystems (SecTrust, LS) get confused.
+#
 # DEV_APP can be overridden per-invocation (tests use a temp path).
 build-dev-bundle:
 	cd app && swift build
 	@mkdir -p $(DEV_APP)/Contents/MacOS
 	@mkdir -p $(DEV_APP)/Contents/Resources
-	@cp app/Resources/Info.plist $(DEV_APP)/Contents/Info.plist
+	@cp app/Resources/DevInfo.plist $(DEV_APP)/Contents/Info.plist
 	@cp app/Resources/amux.icns $(DEV_APP)/Contents/Resources/amux.icns
 	@# rm first so a leftover symlink from an older Makefile version doesn't
 	@# make cp bail with "SRC and DST are identical (not copied)".
 	@rm -f $(DEV_APP)/Contents/MacOS/amux-app
 	@cp $(CURDIR)/$(SWIFT_BUILD_DIR)/amux-app $(DEV_APP)/Contents/MacOS/amux-app
+	@codesign --force --sign - --identifier com.byoungs.amux.dev $(DEV_APP) >/dev/null 2>&1
 
 app-dev: build-dev-bundle
-	@# Symlink amux-cli to ~/.local/bin so tmux hooks can find it
+	@# Symlink amux-cli to ~/.local/bin so tmux hooks can find it.
+	@# Remove any stale symlink first — a prior run with a missing
+	@# $(CURDIR) once created a self-referencing symlink that silently
+	@# broke every tmux hook.
 	@mkdir -p $(HOME)/.local/bin
-	@ln -sf $(CURDIR)/$(SWIFT_BUILD_DIR)/amux-cli $(HOME)/.local/bin/amux-cli
+	@rm -f $(HOME)/.local/bin/amux-cli
+	@ln -s $(CURDIR)/$(SWIFT_BUILD_DIR)/amux-cli $(HOME)/.local/bin/amux-cli
 	@# Kill any running dev instance so the fresh binary is what launches
 	@killall amux-app 2>/dev/null || true
 	@sleep 0.3
@@ -112,6 +130,11 @@ dmg: app tmux-bundle
 	cp build/tmux-bundle/tmux build/amux.app/Contents/MacOS/
 	cp build/tmux-bundle/LICENSE-tmux.txt build/amux.app/Contents/Resources/
 	cp app/Resources/amux.icns build/amux.app/Contents/Resources/
+	@# Re-sign so the signing identifier matches CFBundleIdentifier.
+	@# Swift's default adhoc sign uses "amux-app-<hash>" which is a
+	@# different identity than the bundle, and some macOS subsystems
+	@# (including UNUserNotificationCenter) key off the signing ID.
+	codesign --force --sign - --identifier com.byoungs.amux build/amux.app
 	@echo "=== Creating DMG ==="
 	mkdir -p build/dmg-staging
 	cp -R build/amux.app build/dmg-staging/

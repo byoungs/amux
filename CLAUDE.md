@@ -69,3 +69,8 @@ handles CLI commands invoked by tmux key bindings and hooks.
 - One concern per file, small focused modules
 - tmux format strings use explicit value comparisons (`#{==:#{@amux-alert},1}`)
   not truthy checks (`#{?@amux-alert,...}`) — tmux treats "0" as truthy
+- When creating a pane detached (`tmux split-window -d` or `new-window -d`),
+  always follow with `select-pane -t %<id>` after the layout pipeline runs.
+  `LayoutEngine.computeAdd` does not set `action.selectPane`, so focus is
+  the caller's responsibility. Otherwise the new pane appears but the
+  cursor stays in the old one.

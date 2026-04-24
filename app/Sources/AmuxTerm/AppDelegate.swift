@@ -1,11 +1,24 @@
 import AppKit
 import AmuxLib
 import CVterm
+import Darwin
 import UserNotifications
 
 @main
 struct AmuxTermApp {
     static func main() {
+        // Shim: if argv looks like a CLI invocation (`amux alert-pane 0`,
+        // `amux bell-watch ...`), exec `amux-cli` with the same args.
+        // Historical hooks installed against the pre-Swift-port `amux`
+        // binary still call `amux <subcommand>`; without this dispatch,
+        // those invocations open the GUI (or fall through to a stale
+        // Rust binary that uses osascript, routing notifications to
+        // Script Editor). Must happen BEFORE NSApplication init.
+        if shouldDispatchToCli(CommandLine.arguments) {
+            dispatchToCli(CommandLine.arguments)
+            // dispatchToCli exits unconditionally.
+        }
+
         // --run-tests: run unit tests and exit without launching GUI
         if CommandLine.arguments.contains("--run-tests") {
             #if DEBUG
@@ -25,6 +38,7 @@ struct AmuxTermApp {
             LinkDetectorTests.runAll()
             AlertEventTransportTests.runAll()
             ClickDispatchTests.runAll()
+            CliDispatchTests.runAll()
             print("All tests passed")
             #else
             print("Tests only available in debug builds")
@@ -36,6 +50,37 @@ struct AmuxTermApp {
         let delegate = AppDelegate()
         app.delegate = delegate
         app.run()
+    }
+
+    /// Replace this process with `amux-cli <args...>`. Looks for the CLI
+    /// binary adjacent to the current executable (bundle's MacOS/) and
+    /// then in `~/.local/bin`. Exits non-zero on failure.
+    private static func dispatchToCli(_ args: [String]) -> Never {
+        let execPath = Bundle.main.executableURL?.deletingLastPathComponent().path
+            ?? (args[0] as NSString).deletingLastPathComponent
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = ["\(execPath)/amux-cli", "\(home)/.local/bin/amux-cli"]
+
+        for candidate in candidates {
+            // Must be an actual file (not a broken symlink) and executable.
+            // `isExecutableFile` follows symlinks and returns false on
+            // dangling links — which is the self-referencing-symlink
+            // failure mode we want to skip past.
+            guard FileManager.default.isExecutableFile(atPath: candidate) else {
+                continue
+            }
+            // argv layout for execv: argv[0] = invoked name, argv[1..] = args.
+            var cArgs: [UnsafeMutablePointer<CChar>?] = [strdup(candidate)]
+            for a in args.dropFirst() { cArgs.append(strdup(a)) }
+            cArgs.append(nil)
+            execv(candidate, &cArgs)
+            // execv only returns on failure.
+            fputs("amux: exec \(candidate) failed: \(String(cString: strerror(errno)))\n", stderr)
+            exit(1)
+        }
+
+        fputs("amux: amux-cli not found. Searched: \(candidates.joined(separator: ", "))\n", stderr)
+        exit(1)
     }
 }
 
@@ -93,6 +138,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         installCLISymlink(name: "tmux", targetPath: tmuxPath)
         if let cliPath = amuxCliPath {
             installCLISymlink(name: "amux-cli", targetPath: cliPath)
+        }
+
+        // Also install `amux` → this executable. Pre-Swift-port hooks
+        // (and user-authored debug hooks copied from older READMEs) call
+        // `amux alert-pane ...`; if `~/.local/bin/amux` still points at a
+        // stale Rust binary, those calls bypass the UN / socket path and
+        // post via osascript — which makes macOS route notification
+        // clicks to Script Editor, not amux. Pointing `amux` at this
+        // process means the argv shim in `AmuxTermApp.main` forwards to
+        // `amux-cli`, closing the regression self-heal-on-next-launch.
+        if let selfPath = Bundle.main.executableURL?.path {
+            installCLISymlink(name: "amux", targetPath: selfPath)
         }
 
         // Ensure PATH includes bundle dir and ~/.local/bin

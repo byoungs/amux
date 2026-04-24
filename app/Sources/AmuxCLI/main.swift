@@ -540,7 +540,7 @@ func main() throws {
             }
         }
 
-        var state = BellScanState()
+        let state = BellScanState()
         let bufSize = 4096
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
         defer { buf.deallocate() }

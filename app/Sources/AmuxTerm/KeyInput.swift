@@ -169,32 +169,49 @@ enum KeyInput {
         return "\u{1B}[\(codepoint);\(modifier)u".data(using: .utf8)!
     }
 
-    /// Encode a scroll wheel event as SGR mouse sequences for tmux.
+    /// Encode a scroll-wheel event for tmux / the pane app.
     ///
-    /// Scroll speed scales with visible height so small panes don't scroll
-    /// too fast. Targets ~10% of visible rows per event, minimum 1 line.
-    static func scrollBytes(deltaY: CGFloat, col: Int, row: Int, cellHeight: CGFloat, precise: Bool, visibleRows: Int) -> [Data] {
+    /// Alt-screen apps without mouse reporting receive cursor-key sequences
+    /// (ESC [ A / ESC [ B) — matches xterm alternateScroll, Alacritty,
+    /// WezTerm, VTE, iTerm2 (when "scroll wheel sends arrow keys" is on).
+    /// Otherwise SGR mouse events; tmux's `mouse on` binding decides
+    /// (copy-mode on main screen, pass-through in alt-screen + mouse mode).
+    ///
+    /// Speed: 1 line per imprecise wheel tick (macOS pre-multiplies wheel
+    /// deltas), shift multiplies by 5, precise trackpad uses
+    /// deltaY / cellHeight. Hard cap of 10 lines per event guards against
+    /// runaway touchpad deltas.
+    static func scrollBytes(
+        deltaY: CGFloat,
+        col: Int, row: Int,
+        cellHeight: CGFloat,
+        precise: Bool,
+        shiftHeld: Bool,
+        isAltScreen: Bool,
+        mouseMode: VTerminal.MouseMode
+    ) -> [Data] {
+        let shiftMult = shiftHeld ? 5 : 1
+        let baseLines: Int
+        if precise {
+            baseLines = max(1, Int(abs(deltaY) / cellHeight))
+        } else {
+            baseLines = 1
+        }
+        let lines = min(10, baseLines * shiftMult)
+
+        let up = deltaY > 0
+
+        if isAltScreen && mouseMode == .none {
+            let seq = up ? "\u{1B}[A" : "\u{1B}[B"
+            let data = seq.data(using: .utf8)!
+            return Array(repeating: data, count: lines)
+        }
+
+        let button = up ? 64 : 65
         let sgrCol = col + 1
         let sgrRow = row + 1
-
-        let maxLines = max(1, visibleRows / 10)
-        let lines: Int
-        if precise {
-            lines = max(1, Int(abs(deltaY) / cellHeight))
-        } else {
-            lines = maxLines
-        }
-
-        let button = deltaY > 0 ? 64 : 65
-        let count = min(lines, maxLines)
-
-        var result: [Data] = []
-        for _ in 0..<count {
-            let seq = "\u{1B}[<\(button);\(sgrCol);\(sgrRow)M"
-            if let data = seq.data(using: .utf8) {
-                result.append(data)
-            }
-        }
-        return result
+        let seq = "\u{1B}[<\(button);\(sgrCol);\(sgrRow)M"
+        let data = seq.data(using: .utf8)!
+        return Array(repeating: data, count: lines)
     }
 }

@@ -115,6 +115,26 @@ public enum Config {
         // Large scrollback to handle Claude Code's rapid streaming output
         try tmuxSetGlobal("history-limit", "250000")
 
+        // Scroll wheel: tmux intercepts and routes based on alt-screen state.
+        //   Main screen → enter copy-mode and scroll pane history.
+        //   Alt screen → pass wheel through to the pane app (amux already
+        //                translated to arrow keys when app isn't consuming
+        //                mouse events; SGR mouse events go through here).
+        // Required: `mouse on` plus root-table WheelUpPane / WheelDownPane
+        // bindings that branch on `#{alternate_on}`. Block syntax `{...}`
+        // keeps multi-statement branches as a single command (avoids
+        // tmux argv-parser ambiguity around `;`).
+        try tmuxSetGlobal("mouse", "on")
+
+        tmuxRunIgnoringErrors(["bind-key", "-T", "root", "WheelUpPane",
+            "if-shell -Ft= '#{?pane_in_mode,1,#{alternate_on}}' " +
+            "{ send-keys -M } { select-pane -t= ; copy-mode -eu }"])
+        // WheelDownPane: tmux's default `send-keys -M` re-emits the wheel
+        // event. In copy-mode that scrolls the buffer; in alt-screen it
+        // forwards to the pane app; on main screen at the bottom it does
+        // nothing (no copy-mode entry, which matches user expectation).
+        tmuxRunIgnoringErrors(["bind-key", "-T", "root", "WheelDownPane", "send-keys -M"])
+
         // Active pane: match iTerm2 profile (bg #000000, fg #bbbbbb)
         // Set globally so split windows inherit the same styles.
         try tmuxSetGlobal("window-active-style", "bg=colour0 fg=colour250")

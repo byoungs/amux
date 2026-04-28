@@ -24,6 +24,7 @@ struct AmuxTermApp {
             #if DEBUG
             KeyInputTests.runAll()
             VTerminalTests.runAll()
+            ScrollerStateTests.runAll()
             LayoutTests.runAll()
             BellTests.runAll()
             LandingTests.runAll()

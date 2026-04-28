@@ -33,6 +33,22 @@ final class TerminalView: NSView {
     private var detectedLinks: [DetectedLink] = []
     private var cmdHeld = false
 
+    // Wheel direction the user last drove (events with momentumPhase empty).
+    // Used to suppress macOS trackpad inertia bounce-back: when the user
+    // scrolls firmly down and lifts off, AppKit emits a brief sequence of
+    // upward inertia frames as velocity decays. Without filtering, those
+    // upward frames re-enter tmux copy-mode the instant we just exited
+    // it (the "scroll-down jumps back up" bug).
+    private var lastUserWheelDirection: Int = 0  // -1 down, +1 up, 0 none
+
+    // Set when amux's wheel handling may have entered tmux copy-mode (i.e.
+    // a wheel-up event in main screen). Reset on next keyDown — at which
+    // point we send `tmux send-keys -X cancel` to exit copy-mode and
+    // return the pane to its live tail before forwarding the typed key.
+    // This is what users mean by "typing should jump me back to the
+    // bottom so I can see what I'm typing."
+    private var wheelMayHaveEnteredCopyMode: Bool = false
+
     /// The tmux session name. Set by AppDelegate after construction.
     /// Used to update @amux-cmd-held when Cmd is pressed/released.
     var session: String = ""
@@ -605,17 +621,76 @@ final class TerminalView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        let dy = event.scrollingDeltaY
+        if dy == 0 { return }
+        let dir = dy > 0 ? 1 : -1
+        let isMomentum = event.momentumPhase != []
+        // Track direction of explicit user input (non-momentum frames).
+        if !isMomentum {
+            lastUserWheelDirection = dir
+        }
+        // Suppress momentum frames that reverse direction — these are
+        // trackpad-inertia bounce-back, not user intent.
+        if isMomentum && dir != lastUserWheelDirection {
+            scrollDebug("wheel suppressed (momentum reverse) dir=\(dir) lastUser=\(lastUserWheelDirection)")
+            return
+        }
+
+        // Wheel events on the main screen may trigger tmux copy-mode
+        // entry. Mark so the next keyDown can exit copy-mode and return
+        // to the live tail before forwarding the typed key.
+        if !terminal.isAltScreen {
+            wheelMayHaveEnteredCopyMode = true
+        }
+
         let pos = cellPosition(for: event)
+        let shiftHeld = event.modifierFlags.contains(.shift)
         let sequences = KeyInput.scrollBytes(
-            deltaY: event.scrollingDeltaY,
+            deltaY: dy,
             col: pos.col,
             row: pos.row,
             cellHeight: cellHeight,
             precise: event.hasPreciseScrollingDeltas,
-            visibleRows: terminal.rows
+            shiftHeld: shiftHeld,
+            isAltScreen: terminal.isAltScreen,
+            mouseMode: terminal.mouseMode
         )
+        scrollDebug("wheel dy=\(dy) dir=\(dir) momentum=\(isMomentum) altScreen=\(terminal.isAltScreen) mouseMode=\(terminal.mouseMode) cols=\(terminal.cols) bytes=\(sequences.count) flag=\(wheelMayHaveEnteredCopyMode)")
         for data in sequences {
             pty.write(data)
+        }
+    }
+
+    private func scrollDebug(_ message: String) {
+        if ProcessInfo.processInfo.environment["AMUX_SCROLL_DEBUG"] != nil {
+            FileHandle.standardError.write("amux-scroll: \(message)\n".data(using: .utf8)!)
+        }
+    }
+
+    /// If a wheel event may have entered tmux copy-mode, query tmux's
+    /// pane_in_mode state and send an Esc byte via PTY to trigger
+    /// copy-mode's default cancel binding. Esc + key bytes go through
+    /// the same PTY channel so tmux processes them in order.
+    ///
+    /// Why not `tmux send-keys -X cancel`? That command goes via the
+    /// tmux socket while key bytes go via PTY. Tmux processes them on
+    /// independent paths and the key can hit copy-mode before the
+    /// socket command runs. Default emacs copy-mode silently swallows
+    /// most keys, so the typed character is lost.
+    ///
+    /// Why not always send Esc unconditionally? Esc bytes outside
+    /// copy-mode flow to the pane app. For the shell, `Esc f` is
+    /// `Alt-f` in readline (move forward by word) — corrupts input.
+    /// So we query pane_in_mode first; only send Esc if true.
+    /// Subprocess query is ~5ms; it only fires on the first keystroke
+    /// after a wheel event.
+    private func handleCopyModeExit() {
+        guard wheelMayHaveEnteredCopyMode else { return }
+        wheelMayHaveEnteredCopyMode = false
+        let mode = Tmux.runRaw(["display-message", "-p", "#{pane_in_mode}"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if mode == "1" {
+            pty.write(Data([0x1B]))
         }
     }
 
@@ -629,6 +704,10 @@ final class TerminalView: NSView {
             lastKeyTime = CFAbsoluteTimeGetCurrent()
         }
         #endif
+        // First keystroke after a wheel event: if tmux is in copy-mode,
+        // send Esc via PTY first to exit. Esc and the key bytes share
+        // the PTY channel so tmux processes them in order.
+        handleCopyModeExit()
         if let data = KeyInput.bytes(for: event) {
             pty.write(data)
         }

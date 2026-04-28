@@ -12,7 +12,7 @@ enum VTerminalTests {
                 passed += 1
             } else {
                 failed += 1
-                print("FAIL: \(name)\(detail.isEmpty ? "" : " — \(detail)")")
+                FileHandle.standardError.write("FAIL: \(name)\(detail.isEmpty ? "" : " — \(detail)")\n".data(using: .utf8)!)
             }
         }
 
@@ -120,6 +120,36 @@ enum VTerminalTests {
             check("cell-after-backspace",
                   cellAfter == "" || cellAfter == " ",
                   "expected empty or space after backspace, got '\(cellAfter)'")
+        }
+
+        // --- Test 8: DECSET 1049 flips isAltScreen ---
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            check("altscreen-default-false", term.isAltScreen == false)
+            term.write(data: "\u{1B}[?1049h".data(using: .utf8)!)
+            term.flushDamage()
+            check("altscreen-decset-true", term.isAltScreen == true)
+            term.write(data: "\u{1B}[?1049l".data(using: .utf8)!)
+            term.flushDamage()
+            check("altscreen-decrst-false", term.isAltScreen == false)
+        }
+
+        // --- Test 9: DECSET 1000/1002/1003 updates mouseMode ---
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            check("mousemode-default-none", term.mouseMode == .none)
+            term.write(data: "\u{1B}[?1000h".data(using: .utf8)!)
+            term.flushDamage()
+            check("mousemode-1000-click", term.mouseMode == .click)
+            term.write(data: "\u{1B}[?1002h".data(using: .utf8)!)
+            term.flushDamage()
+            check("mousemode-1002-drag", term.mouseMode == .drag)
+            term.write(data: "\u{1B}[?1003h".data(using: .utf8)!)
+            term.flushDamage()
+            check("mousemode-1003-move", term.mouseMode == .move)
+            term.write(data: "\u{1B}[?1000l".data(using: .utf8)!)
+            term.flushDamage()
+            check("mousemode-decrst-none", term.mouseMode == .none)
         }
 
         print("VTerminal tests: \(passed) passed, \(failed) failed")

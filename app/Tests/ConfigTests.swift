@@ -166,6 +166,154 @@ enum ConfigTests {
                   "Config.swift must use after-select-pane hook")
         }
 
+        // Mouse + wheel bindings: tmux must intercept wheel for copy-mode
+        // entry on main screen and pass-through on alt-screen.
+        do {
+            let ts = TestSession(paneCount: 1)
+            _ = ts  // hold session alive through queries
+
+            let mouse = tmux("show-options", "-gv", "mouse")
+                .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            check("mouse-on", mouse == "on",
+                  "expected mouse=on so wheel bindings can fire (got '\(mouse)')")
+
+            // list-keys -T root <key> is buggy across tmux versions for
+            // WheelUpPane keys. Filter the full table dump.
+            let allRoot = tmux("list-keys", "-T", "root").stdout
+            let upBinding = allRoot.split(separator: "\n")
+                .filter { $0.contains("WheelUpPane") }.joined(separator: "\n")
+            check("wheel-up-binding-exists", !upBinding.isEmpty)
+            check("wheel-up-binding-alternate-on",
+                  upBinding.contains("alternate_on"),
+                  "got: \(upBinding)")
+            check("wheel-up-binding-copy-mode",
+                  upBinding.contains("copy-mode"),
+                  "got: \(upBinding)")
+
+            let downBinding = allRoot.split(separator: "\n")
+                .filter { $0.contains("WheelDownPane") }.joined(separator: "\n")
+            check("wheel-down-binding-exists", !downBinding.isEmpty)
+            check("wheel-down-binding-passthrough",
+                  downBinding.contains("send-keys -M"),
+                  "got: \(downBinding)")
+
+            // MouseDrag1Border must be unbound to prevent accidental pane
+            // resize via border drag (causes mixed-width scrollback).
+            let dragBinding = allRoot.split(separator: "\n")
+                .filter { $0.contains("MouseDrag1Border") }.joined(separator: "\n")
+            check("border-drag-unbound", dragBinding.isEmpty,
+                  "MouseDrag1Border should not be bound; got: \(dragBinding)")
+        }
+
+        // After amux's applyLayout pipeline, the active pane's width must
+        // equal the window width. If amux's layout engine produces a
+        // pane narrower than the window, content wraps at that narrower
+        // width and leaves visible empty space on the right (the "text
+        // doesn't fill the width" symptom).
+        do {
+            let ts = TestSession(paneCount: 1)
+            _ = ts
+            _ = tmux("resize-window", "-t", ts.name, "-x", "120", "-y", "30")
+            try? Tmux.applyLayout(ts.name, event: .resize)
+            let paneWidth = tmux("display-message", "-p", "-t", ts.name, "#{pane_width}")
+                .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            let windowWidth = tmux("display-message", "-p", "-t", ts.name, "#{window_width}")
+                .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            check("pane-width-matches-window-after-layout",
+                  paneWidth == windowWidth,
+                  "pane=\(paneWidth) window=\(windowWidth)")
+            check("pane-width-is-120",
+                  paneWidth == "120",
+                  "expected 120, got \(paneWidth)")
+        }
+
+        // The inner program inside tmux's pane sees pane_width as its
+        // COLUMNS / stty cols. Verify tmux exports the right width to
+        // the running shell via TIOCSWINSZ.
+        do {
+            let ts = TestSession(paneCount: 1)
+            _ = ts
+            _ = tmux("resize-window", "-t", ts.name, "-x", "150", "-y", "30")
+            try? Tmux.applyLayout(ts.name, event: .resize)
+            let resultFile = "/tmp/amux-stty-test-\(ProcessInfo.processInfo.processIdentifier).out"
+            try? FileManager.default.removeItem(atPath: resultFile)
+            _ = tmux("send-keys", "-t", ts.name, "stty -a > \(resultFile) 2>&1", "Enter")
+            // Wait for write
+            for _ in 0..<20 {
+                if FileManager.default.fileExists(atPath: resultFile) { break }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            Thread.sleep(forTimeInterval: 0.2)  // ensure full write
+            let stty = (try? String(contentsOfFile: resultFile, encoding: .utf8)) ?? ""
+            // BSD stty reports "speed 9600 baud; 30 rows; 150 columns;"
+            // Linux stty reports "rows 30; columns 150;" or "rows=30; columns=150;"
+            // Pull the integer immediately preceding or following "columns".
+            var ttyCols = -1
+            let parts = stty.replacingOccurrences(of: ";", with: " ")
+                .replacingOccurrences(of: "=", with: " ")
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+            for (i, t) in parts.enumerated() {
+                if t == "columns" {
+                    if i + 1 < parts.count, let n = Int(parts[i + 1]) { ttyCols = n; break }
+                    if i > 0, let n = Int(parts[i - 1]) { ttyCols = n; break }
+                }
+            }
+            check("inner-tty-cols-matches-pane",
+                  ttyCols == 150,
+                  "expected stty columns=150; got \(ttyCols); raw stty: \(stty.prefix(300))")
+            try? FileManager.default.removeItem(atPath: resultFile)
+        }
+
+        // Reflow at narrow→wide: capture at narrow width, resize wider,
+        // assert capture-pane -pJ at the wider width returns the original
+        // logical line. If tmux preserves continuation across resize,
+        // amux's scroll-up-after-resize will show wide content. If it
+        // doesn't (line stuck at narrow width), the symptom is on tmux's
+        // side and we know about it.
+        do {
+            let ts = TestSession(paneCount: 1)
+            _ = ts
+            _ = tmux("resize-window", "-t", ts.name, "-x", "60", "-y", "10")
+            try? Tmux.applyLayout(ts.name, event: .resize)
+            let kLine = String(repeating: "k", count: 100)
+            _ = tmux("send-keys", "-t", ts.name, "echo \(kLine)", "Enter")
+            for i in 1...3 {
+                _ = tmux("send-keys", "-t", ts.name, "echo m\(i)", "Enter")
+            }
+            _ = tmux("display-message", "-p", "-t", ts.name, "")
+            _ = tmux("resize-window", "-t", ts.name, "-x", "120", "-y", "10")
+            try? Tmux.applyLayout(ts.name, event: .resize)
+            _ = tmux("display-message", "-p", "-t", ts.name, "")
+            let joined = tmux("capture-pane", "-t", ts.name, "-peqJ", "-S", "-30", "-E", "-1").stdout
+            check("history-rejoins-after-narrow-to-wide",
+                  joined.contains(kLine),
+                  "pane 60→120; expected 100 contiguous k's; got: \(joined.prefix(400))")
+        }
+
+        // Tmux history reflows uniformly on resize — verifies the fundamental
+        // assumption behind delegating scrollback to tmux's copy-mode.
+        // Output a 100-char line that wraps, do multiple resizes during
+        // additional output, then assert capture-pane returns the original
+        // 100 chars rejoined as a single logical line at any width.
+        do {
+            let ts = TestSession(paneCount: 1)
+            _ = ts
+            _ = tmux("resize-window", "-t", ts.name, "-x", "100", "-y", "10")
+            let line100 = String(repeating: "X", count: 100)
+            _ = tmux("send-keys", "-t", ts.name, "echo \(line100)", "Enter")
+            // Push it off-screen with more output through varying widths.
+            for w in [90, 110, 95, 100] {
+                _ = tmux("resize-window", "-t", ts.name, "-x", String(w), "-y", "10")
+                _ = tmux("send-keys", "-t", ts.name, "echo line", "Enter")
+            }
+            // Final width 100. capture-pane -peqJ joins continuation rows.
+            let captured = tmux("capture-pane", "-t", ts.name, "-peqJ", "-S", "-50", "-E", "-1").stdout
+            check("tmux-reflow-preserves-line",
+                  captured.contains(line100),
+                  "expected 100-char X line in capture-pane -J output; got: '\(captured)'")
+        }
+
         print("ConfigTests: \(passed) passed, \(failed) failed")
         return (passed, failed)
     }

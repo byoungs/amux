@@ -115,6 +115,35 @@ public enum Config {
         // Large scrollback to handle Claude Code's rapid streaming output
         try tmuxSetGlobal("history-limit", "250000")
 
+        // Scroll wheel: tmux intercepts and routes based on alt-screen state.
+        //   Main screen → enter copy-mode and scroll pane history (tmux's
+        //                 own reflow handles resize correctly).
+        //   Alt screen → pass wheel through to the pane app (amux already
+        //                 translated wheel to arrow keys when the app isn't
+        //                 consuming mouse events; SGR mouse events go through).
+        // Block syntax `{...}` keeps multi-statement branches as one command.
+        try tmuxSetGlobal("mouse", "on")
+
+        // Disable interactive border drag — without this, every accidental
+        // drag on a pane border resizes the pane and captures pane history
+        // at a new width, causing mixed-width scrollback ("christmas tree").
+        // amux owns resize via setFrameSize/SIGWINCH; users don't need
+        // mouse-driven pane resizing.
+        tmuxRunIgnoringErrors(["unbind-key", "-T", "root", "MouseDrag1Border"])
+
+        tmuxRunIgnoringErrors(["bind-key", "-T", "root", "WheelUpPane",
+            "if-shell -Ft= '#{?pane_in_mode,1,#{alternate_on}}' " +
+            "{ send-keys -M } { select-pane -t= ; copy-mode -u }"])
+        // WheelDownPane: send-keys -M re-emits the wheel event. In copy-mode
+        // it scrolls down. In alt-screen it forwards to the pane app. On
+        // main screen at the live tail the SGR mouse event is a no-op.
+        // Note: copy-mode entry uses `-u` (NOT `-eu`) so the user stays in
+        // copy-mode at the bottom rather than auto-exiting and getting
+        // re-entered by subsequent upward wheel events. Typing any key
+        // exits copy-mode (TerminalView sends `send-keys -X cancel` on
+        // first keyDown after a wheel event).
+        tmuxRunIgnoringErrors(["bind-key", "-T", "root", "WheelDownPane", "send-keys -M"])
+
         // Active pane: match iTerm2 profile (bg #000000, fg #bbbbbb)
         // Set globally so split windows inherit the same styles.
         try tmuxSetGlobal("window-active-style", "bg=colour0 fg=colour250")

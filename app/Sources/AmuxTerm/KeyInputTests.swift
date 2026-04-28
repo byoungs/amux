@@ -52,99 +52,35 @@ enum KeyInputTests {
             check("Cmd-\(i)", KeyInput.ctrlBytes(for: String(i)), expected)
         }
 
-        // Alt-screen + no app mouse mode → arrow up (ESC [ A) on scroll up
-        check("scroll-altscreen-up-arrow",
-              KeyInput.scrollBytes(
-                deltaY: 1, col: 0, row: 0, cellHeight: 17,
-                precise: false, shiftHeld: false,
-                isAltScreen: true, mouseMode: .none)[0],
-              "\u{1B}[A".data(using: .utf8)!)
-
-        // Alt-screen + no mouse → arrow down (ESC [ B) on scroll down
-        check("scroll-altscreen-down-arrow",
-              KeyInput.scrollBytes(
-                deltaY: -1, col: 0, row: 0, cellHeight: 17,
-                precise: false, shiftHeld: false,
-                isAltScreen: true, mouseMode: .none)[0],
-              "\u{1B}[B".data(using: .utf8)!)
-
-        // Alt-screen + no mouse, imprecise wheel → 1 arrow per tick
-        let altNoMouse = KeyInput.scrollBytes(
-            deltaY: 1, col: 0, row: 0, cellHeight: 17,
-            precise: false, shiftHeld: false,
-            isAltScreen: true, mouseMode: .none)
-        check("scroll-altscreen-imprecise-count",
-              Data([UInt8(altNoMouse.count)]), Data([1]))
-
-        // Shift+wheel in alt-screen → 5 arrows
-        let shiftAlt = KeyInput.scrollBytes(
-            deltaY: 1, col: 0, row: 0, cellHeight: 17,
-            precise: false, shiftHeld: true,
-            isAltScreen: true, mouseMode: .none)
-        check("scroll-shift-altscreen-count",
-              Data([UInt8(shiftAlt.count)]), Data([5]))
-
-        // Alt-screen + mouse click mode → SGR mouse, not arrows
-        check("scroll-altscreen-mouse-sgr",
-              KeyInput.scrollBytes(
-                deltaY: 1, col: 5, row: 3, cellHeight: 17,
-                precise: false, shiftHeld: false,
-                isAltScreen: true, mouseMode: .click)[0],
+        // Scroll up sends button 64
+        check("scroll-up-button",
+              KeyInput.scrollBytes(deltaY: 10, col: 5, row: 3, cellHeight: 17, precise: false, visibleRows: 30)[0],
               "\u{1B}[<64;6;4M".data(using: .utf8)!)
 
-        // Main screen → SGR mouse so tmux binding handles
-        check("scroll-mainscreen-sgr-up",
-              KeyInput.scrollBytes(
-                deltaY: 1, col: 5, row: 3, cellHeight: 17,
-                precise: false, shiftHeld: false,
-                isAltScreen: false, mouseMode: .none)[0],
-              "\u{1B}[<64;6;4M".data(using: .utf8)!)
-
-        check("scroll-mainscreen-sgr-down",
-              KeyInput.scrollBytes(
-                deltaY: -1, col: 5, row: 3, cellHeight: 17,
-                precise: false, shiftHeld: false,
-                isAltScreen: false, mouseMode: .none)[0],
+        // Scroll down sends button 65
+        check("scroll-down-button",
+              KeyInput.scrollBytes(deltaY: -10, col: 5, row: 3, cellHeight: 17, precise: false, visibleRows: 30)[0],
               "\u{1B}[<65;6;4M".data(using: .utf8)!)
 
-        // Main screen imprecise wheel → exactly 1 SGR event (1 line base)
-        let mainImprecise = KeyInput.scrollBytes(
-            deltaY: 1, col: 0, row: 0, cellHeight: 17,
-            precise: false, shiftHeld: false,
-            isAltScreen: false, mouseMode: .none)
-        check("scroll-mainscreen-count",
-              Data([UInt8(mainImprecise.count)]), Data([1]))
+        // Mouse wheel sends 3 events at 30 rows (~10% = 3)
+        let mouseWheel = KeyInput.scrollBytes(deltaY: 1, col: 0, row: 0, cellHeight: 17, precise: false, visibleRows: 30)
+        check("scroll-mouse-count", Data([UInt8(mouseWheel.count)]), Data([3]))
 
-        // Shift+wheel main screen → 5 SGR events
-        let mainShift = KeyInput.scrollBytes(
-            deltaY: 1, col: 0, row: 0, cellHeight: 17,
-            precise: false, shiftHeld: true,
-            isAltScreen: false, mouseMode: .none)
-        check("scroll-mainscreen-shift-count",
-              Data([UInt8(mainShift.count)]), Data([5]))
+        // Small pane (15 rows): scroll speed scales down to 1 line
+        let smallPane = KeyInput.scrollBytes(deltaY: 1, col: 0, row: 0, cellHeight: 17, precise: false, visibleRows: 15)
+        check("scroll-small-pane", Data([UInt8(smallPane.count)]), Data([1]))
 
-        // Hard cap: giant precise trackpad delta never exceeds 10 events
-        let trackpadHuge = KeyInput.scrollBytes(
-            deltaY: 9999, col: 0, row: 0, cellHeight: 17,
-            precise: true, shiftHeld: false,
-            isAltScreen: false, mouseMode: .none)
-        check("scroll-cap-10",
-              Data([UInt8(trackpadHuge.count)]), Data([10]))
+        // Trackpad with small delta sends 1 event
+        let trackpadSmall = KeyInput.scrollBytes(deltaY: 5, col: 0, row: 0, cellHeight: 17, precise: true, visibleRows: 30)
+        check("scroll-trackpad-small", Data([UInt8(trackpadSmall.count)]), Data([1]))
 
-        // Precise trackpad: deltaY / cellHeight = lines (34/17 = 2)
-        let trackpadSmall = KeyInput.scrollBytes(
-            deltaY: 34, col: 0, row: 0, cellHeight: 17,
-            precise: true, shiftHeld: false,
-            isAltScreen: false, mouseMode: .none)
-        check("scroll-trackpad-exact",
-              Data([UInt8(trackpadSmall.count)]), Data([2]))
+        // Trackpad capped at maxLines (3 at 30 rows)
+        let trackpadLarge = KeyInput.scrollBytes(deltaY: 200, col: 0, row: 0, cellHeight: 17, precise: true, visibleRows: 30)
+        check("scroll-trackpad-cap", Data([UInt8(trackpadLarge.count)]), Data([3]))
 
-        // 1-indexed SGR coordinates preserved
+        // SGR coordinates are 1-indexed
         check("scroll-1indexed",
-              KeyInput.scrollBytes(
-                deltaY: 1, col: 0, row: 0, cellHeight: 17,
-                precise: false, shiftHeld: false,
-                isAltScreen: false, mouseMode: .none)[0],
+              KeyInput.scrollBytes(deltaY: 1, col: 0, row: 0, cellHeight: 17, precise: false, visibleRows: 30)[0],
               "\u{1B}[<64;1;1M".data(using: .utf8)!)
 
         print("KeyInput tests: \(passed) passed, \(failed) failed")

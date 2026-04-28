@@ -23,28 +23,12 @@ private func onMoveCursor(_ pos: VTermPos, _ oldpos: VTermPos, _ visible: Int32,
 }
 
 private func onSetTermProp(_ prop: VTermProp, _ val: UnsafeMutablePointer<VTermValue>?, _ user: UnsafeMutableRawPointer?) -> Int32 {
-    guard let val = val else { return 1 }
-    let terminal = Unmanaged<VTerminal>.fromOpaque(user!).takeUnretainedValue()
-    switch prop {
-    case VTERM_PROP_ALTSCREEN:
-        terminal.isAltScreen = val.pointee.boolean != 0
-    case VTERM_PROP_MOUSE:
-        let raw = Int(val.pointee.number)
-        terminal.mouseMode = VTerminal.MouseMode(rawValue: raw) ?? .none
-    default:
-        break
-    }
+    // VTermValue.string is a VTermStringFragment, not a char*.
+    // Only process when we have the complete string (frag.final is true).
     return 1
 }
 
 final class VTerminal {
-    enum MouseMode: Int {
-        case none = 0
-        case click = 1
-        case drag = 2
-        case move = 3
-    }
-
     let vt: OpaquePointer
     let screen: OpaquePointer
     private(set) var rows: Int
@@ -52,8 +36,6 @@ final class VTerminal {
     fileprivate(set) var cursorRow: Int = 0
     fileprivate(set) var cursorCol: Int = 0
     fileprivate(set) var cursorVisible: Bool = true
-    fileprivate(set) var isAltScreen: Bool = false
-    fileprivate(set) var mouseMode: MouseMode = .none
     var isDirty: Bool = false
     var dirtyRows: Set<Int> = []
     var fullRedrawNeeded: Bool = true  // first draw is always full
@@ -78,10 +60,6 @@ final class VTerminal {
         vterm_screen_set_callbacks(screen, &callbacks, selfPtr)
 
         vterm_screen_set_damage_merge(screen, VTERM_DAMAGE_SCROLL)
-        // Allocate the alt-screen buffer so DECSET 1049/1047/47 actually
-        // engage. Without this, libvterm's screen settermprop short-circuits
-        // when the alt-screen buffer is missing and isAltScreen never flips.
-        vterm_screen_enable_altscreen(screen, 1)
         vterm_screen_reset(screen, 1)
     }
 

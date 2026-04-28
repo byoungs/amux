@@ -9,56 +9,6 @@ struct CellPos: Equatable {
     let col: Int
 }
 
-/// NSScroller variant that passes mouse hits through to its superview.
-/// Used as a read-only scroll position indicator without intercepting
-/// wheel events that should reach TerminalView.scrollWheel.
-final class PassthroughScroller: NSScroller {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
-/// Pure helper for computing the scrollbar's display state from terminal +
-/// tmux state. Extracted so the math is unit-testable without AppKit / a
-/// running tmux server. Inputs are immutable; output drives NSScroller.
-enum ScrollerState {
-    struct Result: Equatable {
-        let hidden: Bool
-        let knobProportion: Double  // 0.0..1.0; visible fraction
-        let doubleValue: Double      // 0.0..1.0; 1.0 = at bottom (live tail)
-    }
-
-    /// - Parameters:
-    ///   - isAltScreen: true while the pane is in alt-screen — scrollbar
-    ///     hides (alt-screen apps own their own scrollback).
-    ///   - visibleRows: the pane's visible row count.
-    ///   - tmuxState: parsed `display-message` output, or nil if the query
-    ///     failed (no server, malformed reply, etc).
-    static func compute(
-        isAltScreen: Bool,
-        visibleRows: Int,
-        tmuxState: (historySize: Int, scrollPosition: Int?)?
-    ) -> Result {
-        if isAltScreen {
-            return Result(hidden: true, knobProportion: 1.0, doubleValue: 1.0)
-        }
-        guard let state = tmuxState else {
-            // Tmux query failed — show a neutral indicator pinned to bottom.
-            return Result(hidden: false, knobProportion: 1.0, doubleValue: 1.0)
-        }
-        let visible = Double(max(1, visibleRows))
-        let history = Double(max(0, state.historySize))
-        let total = history + visible
-        let knob = max(0.02, visible / max(visible, total))
-        let value: Double
-        if let pos = state.scrollPosition, state.historySize > 0 {
-            // scroll_position counts lines above the viewport; 0 = at bottom.
-            value = 1.0 - (Double(pos) / history)
-        } else {
-            value = 1.0
-        }
-        return Result(hidden: false, knobProportion: knob, doubleValue: value)
-    }
-}
-
 final class TerminalView: NSView {
     let terminal: VTerminal
     let pty: PTY
@@ -78,26 +28,6 @@ final class TerminalView: NSView {
     private var lineCacheGeneration: Int = 0
 
     private let defaultBg = CGColor(gray: 0, alpha: 1)
-
-    // Read-only vertical scroll indicator. Sized from tmux history_size +
-    // scroll_position; hidden in alt-screen (industry standard — no
-    // scrollback in alt-screen apps). Wheel + keys remain the only scroll
-    // inputs; the scroller is a position indicator, not a draggable control.
-    // PassthroughScroller returns nil from hitTest so mouse events over
-    // the scroller still reach TerminalView (otherwise the right-edge
-    // strip would silently swallow scroll-wheel events).
-    private let scroller: PassthroughScroller = {
-        let s = PassthroughScroller(frame: .zero)
-        s.scrollerStyle = .overlay
-        s.controlSize = .regular
-        s.knobStyle = .default
-        s.isEnabled = false
-        s.doubleValue = 1.0
-        s.knobProportion = 1.0
-        s.isHidden = true
-        return s
-    }()
-    private var scrollerTimer: Timer?
 
     // Cmd-Click link detection (uses LinkDetector for testable regex scanning)
     private var detectedLinks: [DetectedLink] = []
@@ -149,14 +79,6 @@ final class TerminalView: NSView {
         self.menu = menu
 
         updateFontMetrics()
-
-        addSubview(scroller)
-        // Drive scrollbar updates while the view is alive. Cheap tmux query
-        // (~1 fork per 250ms); skipped early in `refreshScrollerState` when
-        // the alt-screen flag is set.
-        scrollerTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            self?.refreshScrollerState()
-        }
 
         pty.onOutput = { [weak self] data in
             guard let self = self else { return }
@@ -274,17 +196,12 @@ final class TerminalView: NSView {
         }
     }
 
-    deinit {
-        displayLink?.invalidate()
-        scrollerTimer?.invalidate()
-    }
+    deinit { displayLink?.invalidate() }
 
     // MARK: - Resize
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        layoutScroller()
-        refreshScrollerState()
         guard cellWidth > 0, cellHeight > 0 else { return }
         let newCols = max(1, Int(newSize.width / cellWidth))
         let newRows = max(1, Int(newSize.height / cellHeight))
@@ -299,47 +216,6 @@ final class TerminalView: NSView {
             }
             needsDisplay = true
         }
-    }
-
-    private func layoutScroller() {
-        let width: CGFloat = 15
-        let inset: CGFloat = 2
-        scroller.frame = NSRect(
-            x: bounds.maxX - width - inset,
-            y: inset,
-            width: width,
-            height: max(0, bounds.height - inset * 2)
-        )
-    }
-
-    /// Query tmux for the active pane's history size and scroll position.
-    /// Targets the default client (no -t flag): tmux's display-message
-    /// resolves to the active pane the user is viewing.
-    /// scrollPosition is nil when the pane is not in copy-mode.
-    private func queryTmuxScrollState() -> (historySize: Int, scrollPosition: Int?)? {
-        let out = Tmux.runRaw([
-            "display-message", "-p",
-            "#{history_size} #{?pane_in_mode,#{scroll_position},}"
-        ]).trimmingCharacters(in: .whitespacesAndNewlines)
-        if out.isEmpty { return nil }
-        let parts = out.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
-        guard let hist = Int(parts[0]) else { return nil }
-        let posStr = parts.count > 1
-            ? String(parts[1]).trimmingCharacters(in: .whitespaces)
-            : ""
-        let pos: Int? = posStr.isEmpty ? nil : Int(posStr)
-        return (hist, pos)
-    }
-
-    private func refreshScrollerState() {
-        let result = ScrollerState.compute(
-            isAltScreen: terminal.isAltScreen,
-            visibleRows: terminal.rows,
-            tmuxState: queryTmuxScrollState()
-        )
-        scroller.isHidden = result.hidden
-        scroller.knobProportion = CGFloat(result.knobProportion)
-        scroller.doubleValue = result.doubleValue
     }
 
     // MARK: - Rendering
@@ -730,21 +606,17 @@ final class TerminalView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         let pos = cellPosition(for: event)
-        let shiftHeld = event.modifierFlags.contains(.shift)
         let sequences = KeyInput.scrollBytes(
             deltaY: event.scrollingDeltaY,
             col: pos.col,
             row: pos.row,
             cellHeight: cellHeight,
             precise: event.hasPreciseScrollingDeltas,
-            shiftHeld: shiftHeld,
-            isAltScreen: terminal.isAltScreen,
-            mouseMode: terminal.mouseMode
+            visibleRows: terminal.rows
         )
         for data in sequences {
             pty.write(data)
         }
-        refreshScrollerState()
     }
 
     // MARK: - Keyboard

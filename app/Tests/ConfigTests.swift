@@ -166,43 +166,6 @@ enum ConfigTests {
                   "Config.swift must use after-select-pane hook")
         }
 
-        // Mouse + wheel bindings: tmux must intercept wheel for copy-mode
-        // entry on main screen and pass-through on alt-screen.
-        do {
-            let ts = TestSession(paneCount: 1)
-            _ = ts  // hold the session alive through the queries below
-
-            let mouse = tmux("show-options", "-gv", "mouse")
-                .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            check("mouse-on", mouse == "on",
-                  "expected mouse=on so wheel bindings can fire (got '\(mouse)')")
-
-            // list-keys -T root <key> is buggy across tmux versions for
-            // WheelUpPane / WheelDownPane keys (returns empty even when
-            // bound). Filter the full root-table dump instead.
-            let allRoot = tmux("list-keys", "-T", "root").stdout
-            let upLines = allRoot.split(separator: "\n").filter { $0.contains("WheelUpPane") }
-            let upBinding = upLines.joined(separator: "\n")
-            check("wheel-up-binding-exists",
-                  !upBinding.isEmpty,
-                  "expected a WheelUpPane binding in root table")
-            check("wheel-up-binding-alternate-on",
-                  upBinding.contains("alternate_on"),
-                  "expected WheelUpPane to branch on #{alternate_on}; got: \(upBinding)")
-            check("wheel-up-binding-copy-mode",
-                  upBinding.contains("copy-mode"),
-                  "expected WheelUpPane to enter copy-mode on main screen; got: \(upBinding)")
-
-            let downLines = allRoot.split(separator: "\n").filter { $0.contains("WheelDownPane") }
-            let downBinding = downLines.joined(separator: "\n")
-            check("wheel-down-binding-exists",
-                  !downBinding.isEmpty,
-                  "expected a WheelDownPane binding in root table")
-            check("wheel-down-binding-passthrough",
-                  downBinding.contains("send-keys -M"),
-                  "expected WheelDownPane to forward via send-keys -M; got: \(downBinding)")
-        }
-
         print("ConfigTests: \(passed) passed, \(failed) failed")
         return (passed, failed)
     }

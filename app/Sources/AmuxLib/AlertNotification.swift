@@ -181,6 +181,14 @@ public func applyAlertState(session: String, pane: Int) throws {
     // Idempotent on already-alerted panes.
     if (try? Tmux.getAlert(session, paneIndex: pane)) == true { return }
 
+    // Spec (docs/attention-management.md, Alert flow step 4): skip if
+    // pane is the active pane. The user is parked on it; when they next
+    // look at amux they will see the output directly. Setting the flag
+    // anyway leaves a stale alert that no focus event will clear, which
+    // inflates `@amux-alert-count` and produces phantom-count
+    // notifications later.
+    if (try? Tmux.activePaneIndex(session)) == pane { return }
+
     // Mark the pane as alerted.
     try Tmux.setAlert(session, paneIndex: pane, alert: true)
 
@@ -472,6 +480,10 @@ public enum AlertNotificationTests {
         // Two different panes in the same session accumulate.
         do {
             let fake = setupFake([("s", 3)])
+            // Park the active pane on a third index so neither alert
+            // target hits the "skip if active" rule (spec, Alert-flow
+            // step 4).
+            fake.sessions["s"]?.windows.first?.activePaneIndex = 1
             try! applyAlertState(session: "s", pane: 0)
             try! applyAlertState(session: "s", pane: 2)
             check("apply-twoPanesCount",
@@ -479,11 +491,49 @@ public enum AlertNotificationTests {
                   "distinct panes should sum into the session count")
         }
 
+        // Spec, Alert-flow step 4: a bell on the active pane must NOT
+        // set the alert flag. The user is parked on it; setting the
+        // flag with no focus event to clear it would leave a stale
+        // alert that inflates `@amux-alert-count` and produces phantom
+        // count notifications later.
+        do {
+            let fake = setupFake([("s", 3)])
+            fake.sessions["s"]?.windows.first?.activePaneIndex = 2
+            try! applyAlertState(session: "s", pane: 2)
+            check("apply-skipsActivePaneFlag",
+                  (try? Tmux.getAlert("s", paneIndex: 2)) != true,
+                  "alert on active pane must be skipped per spec — " +
+                  "got @amux-alert=\((try? Tmux.getAlert("s", paneIndex: 2)) ?? false)")
+            check("apply-skipsActivePaneCount",
+                  sessionOptionValue(fake, session: "s", key: "@amux-alert-count") == ""
+                  || sessionOptionValue(fake, session: "s", key: "@amux-alert-count") == "0",
+                  "skipping the flag must NOT bump the session count — " +
+                  "got '\(sessionOptionValue(fake, session: "s", key: "@amux-alert-count"))'")
+        }
+
+        // Companion to the above: a bell on a non-active pane in the
+        // same window does set the flag normally. Guards against an
+        // overzealous skip rule (e.g. checking the wrong session).
+        do {
+            let fake = setupFake([("s", 3)])
+            fake.sessions["s"]?.windows.first?.activePaneIndex = 2
+            try! applyAlertState(session: "s", pane: 1)
+            check("apply-setsNonActivePaneFlag",
+                  (try? Tmux.getAlert("s", paneIndex: 1)) == true,
+                  "alert on a non-active pane must still be set; only the " +
+                  "active pane is skipped")
+        }
+
         // --- processAlertTrigger (amux-app path) ---
 
         // Cross-session count is what gets notified (bug 2 fix).
         do {
-            let _ = setupFake([("alpha", 2), ("beta", 2)])
+            let fake = setupFake([("alpha", 2), ("beta", 2)])
+            // Park each session's active pane on a non-target index so
+            // neither alert hits the "skip if active" rule. (Each session
+            // tracks its own activePaneIndex; default is 0 in FakeTmux.)
+            fake.sessions["alpha"]?.windows.first?.activePaneIndex = 0
+            fake.sessions["beta"]?.windows.first?.activePaneIndex = 1
             // Simulate the CLI having already applied state for beta/0
             // (pre-existing alert) and alpha/1 (the newly-triggered pane).
             try! applyAlertState(session: "beta", pane: 0)

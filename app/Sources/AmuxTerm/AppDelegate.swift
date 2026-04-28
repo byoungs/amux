@@ -108,6 +108,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var alertServer: UnixSocketAlertEventServer?
     private let clickActivator = NSAppActivator()
 
+    // App Nap activity assertion. macOS throttles backgrounded apps —
+    // including their main dispatch queue — which delays the
+    // socket-handler hop from the AlertEventServer's accept thread back
+    // to main, so notifications only deliver after the user re-foregrounds
+    // amux. Spec (docs/attention-management.md, System Notifications):
+    // "First bell: Immediate macOS notification". Holding a background
+    // activity for the lifetime of the app keeps the main queue running
+    // promptly even when amux is not frontmost.
+    private var appNapAssertion: NSObjectProtocol?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
 
@@ -299,6 +309,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // socket so the first event doesn't race delegate registration.
         UNUserNotificationCenter.current().delegate = self
         notificationPoster.requestAuthorization()
+
+        // Hold a background activity assertion so macOS doesn't App-Nap
+        // amux-app and stall the main queue while we're not frontmost.
+        // Without this, AlertEvents accepted by the socket server land
+        // on a backed-up main queue and only fire `processAlertTrigger`
+        // (and its UN post) once the user re-activates the app — making
+        // notifications appear "after switching back to amux" instead of
+        // when the agent actually goes ready.
+        appNapAssertion = ProcessInfo.processInfo.beginActivity(
+            options: [.background],
+            reason: "amux alert notifications must deliver while backgrounded")
 
         startAlertEventServer()
     }

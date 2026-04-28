@@ -482,7 +482,17 @@ func main() throws {
 
     case "update-title":
         // amux-cli update-title PANE_INDEX CWD
-        // Called by after-select-pane hook with AMUX_SESSION env var
+        // Called by after-select-pane hook with AMUX_SESSION env var.
+        //
+        // This is the catch-all "pane became active" handler: it both
+        // refreshes the title from cwd AND clears the alert flag, per
+        // spec (docs/attention-management.md, Dismissal step 1: "When a
+        // pane becomes the active pane: clear its ready-for-you state").
+        // Routing dismissal through the tmux hook covers every focus
+        // path — mouse clicks, direct tmux subprocess select-pane, and
+        // any future binding — instead of relying solely on
+        // `LayoutEngine.action.dismissAlert`, which only fires for amux's
+        // own keybinding-driven navigation.
         guard args.count >= 3 else {
             fputs("Usage: amux-cli update-title PANE_INDEX CWD\n", stderr)
             exit(1)
@@ -495,6 +505,7 @@ func main() throws {
         let cwd = args[2]
         let title = Util.autoTitle(dir: cwd)
         try Tmux.setTitle(session, paneIndex: paneIndex, title: title)
+        try? Tmux.dismissAlert(session, paneIndex: paneIndex)
 
     case "alert-pane":
         guard args.count >= 2 else {

@@ -256,7 +256,18 @@ public class AppController {
             try Tmux.createSession(session)
         }
         Tmux.markAsManaged(session)
-        try Config.applyConfig(session: session)
+        // Re-apply Config to every amux-managed session, not just the
+        // current one. Per-session options (status bar) and hooks must
+        // be set on each session; global options (key bindings, format
+        // strings) are idempotent so re-applying them is harmless.
+        // This guarantees `make dev` (which kills + relaunches amux-app
+        // and re-runs startup) also refreshes config across all spaces,
+        // so a separate `refresh` step isn't needed.
+        let managed = (try? Tmux.listFocusSessions()) ?? []
+        let targets = managed.isEmpty ? [session] : managed
+        for s in targets {
+            try Config.applyConfig(session: s)
+        }
 
         // Clear stale overrides from previous app runs.
         Tmux.clearStaleBorderOverrides(session)

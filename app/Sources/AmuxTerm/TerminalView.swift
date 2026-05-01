@@ -43,10 +43,15 @@ final class TerminalView: NSView {
 
     // Set when amux's wheel handling may have entered tmux copy-mode (i.e.
     // a wheel-up event in main screen). Reset on next keyDown — at which
-    // point we send `tmux send-keys -X cancel` to exit copy-mode and
-    // return the pane to its live tail before forwarding the typed key.
-    // This is what users mean by "typing should jump me back to the
-    // bottom so I can see what I'm typing."
+    // point we write an Esc byte to the PTY (tmux's emacs copy-mode
+    // default cancel binding) to return the pane to its live tail before
+    // forwarding the typed key. This is what users mean by "typing should
+    // jump me back to the bottom so I can see what I'm typing."
+    //
+    // Note: with `copy-mode -eu` on WheelUpPane, scrolling all the way
+    // down to the live tail auto-exits copy-mode without needing a
+    // keystroke. This flag still matters when the user types while
+    // scrolled up.
     private var wheelMayHaveEnteredCopyMode: Bool = false
 
     /// The tmux session name. Set by AppDelegate after construction.
@@ -687,7 +692,15 @@ final class TerminalView: NSView {
     private func handleCopyModeExit() {
         guard wheelMayHaveEnteredCopyMode else { return }
         wheelMayHaveEnteredCopyMode = false
-        let mode = Tmux.runRaw(["display-message", "-p", "#{pane_in_mode}"])
+        // Target the session explicitly. An untargeted display-message
+        // resolves to whatever tmux considers the "current" pane on the
+        // server, which is unreliable when a fresh non-attached client
+        // (this subprocess) issues the query — it can return the wrong
+        // pane's state and skip the needed Esc.
+        let args = session.isEmpty
+            ? ["display-message", "-p", "#{pane_in_mode}"]
+            : ["display-message", "-t", session, "-p", "#{pane_in_mode}"]
+        let mode = Tmux.runRaw(args)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if mode == "1" {
             pty.write(Data([0x1B]))

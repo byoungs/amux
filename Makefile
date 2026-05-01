@@ -3,14 +3,13 @@
 # make dev       Build and launch the app in debug mode
 # make test      Run unit tests (embedded in app binary)
 # make validate  Full test suite: unit + tmux integration tests
-# make refresh   Re-apply tmux config (after changing format strings/hooks)
 # make release   Build and validate a release DMG
 # make publish   Tag and publish to GitHub (requires gh, clean tree)
 # make clean     Remove build artifacts
 
 VERSION := 0.3.0
 
-.PHONY: dev test validate refresh clean setup app app-dev app-test app-clean tmux-bundle dmg release publish
+.PHONY: dev test validate clean setup app app-dev app-test app-clean tmux-bundle dmg release publish
 
 # ── Build ──────────────────────────────────────────────
 
@@ -165,7 +164,3 @@ publish:
 	gh release create "v$(VERSION)" $$ASSETS --title "amux v$(VERSION)" --generate-notes
 	@echo "✓ Published amux v$(VERSION) to GitHub"
 
-# ── Convenience ────────────────────────────────────────
-
-refresh:
-	amux refresh

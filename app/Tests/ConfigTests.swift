@@ -189,6 +189,12 @@ enum ConfigTests {
             check("wheel-up-binding-copy-mode",
                   upBinding.contains("copy-mode"),
                   "got: \(upBinding)")
+            // copy-mode -eu: -e auto-exits when scrolled to the live tail
+            // so typing "just works" at bottom without pressing Esc.
+            // Plain -u (no auto-exit) traps user in copy-mode at bottom.
+            check("wheel-up-binding-auto-exit-at-tail",
+                  upBinding.contains("copy-mode -eu"),
+                  "expected `copy-mode -eu` (auto-exit at tail); got: \(upBinding)")
 
             let downBinding = allRoot.split(separator: "\n")
                 .filter { $0.contains("WheelDownPane") }.joined(separator: "\n")

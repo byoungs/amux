@@ -133,15 +133,16 @@ public enum Config {
 
         tmuxRunIgnoringErrors(["bind-key", "-T", "root", "WheelUpPane",
             "if-shell -Ft= '#{?pane_in_mode,1,#{alternate_on}}' " +
-            "{ send-keys -M } { select-pane -t= ; copy-mode -u }"])
+            "{ send-keys -M } { select-pane -t= ; copy-mode -eu }"])
         // WheelDownPane: send-keys -M re-emits the wheel event. In copy-mode
         // it scrolls down. In alt-screen it forwards to the pane app. On
         // main screen at the live tail the SGR mouse event is a no-op.
-        // Note: copy-mode entry uses `-u` (NOT `-eu`) so the user stays in
-        // copy-mode at the bottom rather than auto-exiting and getting
-        // re-entered by subsequent upward wheel events. Typing any key
-        // exits copy-mode (TerminalView sends `send-keys -X cancel` on
-        // first keyDown after a wheel event).
+        // Copy-mode entry uses `-eu`: scrolling down to the live tail
+        // auto-exits copy-mode so typing "just works" without the user
+        // pressing Esc. The trackpad-inertia filter in TerminalView
+        // suppresses upward bounce-back frames, so auto-exit doesn't get
+        // immediately re-entered. Typing while still scrolled up (in
+        // copy-mode) is handled by handleCopyModeExit.
         tmuxRunIgnoringErrors(["bind-key", "-T", "root", "WheelDownPane", "send-keys -M"])
 
         // Active pane: match iTerm2 profile (bg #000000, fg #bbbbbb)

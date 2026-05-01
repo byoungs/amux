@@ -13,24 +13,25 @@ make setup
 ## Build & Run
 
 ```bash
-make dev       # Build debug app + CLI, launch AmuxTerm
+make dev       # Build debug app + CLI, kill+relaunch AmuxTerm
 make test      # Unit tests (no tmux needed)
 make validate  # Full suite: unit + tmux integration tests
-make refresh   # Re-apply tmux config (border formats, hooks, status bar)
 make clean     # Remove build artifacts
 ```
 
 ### What Goes Live When
 
-| Change type | Live on build? | Needs `make refresh`? |
-|------------|---------------|----------------------|
-| App logic (zoom, alert, layout, keyboard) | Yes (restart app) | No |
-| CLI commands (spaces, send, help, hooks) | Yes (next tmux hook/popup) | No |
-| Border format, status bar, key bindings (Config.swift) | No | Yes |
+| Change type | Live on `make dev`? |
+|------------|---------------------|
+| App logic (zoom, alert, layout, keyboard) | Yes (kill + relaunch) |
+| CLI commands (spaces, send, help, hooks) | Yes (next tmux hook/popup) |
+| Border format, status bar, key bindings (Config.swift) | Yes (re-applied at startup) |
 
-The app must be quit and relaunched to pick up Swift code changes.
-CLI changes are live immediately because tmux shells out to `amux-cli`
-on every hook invocation.
+`make dev` kills and relaunches amux-app, and startup re-applies
+Config.applyConfig to every managed tmux session — so Config.swift
+changes go live without a separate refresh step. CLI changes are live
+immediately because tmux shells out to `amux-cli` on every hook
+invocation.
 
 ## Project Structure
 
@@ -99,7 +100,6 @@ make publish    # Tag + push + GitHub release
 | `make dev` | Build and launch app in debug mode |
 | `make test` | Unit tests (fast, no tmux) |
 | `make validate` | Full test suite (unit + integration) |
-| `make refresh` | Re-apply tmux config |
 | `make release` | Build release DMG |
 | `make publish` | Tag and publish to GitHub |
 | `make clean` | Remove build artifacts |

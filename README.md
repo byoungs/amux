@@ -174,7 +174,6 @@ amux               Start or attach to a session
 amux start         Start a new session
 amux new [name]    Create a new pane (auto-names from cwd + git branch)
 amux list          List all panes
-amux refresh       Re-apply config to existing session
 amux spaces        Space picker
 amux send          Send pane to another space
 ```
@@ -217,12 +216,11 @@ Pane titles are auto-generated from the working directory and git branch:
 ## Development
 
 ```bash
-make dev       # Build release binary — live on next tmux keypress
+make dev       # Build, kill+relaunch app, re-apply tmux config
 make test      # Lint + fast tests + release build
 make validate  # Full suite including tmux integration tests
 make release   # Validate + build DMG
 make publish   # Tag + push to GitHub releases
-make refresh   # Re-apply tmux config after changing config.rs
 ```
 
 ## Architecture

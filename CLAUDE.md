@@ -3,18 +3,21 @@
 ## Build & Test
 
 ```
-make dev       # Build release binary — live on next tmux keypress
+make dev       # Build release binary, kill+relaunch app, re-apply tmux config
 make test      # Lint + fast tests + release build — runs anywhere, no tmux needed
 make validate  # Full test suite including tmux integration tests (parallel-safe)
 make fmt       # Auto-format code
 make lint      # swift-format lint + format check
-make refresh   # Re-apply tmux config (border formats, keybindings, status bar)
 make clean     # Remove build artifacts
 make setup     # Full environment setup (idempotent)
 ```
 
 **Never use `swift build` directly to install** — it bypasses the symlink
 that `make dev` manages. Always use `make dev` to build.
+
+`make dev` re-applies tmux config (border format, status bar, key
+bindings, hooks) to every amux-managed session as part of startup, so
+Config.swift changes go live without a separate refresh step.
 
 ## Dev Flow
 Flow: worktree
@@ -28,15 +31,13 @@ Flow: worktree
 - Team: Penfield Six (key: PEN)
 - Project: amux
 
-## What Goes Live Instantly vs Needs Refresh
+## What Goes Live on `make dev`
 
-| Change type | Live on build? | Needs `make refresh`? |
-|------------|---------------|----------------------|
-| Zoom/alert/layout/notification logic | Yes | No |
-| Border format, status bar, key bindings (`Config.swift`) | No | Yes |
-
-tmux caches config strings. Code changes are live because tmux shells out
-to `amux-cli` on every keypress.
+Everything. `make dev` rebuilds + kills + relaunches amux-app, and
+startup re-applies Config.applyConfig to every managed tmux session
+(borders, status bar, key bindings, hooks). Code changes that don't
+touch Config.swift are also live because tmux shells out to `amux-cli`
+on every keypress.
 
 ## Architecture
 

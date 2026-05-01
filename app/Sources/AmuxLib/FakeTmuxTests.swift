@@ -1,4 +1,7 @@
 #if DEBUG
+import Foundation
+import Darwin
+
 public enum FakeTmuxTests {
     public static func runAll() {
         var passed = 0
@@ -8,7 +11,7 @@ public enum FakeTmuxTests {
             if condition { passed += 1 }
             else {
                 failed += 1
-                print("FAIL: \(name)\(message.isEmpty ? "" : " — \(message)")")
+                fputs("FAIL: \(name)\(message.isEmpty ? "" : " — \(message)")\n", stderr)
             }
         }
 
@@ -186,8 +189,8 @@ public enum FakeTmuxTests {
             ])
             let lines = result.split(separator: "\n").map(String.init)
             check("list-panes format line count", lines.count == 2)
-            check("list-panes format pane 0", lines[0] == "0\t1\t200")
-            check("list-panes format pane 1", lines[1] == "1\t\t200")
+            check("list-panes format pane 0", lines[0] == "0\t1\t99")
+            check("list-panes format pane 1", lines[1] == "1\t\t100")
         } catch {
             failed += 1
             print("FAIL: format evaluation — \(error)")

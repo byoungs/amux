@@ -628,6 +628,18 @@ public enum Tmux {
             )
         }
 
+        // Step 2b: Enforce desired pane order via swap-pane.
+        //
+        // tmux's `select-layout` only reshapes slot geometry — it does NOT
+        // move panes between slots. After applying the layout string, panes
+        // remain in their pre-layout tree-walk order at the new slot
+        // positions. The pane IDs embedded in the layout string are used
+        // for verification but not reassignment. So if the algorithm wants
+        // pane %3 at slot 0 but it is currently at slot 1, we must swap.
+        if let order = action.paneOrder {
+            try reorderPanes(session, desiredOrder: order)
+        }
+
         // Step 3: Dismiss alert BEFORE select-pane so the border re-renders
         // with the cleared state. The after-select-pane hook fires during
         // select-pane and re-renders the border — if the alert flag is still
@@ -668,6 +680,36 @@ public enum Tmux {
         let state = try gatherLayoutState(session)
         let action = LayoutEngine.computeLayout(state: state, event: event)
         try executeLayout(session, action: action)
+    }
+
+    /// Swap panes until tree-walk order matches `desiredOrder`.
+    ///
+    /// `desiredOrder` is the desired sequence of numeric pane IDs (i.e.,
+    /// `pane_id` minus the `%`) by tmux pane index. `select-layout`
+    /// reshapes geometry without moving panes between slots, so this is
+    /// the only way to land a pane at a specific slot.
+    public static func reorderPanes(_ session: String, desiredOrder: [Int]) throws {
+        // Single-pane windows can't have a wrong slot. Skip the list-panes
+        // round-trip entirely so the resize hook (fired on every terminal
+        // resize) stays cheap.
+        if desiredOrder.count <= 1 { return }
+
+        // Read the current order once; track local mutations as we swap so
+        // we don't re-query tmux on every iteration.
+        var currentIds = try getPaneIds(session)
+        for slot in 0..<desiredOrder.count {
+            guard slot < currentIds.count else { return }
+            let want = desiredOrder[slot]
+            if currentIds[slot] == want { continue }
+            guard let srcIdx = currentIds[slot...].firstIndex(of: want) else { continue }
+            try runChecked(
+                ["swap-pane", "-d",
+                 "-s", "\(session):0.\(srcIdx)",
+                 "-t", "\(session):0.\(slot)"],
+                context: "swap-pane failed"
+            )
+            currentIds.swapAt(slot, srcIdx)
+        }
     }
 
     // MARK: - Split view

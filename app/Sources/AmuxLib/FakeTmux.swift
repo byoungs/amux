@@ -926,21 +926,32 @@ public class FakeTmux: TmuxExecutor {
         pane: FakePane?
     ) -> String {
         var result = format
+        // Derive per-pane geometry from the window's grid layout so tests
+        // that consume pane_left/pane_top/pane_width/pane_height (and
+        // sticky-pane matching, which keys off pane centers) see realistic
+        // positions instead of every pane reporting (0, 0). The fake's
+        // default window is 200x50; gridPositions matches the production
+        // layout algorithm for that size and the current pane count.
+        let count = window?.panes.count ?? 1
+        let winW = pane?.width ?? 200
+        let winH = pane?.height ?? 50
+        let rects = gridPositions(count: count, width: winW, height: winH)
+        let rect = (paneIndex < rects.count) ? rects[paneIndex] : Rect(x: 0, y: 0, w: winW, h: winH)
         result = result.replacingOccurrences(
             of: "#{pane_index}", with: "\(paneIndex)")
         result = result.replacingOccurrences(
             of: "#{pane_id}", with: "%\(pane?.id ?? 0)")
         result = result.replacingOccurrences(
-            of: "#{pane_width}", with: "\(pane?.width ?? 200)")
+            of: "#{pane_width}", with: "\(rect.w)")
         result = result.replacingOccurrences(
-            of: "#{pane_height}", with: "\(pane?.height ?? 50)")
+            of: "#{pane_height}", with: "\(rect.h)")
         result = result.replacingOccurrences(
             of: "#{pane_active}",
             with: (paneIndex == (window?.activePaneIndex ?? 0)) ? "1" : "0")
         result = result.replacingOccurrences(
-            of: "#{pane_left}", with: "0")
+            of: "#{pane_left}", with: "\(rect.x)")
         result = result.replacingOccurrences(
-            of: "#{pane_top}", with: "0")
+            of: "#{pane_top}", with: "\(rect.y)")
         result = result.replacingOccurrences(
             of: "#{pane_current_path}", with: pane?.cwd ?? "/tmp")
         result = result.replacingOccurrences(

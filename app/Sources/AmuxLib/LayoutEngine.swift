@@ -47,6 +47,11 @@ public enum LayoutEvent {
 /// The full set of tmux mutations the shell should execute.
 public struct LayoutAction {
     public var layoutString: String?
+    /// Desired pane IDs in tree-walk order (i.e., target tmux pane indices).
+    /// `select-layout` only reshapes geometry — it does not move panes between
+    /// slots. After applying the layout string, the shell must `swap-pane`
+    /// each pane into its desired index per this array.
+    public var paneOrder: [Int]?
     public var zoom: Bool?
     public var selectPane: Int?
     public var openSpaces: Bool
@@ -55,6 +60,7 @@ public struct LayoutAction {
 
     public init() {
         self.layoutString = nil
+        self.paneOrder = nil
         self.zoom = nil
         self.selectPane = nil
         self.openSpaces = false
@@ -88,16 +94,17 @@ public enum LayoutEngine {
         }
     }
 
-    private static func buildGridLayout(state: LayoutState, stickyEvent: StickyLayoutEvent) -> String? {
+    private static func buildGridLayout(state: LayoutState, stickyEvent: StickyLayoutEvent) -> (String?, [Int]?) {
         let effectiveH = max(state.windowH - state.borderTop, 0)
         let newPanes = AmuxLib.computeLayout(
             current: state.panes, event: stickyEvent,
             windowW: state.windowW, windowH: effectiveH
         )
-        return buildLayoutString(
+        let s = buildLayoutString(
             panes: newPanes, windowW: state.windowW,
             windowH: state.windowH, borderTop: state.borderTop
         )
+        return (s, newPanes.map { $0.id })
     }
 
     private static func computeAdd(state: LayoutState, newId: Int) -> LayoutAction {
@@ -105,7 +112,9 @@ public enum LayoutEngine {
         if state.panes.count > 1 && state.zoomed {
             action.zoom = false
         }
-        action.layoutString = buildGridLayout(state: state, stickyEvent: .add(newId))
+        let (s, order) = buildGridLayout(state: state, stickyEvent: .add(newId))
+        action.layoutString = s
+        action.paneOrder = order
         return action
     }
 
@@ -114,7 +123,9 @@ public enum LayoutEngine {
         if state.panes.count > 1 && state.zoomed {
             action.zoom = false
         }
-        action.layoutString = buildGridLayout(state: state, stickyEvent: .remove(removedId))
+        let (s, order) = buildGridLayout(state: state, stickyEvent: .remove(removedId))
+        action.layoutString = s
+        action.paneOrder = order
         return action
     }
 
@@ -127,7 +138,9 @@ public enum LayoutEngine {
             return action
         }
         var result = action
-        result.layoutString = buildGridLayout(state: state, stickyEvent: .resize)
+        let (s, order) = buildGridLayout(state: state, stickyEvent: .resize)
+        result.layoutString = s
+        result.paneOrder = order
         return result
     }
 

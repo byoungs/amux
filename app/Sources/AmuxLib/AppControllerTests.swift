@@ -1,4 +1,7 @@
 #if DEBUG
+import Foundation
+import Darwin
+
 public enum AppControllerTests {
     public static func runAll() {
         var passed = 0
@@ -6,7 +9,7 @@ public enum AppControllerTests {
 
         func check(_ name: String, _ condition: Bool, _ message: String = "") {
             if condition { passed += 1 }
-            else { failed += 1; print("FAIL: \(name)\(message.isEmpty ? "" : " — \(message)")") }
+            else { failed += 1; fputs("FAIL: \(name)\(message.isEmpty ? "" : " — \(message)")\n", stderr) }
         }
 
         // Helper: create a controller with FakeTmux and N panes

@@ -112,8 +112,8 @@ public func matchPanesStructural(
     prevCount: Int,
     newCount: Int
 ) -> [Int?] {
-    let prevBalanced = prevCount >= 4 && prevCount.isMultiple(of: 2)
-    let newBalanced = newCount >= 4 && newCount.isMultiple(of: 2)
+    let prevBalanced = prevCount >= 2 && prevCount.isMultiple(of: 2)
+    let newBalanced = newCount >= 2 && newCount.isMultiple(of: 2)
     let prevHasColumn = prevCount >= 3 && prevCount % 2 == 1
     let newHasColumn = newCount >= 3 && newCount % 2 == 1
 
@@ -611,6 +611,68 @@ public enum StickyTests {
             for (r, e) in zip(result, expected) {
                 check("add_3_to_4 geom id=\(r.id)", r.x == e.x && r.y == e.y && r.w == e.w && r.h == e.h)
             }
+        }
+
+        // layout_add_3_to_4_already_joined_split_A
+        // Simulates live flow: tmux split-window -v on the full-left pane (A).
+        // tmux splits A into top/bottom halves; B and C unchanged.
+        // Spec: result must still be canonical 4-pane with TL=A, TR=B, BL=NEW, BR=C.
+        do {
+            let r3 = gridPositions(count: 3, width: W, height: H)
+            let leftW = r3[0].w  // full-left width
+            let topH = r3[1].h   // half height in 3-pane right column
+            // After split-window on A: A becomes top half of left col, NEW is bot half
+            let A = Pane(id: 10, x: 0, y: 0, w: leftW, h: topH)
+            let NEW = Pane(id: 99, x: 0, y: topH + 1, w: leftW, h: H - topH - 1)
+            let B = Pane(id: 11, x: r3[1].x, y: r3[1].y, w: r3[1].w, h: r3[1].h)
+            let C = Pane(id: 12, x: r3[2].x, y: r3[2].y, w: r3[2].w, h: r3[2].h)
+            let current = [A, B, NEW, C]
+            let result = computeLayout(current: current, event: .add(99), windowW: W, windowH: H)
+            check("add_3_to_4_split_A count", result.count == 4)
+            check("add_3_to_4_split_A TL=A", result[0].id == 10, "result: \(result.map { $0.id })")
+            check("add_3_to_4_split_A TR=B", result[1].id == 11, "result: \(result.map { $0.id })")
+            check("add_3_to_4_split_A BL=NEW", result[2].id == 99, "result: \(result.map { $0.id })")
+            check("add_3_to_4_split_A BR=C", result[3].id == 12, "result: \(result.map { $0.id })")
+        }
+
+        // layout_add_3_to_4_already_joined_split_B
+        // tmux split-window -v on top-right pane (B). B keeps top, NEW below B, C unchanged.
+        do {
+            let r3 = gridPositions(count: 3, width: W, height: H)
+            let bRegionH = r3[1].h
+            let bH = (bRegionH - 1) / 2
+            let newH = bRegionH - bH - 1
+            let A = Pane(id: 10, x: r3[0].x, y: r3[0].y, w: r3[0].w, h: r3[0].h)
+            let B = Pane(id: 11, x: r3[1].x, y: r3[1].y, w: r3[1].w, h: bH)
+            let NEW = Pane(id: 99, x: r3[1].x, y: r3[1].y + bH + 1, w: r3[1].w, h: newH)
+            let C = Pane(id: 12, x: r3[2].x, y: r3[2].y, w: r3[2].w, h: r3[2].h)
+            let current = [A, B, NEW, C]
+            let result = computeLayout(current: current, event: .add(99), windowW: W, windowH: H)
+            check("add_3_to_4_split_B count", result.count == 4)
+            check("add_3_to_4_split_B TL=A", result[0].id == 10, "result: \(result.map { $0.id })")
+            check("add_3_to_4_split_B TR=B", result[1].id == 11, "result: \(result.map { $0.id })")
+            check("add_3_to_4_split_B BL=NEW", result[2].id == 99, "result: \(result.map { $0.id })")
+            check("add_3_to_4_split_B BR=C", result[3].id == 12, "result: \(result.map { $0.id })")
+        }
+
+        // layout_add_3_to_4_already_joined_split_C
+        // tmux split-window -v on bot-right pane (C). C keeps top of its region, NEW below C.
+        do {
+            let r3 = gridPositions(count: 3, width: W, height: H)
+            let cRegionH = r3[2].h
+            let cH = (cRegionH - 1) / 2
+            let newH = cRegionH - cH - 1
+            let A = Pane(id: 10, x: r3[0].x, y: r3[0].y, w: r3[0].w, h: r3[0].h)
+            let B = Pane(id: 11, x: r3[1].x, y: r3[1].y, w: r3[1].w, h: r3[1].h)
+            let C = Pane(id: 12, x: r3[2].x, y: r3[2].y, w: r3[2].w, h: cH)
+            let NEW = Pane(id: 99, x: r3[2].x, y: r3[2].y + cH + 1, w: r3[2].w, h: newH)
+            let current = [A, B, C, NEW]
+            let result = computeLayout(current: current, event: .add(99), windowW: W, windowH: H)
+            check("add_3_to_4_split_C count", result.count == 4)
+            check("add_3_to_4_split_C TL=A", result[0].id == 10, "result: \(result.map { $0.id })")
+            check("add_3_to_4_split_C TR=B", result[1].id == 11, "result: \(result.map { $0.id })")
+            check("add_3_to_4_split_C BL=NEW", result[2].id == 99, "result: \(result.map { $0.id })")
+            check("add_3_to_4_split_C BR=C", result[3].id == 12, "result: \(result.map { $0.id })")
         }
 
         // layout_add_4_to_5

@@ -846,11 +846,21 @@ public enum Tmux {
     }
 
     /// Set up bell watchers on all panes in a session.
+    ///
+    /// Batches the per-pane `pipe-pane` calls into one tmux subprocess.
+    /// This runs on every session init (and refresh), so chaining the
+    /// commands cuts session-setup latency proportional to pane count.
     public static func setupAllBellWatches(_ session: String) throws {
         let panes = try listPanes(session)
-        for pane in panes {
-            try setupBellWatch(session, paneIndex: pane.index)
+        guard !panes.isEmpty else { return }
+        let bin = Config.findAmuxCLI()
+        let commands: [[String]] = panes.map { pane in
+            [
+                "pipe-pane", "-t", "\(session):.\(pane.index)",
+                "exec \(bin) bell-watch --session \(session) \(pane.index)",
+            ]
         }
+        batchRaw(commands)
     }
 
     // MARK: - Notifications

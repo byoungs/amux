@@ -287,8 +287,17 @@ class TestSession {
         try! Tmux.createSession(name)
 
         if count > 0 {
-            for _ in 1..<count {
-                _ = try! Tmux.createPane(name)
+            // Bulk-create panes via one batched `split-window` invocation.
+            // This deliberately bypasses `Tmux.createPane`, whose per-pane
+            // applyLayout + select-pane + setupBellWatch are redundant in
+            // tests (we redo all three at the end of init). Skipping them
+            // saves O(count) tmux subprocess calls per TestSession.
+            if count > 1 {
+                let splits = Array(
+                    repeating: ["split-window", "-t", "\(name):0", "-d"],
+                    count: count - 1
+                )
+                Tmux.batchRaw(splits)
             }
             try! Config.applyConfig(session: name)
             try! Tmux.setupAllBellWatches(name)

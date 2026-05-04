@@ -58,155 +58,112 @@ public enum Config {
     }()
 
     /// Apply all amux tmux configuration to a session (except key bindings).
+    ///
+    /// Performance: every command is bundled into two batched tmux invocations
+    /// (one for cleanup, one for required sets) instead of ~35 separate
+    /// `Process` launches. Per-call subprocess overhead dominated session
+    /// setup in the integration test suite — batching cuts session-init time
+    /// roughly in half.
     public static func applyConfig(session: String) throws {
-        try applyBorderStyle(session: session)
-        try applyStatusBar(session: session)
-        try applyHooks(session: session)
-    }
-
-    /// Set up attention management and layout hooks.
-    public static func applyHooks(session: String) throws {
-        // Clean up stale global hooks from before session-scoping was added.
-        // Without this, old -g hooks linger in tmux and fire for all sessions.
-        // Includes pane-focus-in/out at window scope (-gw) since debug experiments
-        // can leave display-message hooks there that flash text on every focus change.
-        for hook in ["pane-exited", "client-resized", "pane-focus-out", "pane-focus-in"] {
-            tmuxRunIgnoringErrors(["set-hook", "-gu", hook])
-            tmuxRunIgnoringErrors(["set-hook", "-gwu", hook])
-        }
-
         let bin = findAmuxCLI()
 
-        // Re-apply layout when a pane exits (shell closes naturally)
-        try tmuxRun(["set-hook", "-t", session, "pane-exited",
-                     "run-shell \"\(bin) layout #{session_name}\""])
+        // Cleanup batch — best-effort. Removing stale -g hooks, unbinding
+        // legacy keys, and clearing window-scoped overrides may "fail"
+        // (option not set, key not bound) and that's fine.
+        //
+        // Includes pane-focus-in/out at window scope (-gw) since debug
+        // experiments can leave display-message hooks there that flash
+        // text on every focus change.
+        Tmux.batchRaw([
+            ["set-hook", "-gu", "pane-exited"],
+            ["set-hook", "-gu", "client-resized"],
+            ["set-hook", "-gu", "pane-focus-out"],
+            ["set-hook", "-gu", "pane-focus-in"],
+            ["set-hook", "-gwu", "pane-exited"],
+            ["set-hook", "-gwu", "client-resized"],
+            ["set-hook", "-gwu", "pane-focus-out"],
+            ["set-hook", "-gwu", "pane-focus-in"],
+            // Disable the tmux prefix key entirely. Amux uses root-table
+            // bindings so the prefix key (Ctrl-B) is unnecessary.
+            ["set", "-g", "prefix", "None"],
+            ["unbind-key", "-T", "prefix", "C-b"],
+            ["unbind-key", "-n", "C-b"],
+            // Set terminal-features once (not append) to avoid duplication on refresh
+            ["set", "-s", "terminal-features[0]",
+             "xterm*:clipboard:ccolour:cstyle:focus:title:sync:extkeys"],
+            // True-color support for compatible terminals
+            ["set", "-sa", "terminal-overrides", ",xterm-256color:RGB"],
+            // Disable interactive border drag — without this, every accidental
+            // drag on a pane border resizes the pane and captures pane history
+            // at a new width, causing mixed-width scrollback ("christmas tree").
+            // amux owns resize via setFrameSize/SIGWINCH; users don't need
+            // mouse-driven pane resizing.
+            ["unbind-key", "-T", "root", "MouseDrag1Border"],
+            // Scroll wheel: tmux intercepts and routes based on alt-screen state.
+            //   Main screen → enter copy-mode and scroll pane history.
+            //   Alt screen → pass wheel through to the pane app.
+            // copy-mode entry uses `-eu`: -e auto-exits when scrolled to
+            // the live tail so typing "just works" without a forced Esc.
+            // The trackpad-inertia filter in TerminalView suppresses
+            // upward bounce-back frames, so auto-exit doesn't get
+            // immediately re-entered. Typing while still scrolled up
+            // (in copy-mode) is handled by handleCopyModeExit.
+            ["bind-key", "-T", "root", "WheelUpPane",
+             "if-shell -Ft= '#{?pane_in_mode,1,#{alternate_on}}' " +
+             "{ send-keys -M } { select-pane -t= ; copy-mode -eu }"],
+            ["bind-key", "-T", "root", "WheelDownPane", "send-keys -M"],
+            // Clear any stale window-level format override (takes precedence
+            // over global)
+            ["set-option", "-w", "-u", "pane-border-format"],
+        ])
 
-        // Re-apply layout when the terminal window is resized
-        try tmuxRun(["set-hook", "-t", session, "client-resized",
-                     "run-shell \"\(bin) layout #{session_name}\""])
-
-        // Update the selected pane's title from its cwd on focus change.
-        try tmuxRun(["set-hook", "-t", session, "after-select-pane",
-                     "run-shell \"AMUX_SESSION=#{session_name} \(bin) update-title #{pane_index} '#{pane_current_path}'\""])
-    }
-
-    /// Configure pane borders with colored title bars.
-    private static func applyBorderStyle(session: String) throws {
-        // When the last pane in a session closes, switch to another session
-        // instead of detaching from tmux entirely.
-        try tmuxSetGlobal("detach-on-destroy", "off")
-
-        // Fix Claude Code flickering + enable Shift-Enter passthrough
-        try tmuxSetGlobal("allow-passthrough", "on")
-        try tmuxSetGlobal("extended-keys", "always")
-        try tmuxSetServer("escape-time", "0")
-
-        // Disable the tmux prefix key entirely. Amux uses root-table bindings
-        // so the prefix key (Ctrl-B) is unnecessary.
-        tmuxRunIgnoringErrors(["set", "-g", "prefix", "None"])
-        tmuxRunIgnoringErrors(["unbind-key", "-T", "prefix", "C-b"])
-        tmuxRunIgnoringErrors(["unbind-key", "-n", "C-b"])
-
-        // Set terminal-features once (not append) to avoid duplication on refresh
-        tmuxRunIgnoringErrors(["set", "-s", "terminal-features[0]",
-                               "xterm*:clipboard:ccolour:cstyle:focus:title:sync:extkeys"])
-        // True-color support for compatible terminals
-        tmuxRunIgnoringErrors(["set", "-sa", "terminal-overrides", ",xterm-256color:RGB"])
-        // Large scrollback to handle Claude Code's rapid streaming output
-        try tmuxSetGlobal("history-limit", "250000")
-
-        // Scroll wheel: tmux intercepts and routes based on alt-screen state.
-        //   Main screen → enter copy-mode and scroll pane history (tmux's
-        //                 own reflow handles resize correctly).
-        //   Alt screen → pass wheel through to the pane app (amux already
-        //                 translated wheel to arrow keys when the app isn't
-        //                 consuming mouse events; SGR mouse events go through).
-        // Block syntax `{...}` keeps multi-statement branches as one command.
-        try tmuxSetGlobal("mouse", "on")
-
-        // Disable interactive border drag — without this, every accidental
-        // drag on a pane border resizes the pane and captures pane history
-        // at a new width, causing mixed-width scrollback ("christmas tree").
-        // amux owns resize via setFrameSize/SIGWINCH; users don't need
-        // mouse-driven pane resizing.
-        tmuxRunIgnoringErrors(["unbind-key", "-T", "root", "MouseDrag1Border"])
-
-        tmuxRunIgnoringErrors(["bind-key", "-T", "root", "WheelUpPane",
-            "if-shell -Ft= '#{?pane_in_mode,1,#{alternate_on}}' " +
-            "{ send-keys -M } { select-pane -t= ; copy-mode -eu }"])
-        // WheelDownPane: send-keys -M re-emits the wheel event. In copy-mode
-        // it scrolls down. In alt-screen it forwards to the pane app. On
-        // main screen at the live tail the SGR mouse event is a no-op.
-        // Copy-mode entry uses `-eu`: scrolling down to the live tail
-        // auto-exits copy-mode so typing "just works" without the user
-        // pressing Esc. The trackpad-inertia filter in TerminalView
-        // suppresses upward bounce-back frames, so auto-exit doesn't get
-        // immediately re-entered. Typing while still scrolled up (in
-        // copy-mode) is handled by handleCopyModeExit.
-        tmuxRunIgnoringErrors(["bind-key", "-T", "root", "WheelDownPane", "send-keys -M"])
-
-        // Active pane: match iTerm2 profile (bg #000000, fg #bbbbbb)
-        // Set globally so split windows inherit the same styles.
-        try tmuxSetGlobal("window-active-style", "bg=colour0 fg=colour250")
-        // Inactive panes: dimmed background + muted text
-        try tmuxSetGlobal("window-style", "bg=colour234 fg=colour245")
-
-        // Title bar at top of each pane with per-pane color conditionals
-        try tmuxSetGlobal("pane-border-status", "top")
-        try tmuxSetGlobal("pane-border-format", paneBorderFormat)
-        // Clear any stale window-level format override (takes precedence over global)
-        tmuxRunIgnoringErrors(["set-option", "-w", "-u", "pane-border-format"])
-
-        // Border lines: both active and inactive are dark. Visual distinction
-        // comes from the title bar format, not the border lines.
-        resetBorderStyles()
-    }
-
-    /// Configure the status bar.
-    private static func applyStatusBar(session: String) throws {
-        try tmuxSet(session, "status-style", "bg=colour235 fg=colour245")
-        try tmuxSet(session, "status-left", "#[fg=colour43,bold] amux #[fg=colour238]│ ")
-        try tmuxSet(session, "@amux-cmd-held", "0")
-        try tmuxSet(session, "status-right", statusRightFormat)
-        try tmuxSet(session, "status-left-length", "20")
-        try tmuxSet(session, "status-right-length", "120")
-    }
-
-    // MARK: - tmux helpers
-
-    /// Set a tmux option for a session.
-    private static func tmuxSet(_ session: String, _ option: String, _ value: String) throws {
-        try tmuxRun(["set", "-t", session, option, value])
-    }
-
-    /// Set a global tmux option.
-    private static func tmuxSetGlobal(_ option: String, _ value: String) throws {
-        try tmuxRun(["set", "-g", option, value])
-    }
-
-    /// Set a server-level tmux option.
-    private static func tmuxSetServer(_ option: String, _ value: String) throws {
-        try tmuxRun(["set", "-sg", option, value])
-    }
-
-    /// Run a tmux command via the shared Tmux.executor, throwing on failure.
-    ///
-    /// Going through the executor (instead of spawning `tmux` directly) is
-    /// critical for test isolation: integration tests override the executor
-    /// with LiveTmux(socket:) to redirect all tmux calls to an isolated
-    /// server. Directly spawning `tmux` would bypass that and leak commands
-    /// to the user's live tmux server.
-    private static func tmuxRun(_ args: [String]) throws {
+        // Required-sets batch — these must apply for amux to work. tmux
+        // continues processing chained commands on individual failures, so
+        // we can't tell from the return which (if any) failed; treat any
+        // batch error as a generic config failure.
         do {
-            _ = try Tmux.executor.execute(args)
+            try Tmux.batch([
+                // Border style + global session behavior
+                ["set", "-g", "detach-on-destroy", "off"],
+                ["set", "-g", "allow-passthrough", "on"],
+                ["set", "-g", "extended-keys", "always"],
+                ["set", "-sg", "escape-time", "0"],
+                // Large scrollback to handle Claude Code's rapid streaming output
+                ["set", "-g", "history-limit", "250000"],
+                ["set", "-g", "mouse", "on"],
+                // Active pane: match iTerm2 profile. Set globally so split
+                // windows inherit the same styles.
+                ["set", "-g", "window-active-style", "bg=colour0 fg=colour250"],
+                ["set", "-g", "window-style", "bg=colour234 fg=colour245"],
+                // Title bar at top of each pane
+                ["set", "-g", "pane-border-status", "top"],
+                ["set", "-g", "pane-border-format", paneBorderFormat],
+                // Border lines (resetBorderStyles inline). Both active and
+                // inactive are dark; visual distinction comes from the
+                // title bar format, not the border lines.
+                ["set-option", "-g", "pane-active-border-style", "fg=colour43"],
+                ["set-option", "-g", "pane-border-style", "fg=colour235"],
+                // Status bar
+                ["set", "-t", session, "status-style", "bg=colour235 fg=colour245"],
+                ["set", "-t", session, "status-left",
+                 "#[fg=colour43,bold] amux #[fg=colour238]│ "],
+                ["set", "-t", session, "@amux-cmd-held", "0"],
+                ["set", "-t", session, "status-right", statusRightFormat],
+                ["set", "-t", session, "status-left-length", "20"],
+                ["set", "-t", session, "status-right-length", "120"],
+                // Hooks. Re-apply layout when a pane exits or window resizes;
+                // update the selected pane's title from its cwd on focus
+                // change (after-select-pane).
+                ["set-hook", "-t", session, "pane-exited",
+                 "run-shell \"\(bin) layout #{session_name}\""],
+                ["set-hook", "-t", session, "client-resized",
+                 "run-shell \"\(bin) layout #{session_name}\""],
+                ["set-hook", "-t", session, "after-select-pane",
+                 "run-shell \"AMUX_SESSION=#{session_name} \(bin) update-title #{pane_index} '#{pane_current_path}'\""],
+            ])
         } catch {
-            throw ConfigError.tmux("tmux \(args.joined(separator: " ")) failed")
+            throw ConfigError.tmux("applyConfig batch failed: \(error.localizedDescription)")
         }
-    }
-
-    /// Run a tmux command via the shared Tmux.executor, ignoring errors.
-    private static func tmuxRunIgnoringErrors(_ args: [String]) {
-        _ = try? Tmux.executor.execute(args)
     }
 
     /// Locate the amux binary for use in tmux hook commands.

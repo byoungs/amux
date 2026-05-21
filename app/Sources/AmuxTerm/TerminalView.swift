@@ -41,6 +41,17 @@ final class TerminalView: NSView {
     // it (the "scroll-down jumps back up" bug).
     private var lastUserWheelDirection: Int = 0  // -1 down, +1 up, 0 none
 
+    // Fractional pixel accumulator for the scroll wheel. NSEvent's
+    // scrollingDeltaY arrives in pixel units for precise (trackpad) events and
+    // in pre-multiplied tick units for imprecise (wheel) events. We accumulate
+    // pixel-equivalents here; on each NSEvent the whole-cell portion converts
+    // to that many SGR mouse events (each scrolls one line in tmux per
+    // Config.swift), and the sub-cell remainder carries into the next event.
+    // This matches Ghostty's `pending_scroll_y` and iTerm's accumulator.
+    // Reset on direction change so a quick reverse doesn't replay leftover
+    // momentum in the opposite direction.
+    private var pendingScrollY: CGFloat = 0
+
     // Set when amux's wheel handling may have entered tmux copy-mode (i.e.
     // a wheel-up event in main screen). Reset on next keyDown — at which
     // point we write an Esc byte to the PTY (tmux's emacs copy-mode
@@ -630,7 +641,6 @@ final class TerminalView: NSView {
         if dy == 0 { return }
         let dir = dy > 0 ? 1 : -1
         let isMomentum = event.momentumPhase != []
-        // Track direction of explicit user input (non-momentum frames).
         if !isMomentum {
             lastUserWheelDirection = dir
         }
@@ -641,26 +651,37 @@ final class TerminalView: NSView {
             return
         }
 
-        // Wheel events on the main screen may trigger tmux copy-mode
-        // entry. Mark so the next keyDown can exit copy-mode and return
-        // to the live tail before forwarding the typed key.
+        let shiftMult: CGFloat = event.modifierFlags.contains(.shift) ? 3 : 1
+        let result = ScrollAccumulator.step(
+            deltaY: dy,
+            precise: event.hasPreciseScrollingDeltas,
+            currentAccumulator: pendingScrollY,
+            cellHeight: cellHeight,
+            shiftMult: shiftMult
+        )
+        let cells = result.cells
+        pendingScrollY = result.newAccumulator
+
+        if cells == 0 {
+            scrollDebug("wheel dy=\(dy) accum=\(pendingScrollY) (no cell crossed)")
+            return
+        }
+
+        // Wheel events on the main screen may trigger tmux copy-mode entry.
         if !terminal.isAltScreen {
             wheelMayHaveEnteredCopyMode = true
         }
 
         let pos = cellPosition(for: event)
-        let shiftHeld = event.modifierFlags.contains(.shift)
         let sequences = KeyInput.scrollBytes(
-            deltaY: dy,
+            count: abs(cells),
+            up: cells > 0,
             col: pos.col,
             row: pos.row,
-            cellHeight: cellHeight,
-            precise: event.hasPreciseScrollingDeltas,
-            shiftHeld: shiftHeld,
             isAltScreen: terminal.isAltScreen,
             mouseMode: terminal.mouseMode
         )
-        scrollDebug("wheel dy=\(dy) dir=\(dir) momentum=\(isMomentum) altScreen=\(terminal.isAltScreen) mouseMode=\(terminal.mouseMode) cols=\(terminal.cols) bytes=\(sequences.count) flag=\(wheelMayHaveEnteredCopyMode)")
+        scrollDebug("wheel dy=\(dy) precise=\(event.hasPreciseScrollingDeltas) momentum=\(isMomentum) cells=\(cells) accum=\(pendingScrollY) bytes=\(sequences.count)")
         for data in sequences {
             pty.write(data)
         }

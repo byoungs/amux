@@ -23,6 +23,7 @@ struct AmuxTermApp {
         if CommandLine.arguments.contains("--run-tests") {
             #if DEBUG
             KeyInputTests.runAll()
+            ScrollAccumulatorTests.runAll()
             VTerminalTests.runAll()
             LayoutTests.runAll()
             BellTests.runAll()

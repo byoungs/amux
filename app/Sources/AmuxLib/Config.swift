@@ -102,16 +102,36 @@ public enum Config {
             // Scroll wheel: tmux intercepts and routes based on alt-screen state.
             //   Main screen → enter copy-mode and scroll pane history.
             //   Alt screen → pass wheel through to the pane app.
-            // copy-mode entry uses `-eu`: -e auto-exits when scrolled to
-            // the live tail so typing "just works" without a forced Esc.
-            // The trackpad-inertia filter in TerminalView suppresses
-            // upward bounce-back frames, so auto-exit doesn't get
-            // immediately re-entered. Typing while still scrolled up
-            // (in copy-mode) is handled by handleCopyModeExit.
+            //
+            // copy-mode entry uses `-e` (auto-exit when scrolled back to the
+            // live tail so typing "just works" without a forced Esc). We do
+            // NOT use `-u`: that flag scrolls one full page on entry, so a
+            // single wheel tick page-jumps past whatever the user wanted to
+            // read.
+            //
+            // tmux scrolls EXACTLY 1 line per mouse event (root entry +
+            // copy-mode / copy-mode-vi overrides). amux's TerminalView holds
+            // a fractional pixel accumulator and emits N SGR mouse events per
+            // NSEvent based on the deltaY pixel magnitude, so total scroll =
+            // N lines = whatever the user's finger movement translates to.
+            // This matches Ghostty's `pending_scroll_y` (Surface.zig) and
+            // iTerm's `iTermScrollAccumulator`, both of which use deltaY
+            // directly and let tmux own the per-event line count.
+            //
+            // Typing while still scrolled up (in copy-mode) is handled by
+            // handleCopyModeExit in TerminalView.
             ["bind-key", "-T", "root", "WheelUpPane",
              "if-shell -Ft= '#{?pane_in_mode,1,#{alternate_on}}' " +
-             "{ send-keys -M } { select-pane -t= ; copy-mode -eu }"],
+             "{ send-keys -M } { select-pane -t= ; copy-mode -e ; send-keys -X -N 1 scroll-up }"],
             ["bind-key", "-T", "root", "WheelDownPane", "send-keys -M"],
+            ["bind-key", "-T", "copy-mode", "WheelUpPane",
+             "select-pane -t= ; send-keys -X -N 1 scroll-up"],
+            ["bind-key", "-T", "copy-mode", "WheelDownPane",
+             "select-pane -t= ; send-keys -X -N 1 scroll-down"],
+            ["bind-key", "-T", "copy-mode-vi", "WheelUpPane",
+             "select-pane -t= ; send-keys -X -N 1 scroll-up"],
+            ["bind-key", "-T", "copy-mode-vi", "WheelDownPane",
+             "select-pane -t= ; send-keys -X -N 1 scroll-down"],
             // Clear any stale window-level format override (takes precedence
             // over global)
             ["set-option", "-w", "-u", "pane-border-format"],

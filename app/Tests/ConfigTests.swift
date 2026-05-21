@@ -177,11 +177,15 @@ enum ConfigTests {
             check("mouse-on", mouse == "on",
                   "expected mouse=on so wheel bindings can fire (got '\(mouse)')")
 
-            // list-keys -T root <key> is buggy across tmux versions for
-            // WheelUpPane keys. Filter the full table dump.
-            let allRoot = tmux("list-keys", "-T", "root").stdout
-            let upBinding = allRoot.split(separator: "\n")
-                .filter { $0.contains("WheelUpPane") }.joined(separator: "\n")
+            // list-keys -T <table> <key> is buggy across tmux versions for
+            // Wheel keys. Filter the full table dump for the binding line.
+            func binding(in table: String, key: String) -> String {
+                tmux("list-keys", "-T", table).stdout
+                    .split(separator: "\n").filter { $0.contains(key) }
+                    .joined(separator: "\n")
+            }
+
+            let upBinding = binding(in: "root", key: "WheelUpPane")
             check("wheel-up-binding-exists", !upBinding.isEmpty)
             check("wheel-up-binding-alternate-on",
                   upBinding.contains("alternate_on"),
@@ -189,24 +193,46 @@ enum ConfigTests {
             check("wheel-up-binding-copy-mode",
                   upBinding.contains("copy-mode"),
                   "got: \(upBinding)")
-            // copy-mode -eu: -e auto-exits when scrolled to the live tail
-            // so typing "just works" at bottom without pressing Esc.
-            // Plain -u (no auto-exit) traps user in copy-mode at bottom.
+            // -e auto-exits when scrolled back to live tail (typing "just
+            // works" at bottom).
             check("wheel-up-binding-auto-exit-at-tail",
-                  upBinding.contains("copy-mode -eu"),
-                  "expected `copy-mode -eu` (auto-exit at tail); got: \(upBinding)")
+                  upBinding.contains("copy-mode -e"),
+                  "expected `copy-mode -e` (auto-exit at tail); got: \(upBinding)")
+            // -u would scroll a full page on copy-mode entry, so a single
+            // wheel tick would page-jump past whatever the user wanted to
+            // read. Use an explicit `scroll-up` instead.
+            check("wheel-up-binding-no-page-jump-on-entry",
+                  !upBinding.contains("-eu") && !upBinding.contains("copy-mode -u"),
+                  "Must not use -u flag; pages-jumps on every entry. got: \(upBinding)")
+            check("wheel-up-binding-explicit-line-scroll-on-entry",
+                  upBinding.contains("scroll-up"),
+                  "Must include explicit `scroll-up` so first tick scrolls a few lines, not a full page; got: \(upBinding)")
 
-            let downBinding = allRoot.split(separator: "\n")
-                .filter { $0.contains("WheelDownPane") }.joined(separator: "\n")
+            let downBinding = binding(in: "root", key: "WheelDownPane")
             check("wheel-down-binding-exists", !downBinding.isEmpty)
             check("wheel-down-binding-passthrough",
                   downBinding.contains("send-keys -M"),
                   "got: \(downBinding)")
 
+            // tmux scrolls exactly 1 line per mouse event. amux's accumulator
+            // in TerminalView decides how many events to emit per NSEvent
+            // based on deltaY. Override the copy-mode and copy-mode-vi
+            // defaults (5 lines per event) so amux's count is the only
+            // multiplier — matches Ghostty's and iTerm's deltaY-driven model.
+            func checkWheel(table: String, key: String, verb: String) {
+                let b = binding(in: table, key: key)
+                check("\(table)-\(key.lowercased())-scrolls-one-line",
+                      b.contains(verb) && b.contains("-N 1"),
+                      "expected `send-keys -X -N 1 \(verb)` in \(table); got: \(b)")
+            }
+            checkWheel(table: "copy-mode", key: "WheelUpPane", verb: "scroll-up")
+            checkWheel(table: "copy-mode", key: "WheelDownPane", verb: "scroll-down")
+            checkWheel(table: "copy-mode-vi", key: "WheelUpPane", verb: "scroll-up")
+            checkWheel(table: "copy-mode-vi", key: "WheelDownPane", verb: "scroll-down")
+
             // MouseDrag1Border must be unbound to prevent accidental pane
             // resize via border drag (causes mixed-width scrollback).
-            let dragBinding = allRoot.split(separator: "\n")
-                .filter { $0.contains("MouseDrag1Border") }.joined(separator: "\n")
+            let dragBinding = binding(in: "root", key: "MouseDrag1Border")
             check("border-drag-unbound", dragBinding.isEmpty,
                   "MouseDrag1Border should not be bound; got: \(dragBinding)")
         }

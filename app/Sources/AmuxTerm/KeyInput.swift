@@ -169,35 +169,25 @@ enum KeyInput {
         return "\u{1B}[\(codepoint);\(modifier)u".data(using: .utf8)!
     }
 
-    /// Encode a scroll-wheel event for tmux / the pane app.
+    /// Encode `count` scroll-wheel events for tmux / the pane app.
     ///
     /// Alt-screen apps without mouse reporting receive cursor-key sequences
     /// (ESC [ A / ESC [ B) — matches xterm alternateScroll, Alacritty, WezTerm,
     /// VTE, iTerm2 (when "scroll wheel sends arrow keys" is on). Otherwise
-    /// SGR mouse events; tmux's `mouse on` binding then routes (copy-mode on
-    /// main screen, pass-through in alt-screen + mouse mode).
+    /// SGR mouse events; tmux's `mouse on` binding routes (copy-mode on main
+    /// screen, pass-through in alt-screen + mouse mode).
     ///
-    /// Speed: 1 line per imprecise wheel tick (macOS pre-multiplies),
-    /// shift = 5x, precise trackpad = deltaY / cellHeight, hard cap of 10.
+    /// The caller decides how many events to emit per NSEvent (the deltaY
+    /// accumulator lives in TerminalView). tmux is configured to scroll one
+    /// line per event so the caller's count maps 1:1 to scrolled lines.
     static func scrollBytes(
-        deltaY: CGFloat,
+        count: Int,
+        up: Bool,
         col: Int, row: Int,
-        cellHeight: CGFloat,
-        precise: Bool,
-        shiftHeld: Bool,
         isAltScreen: Bool,
         mouseMode: VTerminal.MouseMode
     ) -> [Data] {
-        let shiftMult = shiftHeld ? 5 : 1
-        let baseLines: Int
-        if precise {
-            baseLines = max(1, Int(abs(deltaY) / cellHeight))
-        } else {
-            baseLines = 1
-        }
-        let count = min(10, baseLines * shiftMult)
-
-        let up = deltaY > 0
+        guard count > 0 else { return [] }
 
         if isAltScreen && mouseMode == .none {
             let seq = up ? "\u{1B}[A" : "\u{1B}[B"
@@ -206,15 +196,8 @@ enum KeyInput {
         }
 
         let button = up ? 64 : 65
-        let sgrCol = col + 1
-        let sgrRow = row + 1
-        var result: [Data] = []
-        for _ in 0..<count {
-            let seq = "\u{1B}[<\(button);\(sgrCol);\(sgrRow)M"
-            if let data = seq.data(using: .utf8) {
-                result.append(data)
-            }
-        }
-        return result
+        let seq = "\u{1B}[<\(button);\(col + 1);\(row + 1)M"
+        let data = seq.data(using: .utf8)!
+        return Array(repeating: data, count: count)
     }
 }

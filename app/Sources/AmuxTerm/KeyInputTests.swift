@@ -52,73 +52,58 @@ enum KeyInputTests {
             check("Cmd-\(i)", KeyInput.ctrlBytes(for: String(i)), expected)
         }
 
-        // Main screen → SGR mouse so tmux binding handles
+        // Main screen → SGR mouse buttons 64 (up) / 65 (down) with 1-indexed
+        // coords. count is supplied by the caller's accumulator.
         check("scroll-mainscreen-sgr-up",
               KeyInput.scrollBytes(
-                deltaY: 10, col: 5, row: 3, cellHeight: 17,
-                precise: false, shiftHeld: false,
+                count: 1, up: true, col: 5, row: 3,
                 isAltScreen: false, mouseMode: .none)[0],
               "\u{1B}[<64;6;4M".data(using: .utf8)!)
 
         check("scroll-mainscreen-sgr-down",
               KeyInput.scrollBytes(
-                deltaY: -10, col: 5, row: 3, cellHeight: 17,
-                precise: false, shiftHeld: false,
+                count: 1, up: false, col: 5, row: 3,
                 isAltScreen: false, mouseMode: .none)[0],
               "\u{1B}[<65;6;4M".data(using: .utf8)!)
 
-        // Imprecise wheel → 1 event (1 line per macOS pre-multiplied tick)
-        let mainImprecise = KeyInput.scrollBytes(
-            deltaY: 1, col: 0, row: 0, cellHeight: 17,
-            precise: false, shiftHeld: false,
+        // count of N emits N identical SGR events.
+        let many = KeyInput.scrollBytes(
+            count: 7, up: true, col: 0, row: 0,
             isAltScreen: false, mouseMode: .none)
-        check("scroll-mainscreen-count",
-              Data([UInt8(mainImprecise.count)]), Data([1]))
+        check("scroll-count-7",
+              Data([UInt8(many.count)]), Data([7]))
 
-        // Shift+wheel → 5 events
-        let shiftWheel = KeyInput.scrollBytes(
-            deltaY: 1, col: 0, row: 0, cellHeight: 17,
-            precise: false, shiftHeld: true,
+        // count of 0 emits nothing — the accumulator hasn't crossed a cell.
+        let zero = KeyInput.scrollBytes(
+            count: 0, up: true, col: 0, row: 0,
             isAltScreen: false, mouseMode: .none)
-        check("scroll-shift-count",
-              Data([UInt8(shiftWheel.count)]), Data([5]))
-
-        // Hard cap: huge precise trackpad delta never exceeds 10 events
-        let trackpadHuge = KeyInput.scrollBytes(
-            deltaY: 9999, col: 0, row: 0, cellHeight: 17,
-            precise: true, shiftHeld: false,
-            isAltScreen: false, mouseMode: .none)
-        check("scroll-cap-10",
-              Data([UInt8(trackpadHuge.count)]), Data([10]))
+        check("scroll-count-0-empty",
+              Data([UInt8(zero.count)]), Data([0]))
 
         // Alt-screen + no app mouse mode → arrow keys (xterm alt-scroll)
         check("scroll-altscreen-up-arrow",
               KeyInput.scrollBytes(
-                deltaY: 1, col: 0, row: 0, cellHeight: 17,
-                precise: false, shiftHeld: false,
+                count: 1, up: true, col: 0, row: 0,
                 isAltScreen: true, mouseMode: .none)[0],
               "\u{1B}[A".data(using: .utf8)!)
 
         check("scroll-altscreen-down-arrow",
               KeyInput.scrollBytes(
-                deltaY: -1, col: 0, row: 0, cellHeight: 17,
-                precise: false, shiftHeld: false,
+                count: 1, up: false, col: 0, row: 0,
                 isAltScreen: true, mouseMode: .none)[0],
               "\u{1B}[B".data(using: .utf8)!)
 
         // Alt-screen + mouse mode → SGR mouse, not arrows
         check("scroll-altscreen-mouse-sgr",
               KeyInput.scrollBytes(
-                deltaY: 1, col: 5, row: 3, cellHeight: 17,
-                precise: false, shiftHeld: false,
+                count: 1, up: true, col: 5, row: 3,
                 isAltScreen: true, mouseMode: .click)[0],
               "\u{1B}[<64;6;4M".data(using: .utf8)!)
 
         // SGR coordinates are 1-indexed
         check("scroll-1indexed",
               KeyInput.scrollBytes(
-                deltaY: 1, col: 0, row: 0, cellHeight: 17,
-                precise: false, shiftHeld: false,
+                count: 1, up: true, col: 0, row: 0,
                 isAltScreen: false, mouseMode: .none)[0],
               "\u{1B}[<64;1;1M".data(using: .utf8)!)
 

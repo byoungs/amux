@@ -35,11 +35,11 @@ The app bundles everything — no dependencies, no Homebrew, no tmux install.
 ```bash
 git clone https://github.com/byoungs/amux.git
 cd amux
-make setup    # checks deps, builds, creates symlink
-amux          # start a session
+make setup    # checks deps
+make dev      # build + launch the app
 ```
 
-Requires Rust ([rustup.rs](https://rustup.rs)) and tmux HEAD (`brew install tmux --HEAD` on macOS).
+Requires Xcode 15+ (Swift 5.9) and tmux HEAD (`brew install tmux --HEAD`).
 
 ## How to Use
 
@@ -208,10 +208,10 @@ Pane titles are auto-generated from the working directory and git branch:
 
 ### Building from source
 
+- **macOS 14+** — uses AppKit; not cross-platform.
+- **Xcode 15+ / Swift 5.9** — the toolchain ships with Xcode Command Line Tools.
 - **tmux HEAD** — required for flicker-free rendering (`brew install tmux --HEAD`).
   See [tmux PR #4744](https://github.com/tmux/tmux/pull/4744).
-- **Rust** — install from [rustup.rs](https://rustup.rs)
-- macOS or Linux
 
 ## Development
 
@@ -225,17 +225,17 @@ make publish   # Tag + push to GitHub releases
 
 ## Architecture
 
+Swift macOS app that embeds tmux. A native terminal view (`AmuxTerm`)
+drives a PTY running tmux; `AmuxLib` is the business logic that shells
+out to tmux via the `TmuxExecutor` protocol. `AmuxCLI` is a separate
+binary invoked from tmux key bindings and hooks.
+
 ```
-src/
-  main.rs      CLI entry point, zoom state machine, picker UIs
-  alert.rs     Pure alert decision logic (smart landing, counting)
-  notify.rs    macOS notification sending, frontmost-app detection
-  config.rs    tmux styles, borders, key bindings, status bar
-  layout.rs    Grid position calculator, tmux layout string generator
-  sticky.rs    Spatial matching algorithm, pane center tracking
-  tmux.rs      tmux command wrappers (sessions, panes, layout, zoom)
-  state.rs     State persistence (JSON to ~/.amux/)
-  bell.rs      BEL character scanner for agent-done detection
-  hooks.rs     Claude Code hook installation
-  util.rs      Auto-title generation (project name + git branch)
+app/Sources/
+  AmuxTerm/   NSApp, terminal view, PTY, key input, link detection
+  AmuxLib/    tmux orchestration, layout engine, alerts, config, state
+  AmuxCLI/    CLI binary dispatched from tmux key bindings and hooks
 ```
+
+`make test` runs lint + unit tests (no tmux needed). `make validate`
+adds tmux integration tests — use it before claiming work is complete.

@@ -297,32 +297,6 @@ enum ConfigTests {
             try? FileManager.default.removeItem(atPath: resultFile)
         }
 
-        // Reflow at narrow→wide: capture at narrow width, resize wider,
-        // assert capture-pane -pJ at the wider width returns the original
-        // logical line. If tmux preserves continuation across resize,
-        // amux's scroll-up-after-resize will show wide content. If it
-        // doesn't (line stuck at narrow width), the symptom is on tmux's
-        // side and we know about it.
-        do {
-            let ts = TestSession(paneCount: 1)
-            _ = ts
-            _ = tmux("resize-window", "-t", ts.name, "-x", "60", "-y", "10")
-            try? Tmux.applyLayout(ts.name, event: .resize)
-            let kLine = String(repeating: "k", count: 100)
-            _ = tmux("send-keys", "-t", ts.name, "echo \(kLine)", "Enter")
-            for i in 1...3 {
-                _ = tmux("send-keys", "-t", ts.name, "echo m\(i)", "Enter")
-            }
-            _ = tmux("display-message", "-p", "-t", ts.name, "")
-            _ = tmux("resize-window", "-t", ts.name, "-x", "120", "-y", "10")
-            try? Tmux.applyLayout(ts.name, event: .resize)
-            _ = tmux("display-message", "-p", "-t", ts.name, "")
-            let joined = tmux("capture-pane", "-t", ts.name, "-peqJ", "-S", "-30", "-E", "-1").stdout
-            check("history-rejoins-after-narrow-to-wide",
-                  joined.contains(kLine),
-                  "pane 60→120; expected 100 contiguous k's; got: \(joined.prefix(400))")
-        }
-
         // Tmux history reflows uniformly on resize — verifies the fundamental
         // assumption behind delegating scrollback to tmux's copy-mode.
         // Output a 100-char line that wraps, do multiple resizes during

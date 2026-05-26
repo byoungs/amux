@@ -242,6 +242,46 @@ func drawSpacesPicker(sessions: [String], cursor: Int, current: String, alertCou
     fflush(stdout)
 }
 
+/// A row in the spaces picker: either a real session or the virtual Backlog entry.
+enum SpaceRow {
+    case session(String)
+    case backlog(count: Int)
+}
+
+/// Draw the spaces picker with support for a trailing virtual Backlog row.
+func drawSpacesPickerWithBacklog(rows: [SpaceRow], cursor: Int, current: String, alertCounts: [String: Int]) {
+    var out = ansiClear
+    out += "\r\n  \(ansiBoldCyan)Spaces\(ansiReset)\r\n\r\n"
+
+    for (i, row) in rows.enumerated() {
+        let arrow = i == cursor ? "\(ansiCyan)\u{2192}\(ansiReset)" : " "
+        let num = "\(ansiYellow)\(i + 1)\(ansiReset)"
+        switch row {
+        case .session(let session):
+            let name = i == cursor ? "\(ansiBold)\(session)\(ansiReset)" : session
+            var dots = ""
+            if session == current {
+                dots += " \(ansiGreen)\u{25CF}\(ansiReset)"
+            }
+            let alerts = alertCounts[session] ?? 0
+            if alerts > 0 {
+                dots += " \(ansiAmber)\(String(repeating: "\u{25CF}", count: alerts))\(ansiReset)"
+            }
+            out += "  \(arrow) \(num) \(name)\(dots)\r\n"
+        case .backlog(let count):
+            let label = "Backlog (\(count))"
+            let styled = i == cursor
+                ? "\(ansiBold)\(ansiGray)\(label)\(ansiReset)"
+                : "\(ansiDim)\(ansiGray)\(label)\(ansiReset)"
+            out += "  \(arrow) \(num) \(styled)\r\n"
+        }
+    }
+
+    out += "\r\n  \(ansiGray)\u{2191}\u{2193} select \u{00B7} Enter switch \u{00B7} 1-9 jump \u{00B7} n new \u{00B7} Esc cancel\(ansiReset)\r\n"
+    print(out, terminator: "")
+    fflush(stdout)
+}
+
 /// Draw the send picker list.
 func drawSendPicker(sessions: [String], cursor: Int, alertCounts: [String: Int]) {
     var out = ansiClear
@@ -597,11 +637,24 @@ func main() throws {
             print("No spaces found.")
             exit(0)
         }
+        let backlogCount = (try? Tmux.listBackgroundSessions().count) ?? 0
+        var displayRows: [SpaceRow] = sessions.map { SpaceRow.session($0) }
+        if backlogCount > 0 {
+            displayRows.append(.backlog(count: backlogCount))
+        }
         var cursor = sessions.firstIndex(of: current) ?? 0
         let orig = enterRawMode()
         defer { restoreTerminal(orig) }
+
+        func handleBacklogStub() -> Never {
+            restoreTerminal(orig)
+            print("\r\n  Backlog picker not yet implemented.\r\n", terminator: "")
+            Thread.sleep(forTimeInterval: 0.5)
+            exit(0)
+        }
+
         while true {
-            drawSpacesPicker(sessions: sessions, cursor: cursor, current: current, alertCounts: alertCounts)
+            drawSpacesPickerWithBacklog(rows: displayRows, cursor: cursor, current: current, alertCounts: alertCounts)
             let key = readRawKey()
             switch key {
             case .escape:
@@ -609,23 +662,31 @@ func main() throws {
             case .up:
                 if cursor > 0 { cursor -= 1 }
             case .down:
-                if cursor < sessions.count - 1 { cursor += 1 }
+                if cursor < displayRows.count - 1 { cursor += 1 }
             case .enter:
-                let target = sessions[cursor]
-                if target != current {
-                    restoreTerminal(orig)
-                    try switchToSpace(target)
-                }
-                exit(0)
-            case .char(let b) where b >= 0x31 && b <= 0x39: // 1-9
-                let num = Int(b - 0x30)
-                if num >= 1 && num <= sessions.count {
-                    let target = sessions[num - 1]
+                switch displayRows[cursor] {
+                case .session(let target):
                     if target != current {
                         restoreTerminal(orig)
                         try switchToSpace(target)
                     }
                     exit(0)
+                case .backlog:
+                    handleBacklogStub()
+                }
+            case .char(let b) where b >= 0x31 && b <= 0x39: // 1-9
+                let num = Int(b - 0x30)
+                if num >= 1 && num <= displayRows.count {
+                    switch displayRows[num - 1] {
+                    case .session(let target):
+                        if target != current {
+                            restoreTerminal(orig)
+                            try switchToSpace(target)
+                        }
+                        exit(0)
+                    case .backlog:
+                        handleBacklogStub()
+                    }
                 }
             case .char(let b) where b == 0x6E || b == 0x4E: // n or N
                 restoreTerminal(orig)

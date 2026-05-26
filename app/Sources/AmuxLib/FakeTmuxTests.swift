@@ -179,6 +179,25 @@ public enum FakeTmuxTests {
             print("FAIL: listFocusSessions — \(error)")
         }
 
+        // listSpacesWithAlerts excludes background sessions
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("fg")
+            Tmux.markAsManaged("fg")
+            Tmux.setSessionState("fg", state: .foreground)
+            try Tmux.createSession("bg")
+            Tmux.markAsManaged("bg")
+            Tmux.setSessionState("bg", state: .background)
+            let spaces = (try? Tmux.listSpacesWithAlerts())
+                          ?? (sessions: [], alertCounts: [:])
+            check("listSpacesWithAlerts includes fg", spaces.sessions.contains("fg"))
+            check("listSpacesWithAlerts excludes bg", !spaces.sessions.contains("bg"))
+        } catch {
+            failed += 1
+            print("FAIL: listSpacesWithAlerts — \(error)")
+        }
+
         // --- Global/server options ---
 
         do {

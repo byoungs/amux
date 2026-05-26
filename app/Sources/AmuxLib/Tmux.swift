@@ -256,17 +256,23 @@ public enum Tmux {
     /// and alert count all at once. One subprocess call regardless of session count.
     public static func listSpacesWithAlerts() throws -> (sessions: [String], alertCounts: [String: Int]) {
         let stdout = try runChecked(
-            ["list-sessions", "-F", "#{session_name} #{@amux-managed} #{@amux-alert-count}"],
+            ["list-sessions", "-F",
+             "#{session_name} #{@amux-managed} #{@amux-alert-count} #{@amux-state}"],
             context: "list-sessions failed"
         )
         var managed: [String] = []
         var counts: [String: Int] = [:]
         for line in stdout.split(separator: "\n") {
-            let parts = line.split(separator: " ", maxSplits: 2).map(String.init)
+            let parts = line.split(
+                separator: " ", maxSplits: 3, omittingEmptySubsequences: false
+            ).map(String.init)
             guard parts.count >= 2 else { continue }
             let name = parts[0]
             let isManaged = parts[1] == "1"
             guard isManaged else { continue }
+            let stateRaw = parts.count > 3 ? parts[3] : ""
+            let state = SessionState(rawValue: stateRaw) ?? .foreground
+            guard state == .foreground else { continue }
             managed.append(name)
             let count = parts.count > 2 ? (Int(parts[2]) ?? 0) : 0
             counts[name] = count

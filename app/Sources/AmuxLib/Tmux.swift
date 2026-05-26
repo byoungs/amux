@@ -207,6 +207,27 @@ public enum Tmux {
         return SessionState(rawValue: raw) ?? .foreground
     }
 
+    /// Read the @amux-cap (per-session pane cap). Missing option = 4 (default).
+    public static func getSessionCap(_ session: String) throws -> Int {
+        let raw = runRaw(["show-options", "-t", session, "-v", AmuxSessionOption.cap])
+        return Int(raw) ?? 4
+    }
+
+    /// Set the @amux-cap on a session.
+    public static func setSessionCap(_ session: String, cap: Int) {
+        runIgnoring(["set-option", "-t", session, AmuxSessionOption.cap, String(cap)])
+    }
+
+    /// Read the @amux-cap-overridden flag. Missing option = false.
+    public static func isCapOverridden(_ session: String) throws -> Bool {
+        runRaw(["show-options", "-t", session, "-v", AmuxSessionOption.capOverridden]) == "1"
+    }
+
+    /// Set the @amux-cap-overridden flag on a session.
+    public static func setCapOverridden(_ session: String, overridden: Bool) {
+        runIgnoring(["set-option", "-t", session, AmuxSessionOption.capOverridden, overridden ? "1" : "0"])
+    }
+
     /// List all tmux sessions.
     public static func listSessions() throws -> [String] {
         let stdout: String

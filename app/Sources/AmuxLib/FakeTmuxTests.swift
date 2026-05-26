@@ -193,6 +193,32 @@ public enum FakeTmuxTests {
             print("FAIL: listFocusSessions — \(error)")
         }
 
+        // getSessionCap defaults to 4 when option missing
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("s")
+            check("default cap is 4", (try? Tmux.getSessionCap("s")) == 4)
+            Tmux.setSessionCap("s", cap: 6)
+            check("set cap reads back", (try? Tmux.getSessionCap("s")) == 6)
+        } catch {
+            failed += 1
+            print("FAIL: getSessionCap — \(error)")
+        }
+
+        // override flag round trip
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("s")
+            check("default override is false", (try? Tmux.isCapOverridden("s")) == false)
+            Tmux.setCapOverridden("s", overridden: true)
+            check("override true after set", (try? Tmux.isCapOverridden("s")) == true)
+        } catch {
+            failed += 1
+            print("FAIL: isCapOverridden — \(error)")
+        }
+
         // listSpacesWithAlerts excludes background sessions
         do {
             let fake = FakeTmux()

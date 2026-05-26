@@ -11,6 +11,9 @@
 ///   amux-cli hook-install            Install Claude Code notification hook
 ///   amux-cli spaces                  Interactive space picker (runs in popup)
 ///   amux-cli send                    Send current pane to another space
+///   amux-cli backlog list
+///   amux-cli backlog park SESSION PANE_INDEX
+///   amux-cli backlog unpark SESSION [merge-into TARGET_SESSION]
 
 import Foundation
 import Darwin
@@ -685,6 +688,60 @@ func main() throws {
                 exit(0)
             default: break
             }
+        }
+
+    case "backlog":
+        // amux-cli backlog list
+        // amux-cli backlog park SESSION PANE_INDEX
+        // amux-cli backlog unpark SESSION [merge-into TARGET_SESSION]
+        let action = args.count >= 2 ? args[1] : "list"
+        switch action {
+        case "list":
+            let bg = (try? Tmux.listBackgroundSessions()) ?? []
+            if bg.isEmpty {
+                print("Backlog is empty.")
+                exit(0)
+            }
+            for s in bg {
+                print("\(s.name)\t\(s.title)\t\(s.parkedFrom)\t\(s.parkedAt)\t\(s.paneCount)")
+            }
+            exit(0)
+        case "park":
+            guard args.count >= 4, let idx = Int(args[3]) else {
+                fputs("Usage: amux-cli backlog park SESSION PANE_INDEX\n", stderr)
+                exit(2)
+            }
+            let session = args[2]
+            do {
+                let parkedName = try Tmux.parkPane(session, paneIndex: idx)
+                print(parkedName)
+                exit(0)
+            } catch {
+                fputs("Park failed: \(error)\n", stderr)
+                exit(1)
+            }
+        case "unpark":
+            guard args.count >= 3 else {
+                fputs("Usage: amux-cli backlog unpark SESSION [merge-into TARGET_SESSION]\n", stderr)
+                exit(2)
+            }
+            let session = args[2]
+            let mode: Tmux.UnparkMode
+            if args.count >= 5, args[3] == "merge-into" {
+                mode = .merge(into: args[4])
+            } else {
+                mode = .promote
+            }
+            do {
+                try Tmux.unparkSession(session, mode: mode)
+                exit(0)
+            } catch {
+                fputs("Unpark failed: \(error)\n", stderr)
+                exit(1)
+            }
+        default:
+            fputs("Unknown backlog action: \(action)\n", stderr)
+            exit(2)
         }
 
     default:

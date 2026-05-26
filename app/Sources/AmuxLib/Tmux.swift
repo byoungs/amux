@@ -1030,6 +1030,82 @@ public enum Tmux {
         }
     }
 
+    /// Park a pane: send it to the backlog.
+    ///
+    /// Two cases:
+    ///   - source session has >1 pane: split the pane out into a brand-new
+    ///     session, mark that new session as background.
+    ///   - source session has exactly 1 pane (parking would leave the source
+    ///     empty): just flip the source session's @amux-state to background.
+    /// Returns the session name the pane now lives in.
+    public static func parkPane(_ session: String, paneIndex: Int) throws -> String {
+        try parkPane(session, paneIndex: paneIndex,
+                     now: UInt64(Date().timeIntervalSince1970))
+    }
+
+    public static func parkPane(_ session: String, paneIndex: Int, now: UInt64) throws -> String {
+        let count = try paneCount(session)
+        let title = (try? getTitle(session, paneIndex: paneIndex)) ?? ""
+        let stampFrom = session
+        if count > 1 {
+            // Split-out case
+            let paneId = try paneIdAt(session, index: paneIndex)
+            let newName = try uniqueBackgroundSessionName(suggested: title.isEmpty ? "parked" : title)
+            try runChecked(
+                ["new-session", "-d", "-s", newName],
+                context: "parkPane: new-session for backlog failed"
+            )
+            try runChecked(
+                ["join-pane", "-s", paneId, "-t", "\(newName):0"],
+                context: "parkPane: join-pane failed"
+            )
+            // Kill the auto-created stub pane via the existing helper used
+            // by sendPaneToSession.
+            try killPhantomPane(newName, sentPaneId: paneId)
+            markAsManaged(newName)
+            runIgnoring(["set-option", "-t", newName, AmuxSessionOption.state, "background"])
+            runIgnoring(["set-option", "-t", newName, AmuxSessionOption.parkedFrom, stampFrom])
+            // Write parkedAt LAST so partial-failure midway doesn't leave a
+            // half-tagged session that looks "freshest" in the listing.
+            runIgnoring(["set-option", "-t", newName, AmuxSessionOption.parkedAt, String(now)])
+            // Relayout source
+            try applyLayout(session, event: .resize)
+            return newName
+        } else {
+            // Flip case
+            runIgnoring(["set-option", "-t", session, AmuxSessionOption.parkedFrom, stampFrom])
+            runIgnoring(["set-option", "-t", session, AmuxSessionOption.parkedAt, String(now)])
+            runIgnoring(["set-option", "-t", session, AmuxSessionOption.state, "background"])
+            return session
+        }
+    }
+
+    /// Generate a unique session name for a parked pane, derived from a title.
+    /// Slugifies the suggestion and appends -2, -3, ... on collision.
+    private static func uniqueBackgroundSessionName(suggested: String) throws -> String {
+        let base = slugify(suggested)
+        let existing = Set(try listSessions())
+        if !existing.contains(base) { return base }
+        for n in 2...999 {
+            let candidate = "\(base)-\(n)"
+            if !existing.contains(candidate) { return candidate }
+        }
+        // Extremely unlikely; fall back to timestamp suffix
+        return "\(base)-\(UInt64(Date().timeIntervalSince1970))"
+    }
+
+    /// Slugify a string into a tmux-session-safe name.
+    private static func slugify(_ s: String) -> String {
+        let lower = s.lowercased()
+        var out = ""
+        for ch in lower {
+            if ch.isLetter || ch.isNumber { out.append(ch) }
+            else if ch == " " || ch == "-" || ch == "_" || ch == "/" { out.append("-") }
+        }
+        let trimmed = out.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return trimmed.isEmpty ? "parked" : trimmed
+    }
+
     // MARK: - Resize
 
     /// Resize a specific pane to the given dimensions.

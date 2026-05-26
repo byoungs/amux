@@ -526,6 +526,55 @@ public enum FakeTmuxTests {
             check("split-window unknown session throws", threw)
         }
 
+        // --- parkPane: source has >1 pane → split out to new background session ---
+
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("multi")
+            Tmux.markAsManaged("multi")
+            Tmux.setSessionState("multi", state: .foreground)
+            _ = try Tmux.createPane("multi") // now 2 panes
+            let panes = try Tmux.listPanes("multi")
+            try Tmux.setTitle("multi", paneIndex: panes[1].index, title: "park-me")
+            let parkedName = try Tmux.parkPane(
+                "multi", paneIndex: panes[1].index, now: 1700000123)
+            check("source still has 1 pane", (try? Tmux.paneCount("multi")) == 1)
+            check("new background session created", fake.sessions[parkedName] != nil)
+            check("new session marked background",
+                  fake.sessions[parkedName]?.options["@amux-state"] == "background")
+            check("parkedAt stamped",
+                  fake.sessions[parkedName]?.options["@amux-parked-at"] == "1700000123")
+            check("parkedFrom stamped",
+                  fake.sessions[parkedName]?.options["@amux-parked-from"] == "multi")
+        } catch {
+            failed += 1
+            print("FAIL: parkPane split-out — \(error)")
+        }
+
+        // --- parkPane: source has exactly 1 pane → flip source to background ---
+
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("solo")
+            Tmux.markAsManaged("solo")
+            Tmux.setSessionState("solo", state: .foreground)
+            let panes = try Tmux.listPanes("solo")
+            let parkedName = try Tmux.parkPane(
+                "solo", paneIndex: panes[0].index, now: 1700000200)
+            check("parked name is the source session", parkedName == "solo")
+            check("source flipped to background",
+                  fake.sessions["solo"]?.options["@amux-state"] == "background")
+            check("parkedAt stamped",
+                  fake.sessions["solo"]?.options["@amux-parked-at"] == "1700000200")
+            check("parkedFrom stamped",
+                  fake.sessions["solo"]?.options["@amux-parked-from"] == "solo")
+        } catch {
+            failed += 1
+            print("FAIL: parkPane flip — \(error)")
+        }
+
         print("FakeTmuxTests: \(passed) passed, \(failed) failed")
         if failed > 0 { fatalError("\(failed) FakeTmux tests failed") }
     }

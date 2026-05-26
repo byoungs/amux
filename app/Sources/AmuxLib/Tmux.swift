@@ -51,6 +51,29 @@ public enum AmuxSessionOption {
     public static let stacked = "@amux-stacked"
 }
 
+// MARK: - BackgroundSession
+
+/// A tmux session currently in the backlog (`@amux-state=background`).
+public struct BackgroundSession: Equatable {
+    public let name: String
+    /// Title to show in the picker — falls back to session name if blank.
+    public let title: String
+    /// Unix timestamp (seconds) when the session entered background state.
+    public let parkedAt: UInt64
+    /// Name of the foreground space this session was last in (may be empty).
+    public let parkedFrom: String
+    /// Number of panes this background session contains (usually 1).
+    public let paneCount: Int
+
+    public init(name: String, title: String, parkedAt: UInt64, parkedFrom: String, paneCount: Int) {
+        self.name = name
+        self.title = title
+        self.parkedAt = parkedAt
+        self.parkedFrom = parkedFrom
+        self.paneCount = paneCount
+    }
+}
+
 // MARK: - Tmux namespace
 
 public enum Tmux {

@@ -91,6 +91,13 @@ build-dev-bundle:
 	@# make cp bail with "SRC and DST are identical (not copied)".
 	@rm -f $(DEV_APP)/Contents/MacOS/amux-app
 	@cp $(CURDIR)/$(SWIFT_BUILD_DIR)/amux-app $(DEV_APP)/Contents/MacOS/amux-app
+	@# Bundle amux-cli alongside amux-app so AppDelegate's findBinaryOptional
+	@# resolves it via execDir on first launch. Without this, the app falls
+	@# back to ~/.local/bin/amux-cli (the symlink the next step installs),
+	@# then overwrites that symlink to point at itself — self-referencing,
+	@# every tmux hook silently breaks.
+	@rm -f $(DEV_APP)/Contents/MacOS/amux-cli
+	@cp $(CURDIR)/$(SWIFT_BUILD_DIR)/amux-cli $(DEV_APP)/Contents/MacOS/amux-cli
 	@codesign --force --sign - --identifier com.byoungs.amux.dev $(DEV_APP) >/dev/null 2>&1
 
 app-dev: build-dev-bundle
@@ -126,9 +133,17 @@ dmg: app tmux-bundle
 	mkdir -p build/amux.app/Contents/Resources
 	cp app/Resources/Info.plist build/amux.app/Contents/
 	cp app/.build/release/amux-app build/amux.app/Contents/MacOS/
+	cp app/.build/release/amux-cli build/amux.app/Contents/MacOS/
 	cp build/tmux-bundle/tmux build/amux.app/Contents/MacOS/
 	cp build/tmux-bundle/LICENSE-tmux.txt build/amux.app/Contents/Resources/
 	cp app/Resources/amux.icns build/amux.app/Contents/Resources/
+	@# Copy the SwiftPM-generated resource bundle (contains amux.icns,
+	@# loaded at runtime via Bundle.module). The generated accessor only
+	@# checks Bundle.main.bundleURL/AmuxApp_amux-app.bundle — which for
+	@# an .app means the TOP of the bundle, not Contents/Resources/.
+	@# Without this, the app aborts on launch with "could not load
+	@# resource bundle: from /Applications/amux.app/AmuxApp_amux-app.bundle".
+	cp -R app/.build/release/AmuxApp_amux-app.bundle build/amux.app/
 	@# Re-sign so the signing identifier matches CFBundleIdentifier.
 	@# Swift's default adhoc sign uses "amux-app-<hash>" which is a
 	@# different identity than the bundle, and some macOS subsystems

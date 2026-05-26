@@ -253,7 +253,10 @@ public class AppController {
     /// Initialize the session: create or attach, apply config, set up hooks.
     public func startup() throws {
         if !Tmux.sessionExists(session) {
-            try Tmux.createSession(session)
+            // amux-app's CWD is `/` when launched by LaunchServices; pass
+            // $HOME so the first shell lands somewhere meaningful.
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            try Tmux.createSession(session, startDirectory: home)
         }
         Tmux.markAsManaged(session)
         // Re-apply Config to every amux-managed session, not just the

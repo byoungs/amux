@@ -142,12 +142,16 @@ public enum Tmux {
     }
 
     /// Create a new tmux session. No-op if it already exists.
-    public static func createSession(_ name: String) throws {
+    /// `startDirectory` sets the session's initial CWD; without it tmux
+    /// inherits the caller's CWD, which is `/` when amux-app is launched
+    /// via LaunchServices.
+    public static func createSession(_ name: String, startDirectory: String? = nil) throws {
         if sessionExists(name) { return }
-        try runChecked(
-            ["new-session", "-d", "-s", name],
-            context: "tmux new-session failed"
-        )
+        var args = ["new-session", "-d", "-s", name]
+        if let dir = startDirectory {
+            args.append(contentsOf: ["-c", dir])
+        }
+        try runChecked(args, context: "tmux new-session failed")
     }
 
     /// List all tmux sessions.

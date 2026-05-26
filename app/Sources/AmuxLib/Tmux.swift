@@ -32,6 +32,25 @@ public struct PaneInfo {
     }
 }
 
+// MARK: - SessionState
+
+/// Whether a managed session is in active rotation (foreground) or parked
+/// in the backlog (background).
+public enum SessionState: String {
+    case foreground
+    case background
+}
+
+/// Tmux user-option keys used by the spaces/viewport system.
+public enum AmuxSessionOption {
+    public static let state = "@amux-state"
+    public static let parkedAt = "@amux-parked-at"
+    public static let parkedFrom = "@amux-parked-from"
+    public static let cap = "@amux-cap"
+    public static let capOverridden = "@amux-cap-overridden"
+    public static let stacked = "@amux-stacked"
+}
+
 // MARK: - Tmux namespace
 
 public enum Tmux {

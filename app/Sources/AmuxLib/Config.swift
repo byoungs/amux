@@ -171,6 +171,15 @@ public enum Config {
                 ["set", "-t", session, "status-right", statusRightFormat],
                 ["set", "-t", session, "status-left-length", "20"],
                 ["set", "-t", session, "status-right-length", "120"],
+                // Only set defaults if unset (preserve background tag on refresh).
+                ["if-shell", "-F", "-t", session, "#{!=:#{@amux-state},background}",
+                 "set -t \(session) @amux-state foreground"],
+                ["if-shell", "-F", "-t", session, "#{==:#{@amux-cap},}",
+                 "set -t \(session) @amux-cap 4"],
+                ["if-shell", "-F", "-t", session, "#{==:#{@amux-cap-overridden},}",
+                 "set -t \(session) @amux-cap-overridden 0"],
+                ["if-shell", "-F", "-t", session, "#{==:#{@amux-stacked},}",
+                 "set -t \(session) @amux-stacked 1"],
                 // Hooks. Re-apply layout when a pane exits or window resizes;
                 // update the selected pane's title from its cwd on focus
                 // change (after-select-pane).

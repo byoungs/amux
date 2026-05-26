@@ -6,3 +6,6 @@ app/.swiftpm
 /.worktrees
 demo/demo.gif
 demo/demo-raw.gif
+
+# Claude Code agent workspace (personal, not shared)
+.claude/

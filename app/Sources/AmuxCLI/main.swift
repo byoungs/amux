@@ -369,6 +369,46 @@ func drawSendPicker(sessions: [String], cursor: Int, alertCounts: [String: Int])
     fflush(stdout)
 }
 
+/// A destination in the send picker: either the virtual Backlog (always first)
+/// or a real foreground session.
+enum SendDestination {
+    case backlog
+    case session(String)
+}
+
+/// Draw the send picker with `→ Backlog` as the first destination, followed
+/// by real foreground sessions. Backlog uses the same dim/highlighted style
+/// as the spaces picker's Backlog row.
+func drawSendPickerWithBacklog(dests: [SendDestination], cursor: Int, alertCounts: [String: Int]) {
+    var out = ansiClear
+    out += "\r\n  \(ansiBoldCyan)Send pane to\u{2026}\(ansiReset)\r\n\r\n"
+
+    for (i, dest) in dests.enumerated() {
+        let arrow = i == cursor ? "\(ansiCyan)\u{2192}\(ansiReset)" : " "
+        let num = "\(ansiYellow)\(i + 1)\(ansiReset)"
+        switch dest {
+        case .backlog:
+            let label = "\u{2192} Backlog"
+            let styled = i == cursor
+                ? "\(ansiBold)\(ansiGray)\(label)\(ansiReset)"
+                : "\(ansiDim)\(ansiGray)\(label)\(ansiReset)"
+            out += "  \(arrow) \(num) \(styled)\r\n"
+        case .session(let session):
+            let name = i == cursor ? "\(ansiBold)\(session)\(ansiReset)" : session
+            var dots = ""
+            let alerts = alertCounts[session] ?? 0
+            if alerts > 0 {
+                dots += " \(ansiAmber)\(String(repeating: "\u{25CF}", count: alerts))\(ansiReset)"
+            }
+            out += "  \(arrow) \(num) \(name)\(dots)\r\n"
+        }
+    }
+
+    out += "\r\n  \(ansiGray)\u{2191}\u{2193} select \u{00B7} Enter send \u{00B7} 1-9 jump \u{00B7} n new \u{00B7} Esc cancel\(ansiReset)\r\n"
+    print(out, terminator: "")
+    fflush(stdout)
+}
+
 /// Draw the help screen — man-page-style keyboard shortcut reference.
 func drawHelp() {
     var out = ansiClear
@@ -771,15 +811,30 @@ func main() throws {
         let current = currentSession()
         let allSessions = (try? Tmux.listFocusSessions()) ?? []
         let others = allSessions.filter { $0 != current }
-        if others.isEmpty {
-            print("No other spaces. Press n to create one, Esc to cancel.")
-        }
+        // Backlog is always available as the first destination, so the picker
+        // is never empty. No "No other spaces" message needed.
+        let dests: [SendDestination] = [.backlog]
+            + others.map { SendDestination.session($0) }
         let alertCounts = gatherAlertCounts(others)
         var cursor = 0
         let orig = enterRawMode()
         defer { restoreTerminal(orig) }
+
+        func dispatch(_ dest: SendDestination) throws {
+            switch dest {
+            case .backlog:
+                // Park the active pane of the current session. Splits to a
+                // new background session, or flips the source if it's the
+                // last pane.
+                let activeIdx = (try? Tmux.activePaneIndex(current)) ?? 0
+                _ = try Tmux.parkPane(current, paneIndex: activeIdx)
+            case .session(let target):
+                try sendPaneAndFollow(from: current, to: target)
+            }
+        }
+
         while true {
-            drawSendPicker(sessions: others, cursor: cursor, alertCounts: alertCounts)
+            drawSendPickerWithBacklog(dests: dests, cursor: cursor, alertCounts: alertCounts)
             let key = readRawKey()
             switch key {
             case .escape:
@@ -787,20 +842,16 @@ func main() throws {
             case .up:
                 if cursor > 0 { cursor -= 1 }
             case .down:
-                if !others.isEmpty && cursor < others.count - 1 { cursor += 1 }
+                if cursor < dests.count - 1 { cursor += 1 }
             case .enter:
-                if !others.isEmpty {
-                    restoreTerminal(orig)
-                    let target = others[cursor]
-                    try sendPaneAndFollow(from: current, to: target)
-                    exit(0)
-                }
+                restoreTerminal(orig)
+                try dispatch(dests[cursor])
+                exit(0)
             case .char(let b) where b >= 0x31 && b <= 0x39:
                 let num = Int(b - 0x30)
-                if num >= 1 && num <= others.count {
+                if num >= 1 && num <= dests.count {
                     restoreTerminal(orig)
-                    let target = others[num - 1]
-                    try sendPaneAndFollow(from: current, to: target)
+                    try dispatch(dests[num - 1])
                     exit(0)
                 }
             case .char(let b) where b == 0x6E || b == 0x4E:

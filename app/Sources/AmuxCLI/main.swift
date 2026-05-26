@@ -282,6 +282,71 @@ func drawSpacesPickerWithBacklog(rows: [SpaceRow], cursor: Int, current: String,
     fflush(stdout)
 }
 
+/// Current time in seconds since the Unix epoch.
+func nowSeconds() -> UInt64 { UInt64(Date().timeIntervalSince1970) }
+
+/// Human-friendly relative time like "5s ago", "3m ago", "2h ago", "4d ago".
+func formatAgo(seconds: UInt64) -> String {
+    if seconds < 60 { return "\(seconds)s ago" }
+    if seconds < 3600 { return "\(seconds / 60)m ago" }
+    if seconds < 86400 { return "\(seconds / 3600)h ago" }
+    return "\(seconds / 86400)d ago"
+}
+
+/// Draw the backlog sub-picker (background sessions).
+func drawBacklogPicker(sessions: [BackgroundSession], selected: Int) {
+    var out = ansiClear
+    out += "\r\n  \(ansiBoldCyan)Backlog\(ansiReset)\r\n\r\n"
+    for (i, s) in sessions.enumerated() {
+        let arrow = i == selected ? "\(ansiCyan)\u{2192}\(ansiReset)" : " "
+        let title = s.title.isEmpty ? s.name : s.title
+        let name = i == selected ? "\(ansiBold)\(title)\(ansiReset)" : title
+        let ago = formatAgo(seconds: nowSeconds() - s.parkedAt)
+        let meta = "\(ansiDim)(from \(s.parkedFrom), \(ago))\(ansiReset)"
+        out += "  \(arrow) \(name)  \(meta)\r\n"
+    }
+    out += "\r\n  \(ansiGray)Enter: promote \u{00B7} m: merge into current \u{00B7} Esc: cancel\(ansiReset)\r\n"
+    print(out, terminator: "")
+    fflush(stdout)
+}
+
+/// Picker for background sessions. Enter = promote in place;
+/// 'm' = merge into current foreground space; Esc = cancel.
+func runBacklogPicker(currentForegroundSession: String?) {
+    let sessions = (try? Tmux.listBackgroundSessions()) ?? []
+    if sessions.isEmpty {
+        print("\r\n  Backlog is empty.\r\n", terminator: "")
+        Thread.sleep(forTimeInterval: 0.6)
+        return
+    }
+    var selected = 0
+    let orig = enterRawMode()
+    defer { restoreTerminal(orig) }
+    while true {
+        drawBacklogPicker(sessions: sessions, selected: selected)
+        let key = readRawKey()
+        switch key {
+        case .escape: return
+        case .up:   if selected > 0 { selected -= 1 }
+        case .down: if selected + 1 < sessions.count { selected += 1 }
+        case .enter:
+            let pick = sessions[selected]
+            restoreTerminal(orig)
+            try? Tmux.unparkSession(pick.name, mode: .promote)
+            try? Tmux.switchSession(pick.name)
+            return
+        case .char(let b) where b == 0x6D || b == 0x4D: // 'm' or 'M'
+            if let target = currentForegroundSession {
+                let pick = sessions[selected]
+                restoreTerminal(orig)
+                try? Tmux.unparkSession(pick.name, mode: .merge(into: target))
+            }
+            return
+        default: break
+        }
+    }
+}
+
 /// Draw the send picker list.
 func drawSendPicker(sessions: [String], cursor: Int, alertCounts: [String: Int]) {
     var out = ansiClear
@@ -646,13 +711,6 @@ func main() throws {
         let orig = enterRawMode()
         defer { restoreTerminal(orig) }
 
-        func handleBacklogStub() -> Never {
-            restoreTerminal(orig)
-            print("\r\n  Backlog picker not yet implemented.\r\n", terminator: "")
-            Thread.sleep(forTimeInterval: 0.5)
-            exit(0)
-        }
-
         while true {
             drawSpacesPickerWithBacklog(rows: displayRows, cursor: cursor, current: current, alertCounts: alertCounts)
             let key = readRawKey()
@@ -672,7 +730,9 @@ func main() throws {
                     }
                     exit(0)
                 case .backlog:
-                    handleBacklogStub()
+                    restoreTerminal(orig)
+                    runBacklogPicker(currentForegroundSession: current)
+                    exit(0)
                 }
             case .char(let b) where b >= 0x31 && b <= 0x39: // 1-9
                 let num = Int(b - 0x30)
@@ -685,7 +745,9 @@ func main() throws {
                         }
                         exit(0)
                     case .backlog:
-                        handleBacklogStub()
+                        restoreTerminal(orig)
+                        runBacklogPicker(currentForegroundSession: current)
+                        exit(0)
                     }
                 }
             case .char(let b) where b == 0x6E || b == 0x4E: // n or N

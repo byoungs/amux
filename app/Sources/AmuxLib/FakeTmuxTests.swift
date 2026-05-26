@@ -415,6 +415,25 @@ public enum FakeTmuxTests {
             print("FAIL: pane-id target round trip — \(error)")
         }
 
+        // FakeTmux join-pane moves a pane across sessions, preserving options
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("src")
+            try Tmux.createSession("dst")
+            let srcPanes = try Tmux.listPanes("src")
+            let paneId = try Tmux.paneIdAt("src", index: srcPanes.first!.index)
+            try fake.execute(["set-option", "-p", "-t", paneId, "@amux-foo", "keepme"])
+            try fake.execute(["join-pane", "-s", paneId, "-t", "dst:0"])
+            let v = try fake.execute(["display-message", "-t", paneId, "-p", "#{@amux-foo}"])
+            check("option preserved across join", v == "keepme")
+            let dstPanes = try Tmux.listPanes("dst")
+            check("pane lives in dst", dstPanes.count >= 1)
+        } catch {
+            failed += 1
+            print("FAIL: join-pane across sessions — \(error)")
+        }
+
         // --- Unhandled commands recorded ---
 
         do {

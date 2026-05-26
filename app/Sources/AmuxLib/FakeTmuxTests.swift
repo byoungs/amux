@@ -575,6 +575,31 @@ public enum FakeTmuxTests {
             print("FAIL: parkPane flip — \(error)")
         }
 
+        // --- listBackgroundSessions returns parked sessions sorted by parkedAt desc ---
+
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("a"); Tmux.markAsManaged("a")
+            Tmux.setSessionState("a", state: .background)
+            fake.sessions["a"]?.options["@amux-parked-at"] = "1700000050"
+            fake.sessions["a"]?.options["@amux-parked-from"] = "auth"
+            try Tmux.createSession("b"); Tmux.markAsManaged("b")
+            Tmux.setSessionState("b", state: .background)
+            fake.sessions["b"]?.options["@amux-parked-at"] = "1700000100"
+            fake.sessions["b"]?.options["@amux-parked-from"] = "design"
+            try Tmux.createSession("fg"); Tmux.markAsManaged("fg")
+            Tmux.setSessionState("fg", state: .foreground)
+            let bg = (try? Tmux.listBackgroundSessions()) ?? []
+            check("two background sessions", bg.count == 2)
+            check("newest first", bg.first?.name == "b")
+            check("oldest last", bg.last?.name == "a")
+            check("fg excluded", !bg.contains(where: { $0.name == "fg" }))
+        } catch {
+            failed += 1
+            print("FAIL: listBackgroundSessions — \(error)")
+        }
+
         print("FakeTmuxTests: \(passed) passed, \(failed) failed")
         if failed > 0 { fatalError("\(failed) FakeTmux tests failed") }
     }

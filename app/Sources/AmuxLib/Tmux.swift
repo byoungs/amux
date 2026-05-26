@@ -249,6 +249,37 @@ public enum Tmux {
         try listSessionsByState(.foreground)
     }
 
+    /// List all background sessions, sorted by parkedAt descending.
+    public static func listBackgroundSessions() throws -> [BackgroundSession] {
+        let stdout = try runChecked(
+            ["list-sessions", "-F",
+             "#{session_name}\t#{@amux-managed}\t#{@amux-state}\t#{@amux-parked-at}\t#{@amux-parked-from}"],
+            context: "listBackgroundSessions: list-sessions failed"
+        )
+        var out: [BackgroundSession] = []
+        for line in stdout.split(separator: "\n") {
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
+                .map(String.init)
+            guard parts.count >= 5 else { continue }
+            let name = parts[0]
+            let isManaged = parts[1] == "1"
+            guard isManaged else { continue }
+            let state = SessionState(rawValue: parts[2]) ?? .foreground
+            guard state == .background else { continue }
+            let parkedAt = UInt64(parts[3]) ?? 0
+            let parkedFrom = parts[4]
+            let paneCount = (try? self.paneCount(name)) ?? 1
+            // Title: take the first pane's @amux-title if available
+            let firstTitle = (try? getTitle(name, paneIndex: 0)) ?? ""
+            let title = firstTitle.isEmpty ? name : firstTitle
+            out.append(BackgroundSession(
+                name: name, title: title,
+                parkedAt: parkedAt, parkedFrom: parkedFrom,
+                paneCount: paneCount))
+        }
+        return out.sorted(by: { $0.parkedAt > $1.parkedAt })
+    }
+
     /// List amux-managed sessions with their alert counts in a single tmux call.
     /// Returns (sessions, alertCounts).
     ///

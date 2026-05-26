@@ -196,6 +196,17 @@ public enum Tmux {
         try runChecked(args, context: "tmux new-session failed")
     }
 
+    /// Set the @amux-state on a managed session.
+    public static func setSessionState(_ session: String, state: SessionState) {
+        runIgnoring(["set-option", "-t", session, AmuxSessionOption.state, state.rawValue])
+    }
+
+    /// Read the @amux-state on a session. Missing option = .foreground (migration default).
+    public static func getSessionState(_ session: String) throws -> SessionState {
+        let raw = runRaw(["show-options", "-t", session, "-v", AmuxSessionOption.state])
+        return SessionState(rawValue: raw) ?? .foreground
+    }
+
     /// List all tmux sessions.
     public static func listSessions() throws -> [String] {
         let stdout: String

@@ -109,6 +109,34 @@ public enum FakeTmuxTests {
             print("FAIL: session options — \(error)")
         }
 
+        // setSessionState writes @amux-state
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("s")
+            Tmux.setSessionState("s", state: .foreground)
+            check("foreground state set", fake.sessions["s"]?.options["@amux-state"] == "foreground")
+            Tmux.setSessionState("s", state: .background)
+            check("background state set", fake.sessions["s"]?.options["@amux-state"] == "background")
+        } catch {
+            failed += 1
+            print("FAIL: setSessionState — \(error)")
+        }
+
+        // getSessionState reads @amux-state; defaults to foreground when missing
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("s")
+            check("missing state defaults to foreground",
+                  (try? Tmux.getSessionState("s")) == .foreground)
+            Tmux.setSessionState("s", state: .background)
+            check("reads background", (try? Tmux.getSessionState("s")) == .background)
+        } catch {
+            failed += 1
+            print("FAIL: getSessionState — \(error)")
+        }
+
         // --- Global/server options ---
 
         do {

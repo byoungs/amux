@@ -220,17 +220,33 @@ public enum Tmux {
             .filter { !$0.isEmpty }
     }
 
-    /// List only amux-managed tmux sessions (marked with AMUX_MANAGED env var).
-    public static func listFocusSessions() throws -> [String] {
-        let all = try listSessions()
-        var managed: [String] = []
-        for session in all {
-            let stdout = (try? run(["show-environment", "-t", session, "AMUX_MANAGED"])) ?? ""
-            if stdout.contains("AMUX_MANAGED=1") {
-                managed.append(session)
-            }
+    /// List managed sessions filtered by @amux-state.
+    ///
+    /// Sessions marked @amux-managed=1 with no @amux-state are treated as
+    /// foreground (migration default for pre-existing sessions).
+    public static func listSessionsByState(_ state: SessionState) throws -> [String] {
+        let stdout = try runChecked(
+            ["list-sessions", "-F",
+             "#{session_name}\t#{@amux-managed}\t#{@amux-state}"],
+            context: "listSessionsByState: list-sessions failed"
+        )
+        var out: [String] = []
+        for line in stdout.split(separator: "\n") {
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
+                .map(String.init)
+            guard parts.count >= 3 else { continue }
+            let name = parts[0]
+            let isManaged = parts[1] == "1"
+            guard isManaged else { continue }
+            let resolvedState = SessionState(rawValue: parts[2]) ?? .foreground
+            if resolvedState == state { out.append(name) }
         }
-        return managed
+        return out
+    }
+
+    /// List foreground managed sessions (spaces shown in the ⌘P picker).
+    public static func listFocusSessions() throws -> [String] {
+        try listSessionsByState(.foreground)
     }
 
     /// List amux-managed sessions with their alert counts in a single tmux call.

@@ -137,6 +137,48 @@ public enum FakeTmuxTests {
             print("FAIL: getSessionState — \(error)")
         }
 
+        // listSessionsByState segregates by state
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("a")
+            Tmux.markAsManaged("a")
+            Tmux.setSessionState("a", state: .foreground)
+            try Tmux.createSession("b")
+            Tmux.markAsManaged("b")
+            Tmux.setSessionState("b", state: .background)
+            try Tmux.createSession("c")
+            Tmux.markAsManaged("c") // no explicit state — defaults to foreground
+            let fg = (try? Tmux.listSessionsByState(.foreground)) ?? []
+            let bg = (try? Tmux.listSessionsByState(.background)) ?? []
+            check("a is foreground", fg.contains("a"))
+            check("c is foreground (default)", fg.contains("c"))
+            check("b is not foreground", !fg.contains("b"))
+            check("b is background", bg.contains("b"))
+            check("a is not background", !bg.contains("a"))
+        } catch {
+            failed += 1
+            print("FAIL: listSessionsByState — \(error)")
+        }
+
+        // listFocusSessions delegates to listSessionsByState(.foreground)
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("fg-only")
+            Tmux.markAsManaged("fg-only")
+            Tmux.setSessionState("fg-only", state: .foreground)
+            try Tmux.createSession("bg-only")
+            Tmux.markAsManaged("bg-only")
+            Tmux.setSessionState("bg-only", state: .background)
+            let focus = (try? Tmux.listFocusSessions()) ?? []
+            check("listFocusSessions includes fg-only", focus.contains("fg-only"))
+            check("listFocusSessions excludes bg-only", !focus.contains("bg-only"))
+        } catch {
+            failed += 1
+            print("FAIL: listFocusSessions — \(error)")
+        }
+
         // --- Global/server options ---
 
         do {

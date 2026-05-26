@@ -600,6 +600,45 @@ public enum FakeTmuxTests {
             print("FAIL: listBackgroundSessions — \(error)")
         }
 
+        // --- unparkSession promote: flip state to foreground ---
+
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("bg"); Tmux.markAsManaged("bg")
+            Tmux.setSessionState("bg", state: .background)
+            fake.sessions["bg"]?.options["@amux-parked-at"] = "100"
+            fake.sessions["bg"]?.options["@amux-parked-from"] = "src"
+            try Tmux.unparkSession("bg", mode: .promote)
+            check("state flipped to foreground",
+                  fake.sessions["bg"]?.options["@amux-state"] == "foreground")
+            check("parkedAt cleared",
+                  fake.sessions["bg"]?.options["@amux-parked-at"] == nil)
+            check("parkedFrom cleared",
+                  fake.sessions["bg"]?.options["@amux-parked-from"] == nil)
+        } catch {
+            failed += 1
+            print("FAIL: unparkSession promote — \(error)")
+        }
+
+        // --- unparkSession merge: move panes into target, kill background session ---
+
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("target"); Tmux.markAsManaged("target")
+            Tmux.setSessionState("target", state: .foreground)
+            try Tmux.createSession("bg"); Tmux.markAsManaged("bg")
+            Tmux.setSessionState("bg", state: .background)
+            try Tmux.unparkSession("bg", mode: .merge(into: "target"))
+            check("target has >=2 panes",
+                  (try? Tmux.paneCount("target")) ?? 0 >= 2)
+            check("bg session destroyed", fake.sessions["bg"] == nil)
+        } catch {
+            failed += 1
+            print("FAIL: unparkSession merge — \(error)")
+        }
+
         print("FakeTmuxTests: \(passed) passed, \(failed) failed")
         if failed > 0 { fatalError("\(failed) FakeTmux tests failed") }
     }

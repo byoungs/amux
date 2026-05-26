@@ -1111,6 +1111,35 @@ public enum Tmux {
         }
     }
 
+    /// Mode for unparkSession.
+    public enum UnparkMode {
+        /// Flip @amux-state to foreground in place. The background session
+        /// becomes a new active space.
+        case promote
+        /// Move all panes from the background session into a target
+        /// foreground session, then kill the (now empty) background session.
+        case merge(into: String)
+    }
+
+    public static func unparkSession(_ name: String, mode: UnparkMode) throws {
+        switch mode {
+        case .promote:
+            runIgnoring(["set-option", "-u", "-t", name, AmuxSessionOption.parkedAt])
+            runIgnoring(["set-option", "-u", "-t", name, AmuxSessionOption.parkedFrom])
+            runIgnoring(["set-option", "-t", name, AmuxSessionOption.state, "foreground"])
+        case .merge(let target):
+            let panes = try listPanes(name)
+            for pane in panes {
+                let id = try paneIdAt(name, index: pane.index)
+                runIgnoring(["join-pane", "-s", id, "-t", "\(target):0"])
+            }
+            if sessionExists(name), (try? paneCount(name)) ?? 0 == 0 {
+                try killSession(name)
+            }
+            try applyLayout(target, event: .resize)
+        }
+    }
+
     /// Generate a unique session name for a parked pane, derived from a title.
     /// Slugifies the suggestion and appends -2, -3, ... on collision.
     private static func uniqueBackgroundSessionName(suggested: String) throws -> String {

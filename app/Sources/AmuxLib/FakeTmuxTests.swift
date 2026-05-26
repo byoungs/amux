@@ -399,6 +399,22 @@ public enum FakeTmuxTests {
             print("FAIL: target parsing — \(error)")
         }
 
+        // FakeTmux resolves set-option -p -t %ID across sessions
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("s1")
+            let panes = try Tmux.listPanes("s1")
+            let firstIdx = panes.first!.index
+            let idStr = try Tmux.paneIdAt("s1", index: firstIdx) // e.g. "%0"
+            try fake.execute(["set-option", "-p", "-t", idStr, "@amux-x", "42"])
+            let v = try fake.execute(["display-message", "-t", idStr, "-p", "#{@amux-x}"])
+            check("pane-id target round trips", v == "42")
+        } catch {
+            failed += 1
+            print("FAIL: pane-id target round trip — \(error)")
+        }
+
         // --- Unhandled commands recorded ---
 
         do {

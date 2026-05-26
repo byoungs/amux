@@ -109,6 +109,20 @@ public enum FakeTmuxTests {
             print("FAIL: session options — \(error)")
         }
 
+        // FakeTmux removes option on set -u
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("s")
+            try fake.execute(["set-option", "-t", "s", "@amux-foo", "bar"])
+            check("option set", fake.sessions["s"]?.options["@amux-foo"] == "bar")
+            try fake.execute(["set-option", "-u", "-t", "s", "@amux-foo"])
+            check("option removed by -u", fake.sessions["s"]?.options["@amux-foo"] == nil)
+        } catch {
+            failed += 1
+            print("FAIL: set-option -u — \(error)")
+        }
+
         // setSessionState writes @amux-state
         do {
             let fake = FakeTmux()

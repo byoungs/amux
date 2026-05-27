@@ -47,6 +47,8 @@ public class FakeTmux: TmuxExecutor {
         public var options: [String: String] = [:]
         public var cwd: String = "/tmp"
         public var pipePaneCommand: String? = nil
+        public var content: String = ""
+        public var sentKeys: [String] = []
 
         public init(id: Int, width: Int = 200, height: Int = 50) {
             self.id = id
@@ -123,24 +125,6 @@ public class FakeTmux: TmuxExecutor {
             return try handleResizePane(args)
         case "display-message":
             return try handleDisplayMessage(args)
-        case "capture-pane":
-            // Stub: scan-mode tests can inject content via the
-            // __test-content pane option. Production callers shell out to
-            // real tmux. Returns the option value or empty string.
-            var target: String?
-            var i = 1
-            while i < args.count {
-                if args[i] == "-t", i + 1 < args.count {
-                    target = args[i + 1]; i += 2
-                } else {
-                    i += 1
-                }
-            }
-            if let t = target {
-                let (_, _, pane) = resolveTarget(t)
-                return pane?.options["__test-content"] ?? ""
-            }
-            return ""
         case "select-layout":
             return try handleSelectLayout(args)
         case "swap-pane":
@@ -149,6 +133,10 @@ public class FakeTmux: TmuxExecutor {
             return try handleSetHook(args)
         case "pipe-pane":
             return try handlePipePane(args)
+        case "capture-pane":
+            return try handleCapturePane(args)
+        case "send-keys":
+            return try handleSendKeys(args)
         case "switch-client":
             if let target = flagValue(args, "-t") {
                 let t = parseTarget(target)
@@ -897,6 +885,31 @@ public class FakeTmux: TmuxExecutor {
         return ""
     }
 
+    private func handleCapturePane(_ args: [String]) throws -> String {
+        guard let target = flagValue(args, "-t") else {
+            throw AmuxError.tmux("capture-pane: missing -t")
+        }
+        let (_, _, pane) = resolveTarget(target)
+        // Two setup paths: `setPaneContent` writes `pane.content`
+        // (permission-peek tests); scan-mode tests inject via the
+        // `__test-content` pane option. Honor either, content wins.
+        if let p = pane {
+            if !p.content.isEmpty { return p.content }
+            if let injected = p.options["__test-content"] { return injected }
+        }
+        return ""
+    }
+
+    private func handleSendKeys(_ args: [String]) throws -> String {
+        guard let target = flagValue(args, "-t") else {
+            throw AmuxError.tmux("send-keys: missing -t")
+        }
+        let (_, _, pane) = resolveTarget(target)
+        // Positional args after the flags are the key tokens.
+        pane?.sentKeys.append(contentsOf: positionalArgs(args))
+        return ""
+    }
+
     // MARK: - Format evaluation
 
     /// Evaluate a tmux format string for a specific target.
@@ -1062,6 +1075,11 @@ extension FakeTmux {
     /// Set a session environment variable directly.
     public func setEnvironment(_ session: String, key: String, value: String) {
         sessions[session]?.environment[key] = value
+    }
+
+    /// Set the captured screen content for a pane (test setup for capture-pane).
+    public func setPaneContent(_ session: String, index: Int, content: String) {
+        if let p = pane(session, index: index) { p.content = content }
     }
 
     /// Set a session option directly.

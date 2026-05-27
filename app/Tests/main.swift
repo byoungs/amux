@@ -59,6 +59,7 @@ run("SplitMode", SplitModeTests.runAll)
 run("SessionResolution", SessionResolutionTests.runAll)
 run("CmdLScenario", CmdLScenarioTests.runAll)
 run("Help", HelpTests.runAll)
+run("PermissionCapture", PermissionCaptureTests.runAll)
 
 // Border format tests verify per-pane pane-border-format colors for all 4 states
 // (active/teal, alert/amber, split-selected/red, inactive/no override)

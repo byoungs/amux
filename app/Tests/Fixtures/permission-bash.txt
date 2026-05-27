@@ -1,0 +1,44 @@
+ ▐▛███▜▌   Claude Code v2.1.150
+▝▜█████▛▘  Opus 4.7 (1M context) · Claude Max
+  ▘▘ ▝▝    ~/src/scratch-claude/proj
+
+❯ Run this exact bash command: echo hello-from-peek                                                                     
+
+⏺ Bash(echo hello-from-peek)                                                                                            
+  ⎿  Waiting…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   echo hello-from-peek
+   Echo test string                                                                                                     
+                  
+ Permission rule Bash(echo:*) requires confirmation for this command.
+ /permissions to update rules
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -338,16 +338,23 @@ enum E2EAttentionTests {
                   "overlay engine must paint amber (214,135,0) for non-active alerted pane")
         }
 
-        // status_bar_has_alert_badge
+        // status_bar_has_peek_indicator — the amber ● ⌘y in the status bar is
+        // driven by @amux-peek-count (permission-peek). This replaced the older
+        // @amux-alert-count ● indicator; per-pane border alerts and
+        // notifications are unchanged. See Config.statusRightFormat.
         do {
             let ts = TestSession(paneCount: 1)
             let result = tmux("show-options", "-t", ts.name, "-v", "status-right")
             let status = result.stdout
-            check("statusBarAlertBadge-ref", status.contains("@amux-alert-count"),
-                  "should reference alert count")
-            check("statusBarAlertBadge-indicator",
-                  status.contains("\u{25CF}") || status.contains("colour214"),
-                  "should have alert indicator styling")
+            check("statusBarPeekIndicator-ref", status.contains("@amux-peek-count"),
+                  "should reference peek count")
+            check("statusBarPeekIndicator-glyph",
+                  status.contains("\u{25CF}") && status.contains("colour214"),
+                  "should have amber ● indicator styling")
+            check("statusBarPeekIndicator-cmdY", status.contains("⌘y"),
+                  "should show ⌘y hint co-located with the indicator")
+            check("statusBarNoAlertBadge", !status.contains("@amux-alert-count"),
+                  "old alert-count status-bar badge must be gone (replaced by peek)")
         }
 
         // Cross-session global alert count (bug: macOS notification body

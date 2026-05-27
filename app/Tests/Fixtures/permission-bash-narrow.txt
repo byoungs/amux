@@ -1,0 +1,42 @@
+╭─ Claude Code ────────────────────────────────────────────────╮
+│                                                              │
+│                     Welcome back Brian!                      │
+│                                                              │
+│                     Welcome back Brian!                      │
+│                                                              │
+│                            ▐▛███▜▌                           │
+│                           ▝▜█████▛▘                          │
+│                             ▘▘ ▝▝                            │
+│                                                              │
+│                    Opus 4.7 (1M context)                     │
+│                          Claude Max                          │
+│                  ~/src/scratch-claude/proj                   │
+│                                                              │
+╰──────────────────────────────────────────────────────────────╯
+
+
+❯ Use the Bash tool to run this exact command, do not modify it 
+   and do not explain: ~/tools/bin/longbinary-render-pipeline   
+  --flag-one --flag-two --flag-three --flag-four --flag-five    
+
+⏺ Bash(~/tools/bin/longbinary-render-pipeline --flag-one
+      --flag-two --flag-three --flag-four --flag-five)
+  ⎿  Waiting…
+
+────────────────────────────────────────────────────────────────
+ Bash command
+
+   ~/tools/bin/longbinary-render-pipeline --flag-one
+   --flag-two --flag-three --flag-four --flag-five
+   Run longbinary-render-pipeline with five flags
+
+ This command requires approval
+
+ Do you want to proceed?
+ ❯ 1. Yes
+  2.Yes, and don’t ask again: ~/tools/bin/longbinary-render-pipe
+    for                     line *
+   3. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
+

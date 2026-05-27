@@ -714,6 +714,50 @@ public enum FakeTmuxTests {
             print("FAIL: unparkSession merge — \(error)")
         }
 
+        // --- capture-pane returns pane content ---
+
+        do {
+            let tmux = FakeTmux()
+            tmux.addSession("s", panes: 1)
+            tmux.setPaneContent("s", index: 0,
+                content: "Do you want to proceed?\n❯ 1. Yes\n  2. No")
+            let out = try tmux.execute(["capture-pane", "-p", "-J", "-t", "s:.0", "-S", "-25"])
+            check("capture-pane returns content", out.contains("Do you want to proceed?"), out)
+        } catch {
+            failed += 1
+            print("FAIL: capture-pane — \(error)")
+        }
+
+        // --- send-keys records key tokens ---
+
+        do {
+            let tmux = FakeTmux()
+            tmux.addSession("s", panes: 1)
+            try tmux.execute(["send-keys", "-t", "s:.0", "1"])
+            try tmux.execute(["send-keys", "-t", "s:.0", "Enter"])
+            check("send-keys records tokens",
+                  tmux.pane("s", index: 0)?.sentKeys == ["1", "Enter"],
+                  "\(tmux.pane("s", index: 0)?.sentKeys ?? [])")
+        } catch {
+            failed += 1
+            print("FAIL: send-keys — \(error)")
+        }
+
+        // --- publishPeekCount sets @amux-peek-count on managed sessions only ---
+
+        do {
+            let saved = Tmux.executor
+            defer { Tmux.executor = saved }
+            let tmux = FakeTmux()
+            tmux.addSession("m1", panes: 1); Tmux.executor = tmux; Tmux.markAsManaged("m1")
+            tmux.addSession("m2", panes: 1); Tmux.markAsManaged("m2")
+            tmux.addSession("plain", panes: 1)   // not managed
+            Tmux.publishPeekCount(3)
+            check("peek-count-m1", tmux.sessions["m1"]?.options["@amux-peek-count"] == "3")
+            check("peek-count-m2", tmux.sessions["m2"]?.options["@amux-peek-count"] == "3")
+            check("peek-count-unmanaged", tmux.sessions["plain"]?.options["@amux-peek-count"] == nil)
+        }
+
         print("FakeTmuxTests: \(passed) passed, \(failed) failed")
         if failed > 0 { fatalError("\(failed) FakeTmux tests failed") }
     }

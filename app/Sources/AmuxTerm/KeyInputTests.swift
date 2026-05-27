@@ -52,6 +52,10 @@ enum KeyInputTests {
             check("Cmd-\(i)", KeyInput.ctrlBytes(for: String(i)), expected)
         }
 
+        // Cmd-Y → .peek (permission peek)
+        if KeyCommand.amuxCommand(for: "y") == .peek { passed += 1 }
+        else { failed += 1; print("FAIL: Cmd-Y → .peek") }
+
         // Main screen → SGR mouse buttons 64 (up) / 65 (down) with 1-indexed
         // coords. count is supplied by the caller's accumulator.
         check("scroll-mainscreen-sgr-up",

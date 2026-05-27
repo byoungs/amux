@@ -42,6 +42,7 @@ public enum AmuxCommand: Equatable {
     case selectPaneUp
     case selectPaneDown
     case splitPickCurrent   // pick whatever pane is currently active
+    case peek               // Cmd-Y: toggle the permission-peek popup
 }
 
 /// Input mode — determines how keys are interpreted.
@@ -75,6 +76,7 @@ public enum KeyCommand {
         case "[":  return .panePrev        // Cmd-[ (previous pane)
         case "]":  return .paneNext        // Cmd-] (next pane)
         case "/":  return .help            // Cmd-/ (help)
+        case "y":  return .peek            // Cmd-Y (permission peek)
         default:
             // Cmd-1..9 → zoom to pane (0-indexed internally)
             if let digit = Int(chars), digit >= 1 && digit <= 9 {

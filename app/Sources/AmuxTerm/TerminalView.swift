@@ -90,6 +90,14 @@ final class TerminalView: NSView {
         didSet { rebuildOverlays() }
     }
 
+    // Permission-peek popup state (Cmd-Y prompt overlay). The pending-count
+    // indicator lives in the tmux status bar (Config.statusRightFormat, driven
+    // by @amux-peek-count), not an on-top overlay. The popup is drawn last in
+    // draw(_:) so partial-dirty redraws under it don't clip it.
+    private var peekPopupPrompt: PermissionPrompt?
+    private var peekHighlight: Int = 0
+    var peekPopupOpen: Bool { peekPopupPrompt != nil }
+
     // Latency profiling (stderr output, #if DEBUG only)
     #if DEBUG
     var lastKeyTime: CFAbsoluteTime = 0
@@ -290,6 +298,9 @@ final class TerminalView: NSView {
             drawCursor(row: terminal.cursorRow, col: terminal.cursorCol, ctx: ctx)
         }
 
+        // Permission-peek overlay, painted last (over cells) every pass.
+        drawPeekOverlay()
+
         #if DEBUG
         if profilingEnabled {
             let drawEnd = CFAbsoluteTimeGetCurrent()
@@ -319,6 +330,187 @@ final class TerminalView: NSView {
         let line = CTLineCreateWithAttributedString(attrStr)
         lineCache[key] = line
         return line
+    }
+
+    // MARK: - Permission-peek overlay
+
+    /// Called by PermissionWatcher.onChange (on main). Updates the badge count
+    /// and, if the popup is open, the prompt it shows (nil drains → close).
+    func updatePeekState(_ queue: PromptQueue?) {
+        // Only the open popup needs the view; the pending count is rendered by
+        // tmux in the status bar (@amux-peek-count). Skip the redraw when closed.
+        guard peekPopupOpen else { return }
+        let next = queue?.current?.prompt
+        // When the popup advances to a different prompt, seed the highlight
+        // from that prompt's selected option (matching togglePeekPopup) so a
+        // stale index doesn't carry onto the next prompt.
+        if next != peekPopupPrompt {
+            peekHighlight = next?.options.firstIndex(where: { $0.selected }) ?? 0
+        }
+        peekPopupPrompt = next
+        needsDisplay = true
+    }
+
+    /// Cmd-Y: open the popup on the current prompt (or close it if open).
+    func togglePeekPopup(current: PermissionPrompt?) {
+        if peekPopupOpen {
+            peekPopupPrompt = nil
+        } else {
+            peekPopupPrompt = current
+            peekHighlight = current?.options.firstIndex(where: { $0.selected }) ?? 0
+        }
+        needsDisplay = true
+    }
+
+    func closePeekPopup() {
+        peekPopupPrompt = nil
+        needsDisplay = true
+    }
+
+    /// Move the popup highlight (clamped). Arrow keys call this.
+    func movePeekHighlight(_ delta: Int) {
+        guard let opts = peekPopupPrompt?.options, !opts.isEmpty else { return }
+        peekHighlight = max(0, min(opts.count - 1, peekHighlight + delta))
+        needsDisplay = true
+    }
+
+    /// The option number under the highlight, for Enter resolution.
+    func highlightedOptionNumber(in prompt: PermissionPrompt) -> Int? {
+        guard peekHighlight < prompt.options.count else { return nil }
+        return prompt.options[peekHighlight].number
+    }
+
+    private func peekFont(_ size: CGFloat, bold: Bool = false) -> NSFont {
+        let name = bold ? "Menlo-Bold" : "Menlo"
+        return NSFont(name: name, size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: bold ? .bold : .regular)
+    }
+
+    /// Draw the Cmd-Y popup if open. Painted last in draw(_:) every pass so
+    /// partial redraws never clip it. The pending-count indicator is rendered
+    /// by tmux in the status bar (@amux-peek-count), not here.
+    private func drawPeekOverlay() {
+        if let prompt = peekPopupPrompt {
+            drawPeekPopup(prompt)
+        }
+    }
+
+    private func drawPeekPopup(_ prompt: PermissionPrompt) {
+        let titleFont = peekFont(13, bold: true)
+        let optFont = peekFont(13)
+        let footFont = peekFont(11)
+        let light = NSColor(calibratedWhite: 0.85, alpha: 1)
+        let teal = NSColor(calibratedRed: 0.40, green: 0.78, blue: 0.74, alpha: 1)
+        let amber = NSColor(calibratedRed: 0.96, green: 0.68, blue: 0.18, alpha: 1)
+        let dim = NSColor(calibratedWhite: 0.62, alpha: 1)
+        let footColor = NSColor(calibratedWhite: 0.55, alpha: 1)
+
+        // Layout constants. Long text soft-wraps onto multiple lines (no clip);
+        // sectionGap gives breathing room between details / question / options /
+        // footer; the box is sized generously so labels don't wrap as eagerly.
+        let padding: CGFloat = 20
+        let lineGap: CGFloat = 6
+        let sectionGap: CGFloat = 12
+        let maxBoxW = bounds.width - 24
+        let boxW = max(360, min(maxBoxW, max(540, bounds.width * 0.6)))
+        let textWidth = boxW - padding * 2
+
+        enum Section { case detail, question, option, footer }
+        struct Line {
+            let text: String
+            let font: NSFont
+            let color: NSColor
+            let highlight: Bool
+            let section: Section
+            let headIndent: CGFloat       // continuation lines wrap under this offset
+        }
+
+        func optionPrefixWidth(marker: String, number: Int) -> CGFloat {
+            let prefix = "\(marker)\(number). "
+            return (prefix as NSString).size(withAttributes: [.font: optFont]).width
+        }
+
+        var lines: [Line] = []
+        for d in prompt.details.prefix(8) {
+            lines.append(Line(text: d, font: optFont, color: dim,
+                              highlight: false, section: .detail, headIndent: 0))
+        }
+        lines.append(Line(text: prompt.question, font: titleFont, color: light,
+                          highlight: false, section: .question, headIndent: 0))
+        for (i, opt) in prompt.options.enumerated() {
+            let isReject = (opt.number == prompt.rejectOption?.number)
+            let marker = i == peekHighlight ? "❯ " : "  "
+            let suffix = isReject ? "   → open" : ""
+            lines.append(Line(
+                text: "\(marker)\(opt.number). \(opt.label)\(suffix)",
+                font: optFont,
+                color: isReject ? amber : light,
+                highlight: i == peekHighlight,
+                section: .option,
+                headIndent: optionPrefixWidth(marker: marker, number: opt.number)
+            ))
+        }
+        lines.append(Line(text: "↑↓ / digit select · Enter confirm · Esc dismiss",
+                          font: footFont, color: footColor,
+                          highlight: false, section: .footer, headIndent: 0))
+
+        // Per-line wrapped attributed string + size; track per-line extra gap
+        // (a sectionGap is added the first time a new section appears).
+        func paragraph(headIndent: CGFloat) -> NSParagraphStyle {
+            let p = NSMutableParagraphStyle()
+            p.headIndent = headIndent      // continuation lines indent under the label
+            p.firstLineHeadIndent = 0
+            p.lineBreakMode = .byWordWrapping
+            return p
+        }
+        var attrs: [NSAttributedString] = []
+        var sizes: [CGSize] = []
+        var gapsBefore: [CGFloat] = []
+        var contentH: CGFloat = 0
+        var prevSection: Section? = nil
+        for (idx, l) in lines.enumerated() {
+            let attr = NSAttributedString(string: l.text, attributes: [
+                .font: l.font,
+                .foregroundColor: l.color,
+                .paragraphStyle: paragraph(headIndent: l.headIndent),
+            ])
+            attrs.append(attr)
+            let r = attr.boundingRect(
+                with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading]
+            )
+            sizes.append(CGSize(width: ceil(r.width), height: ceil(r.height)))
+            let extra: CGFloat = (idx > 0 && l.section != prevSection) ? sectionGap : 0
+            gapsBefore.append(extra)
+            contentH += sizes[idx].height + (idx == 0 ? 0 : lineGap) + extra
+            prevSection = l.section
+        }
+
+        let boxH = contentH + padding * 2
+        let box = NSRect(x: (bounds.width - boxW) / 2,
+                         y: (bounds.height - boxH) / 2,
+                         width: boxW, height: boxH)
+
+        let bg = NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8)
+        NSColor(calibratedWhite: 0.10, alpha: 0.97).setFill()
+        bg.fill()
+        teal.setStroke()
+        bg.lineWidth = 1
+        bg.stroke()
+
+        var y = box.minY + padding
+        for (i, _) in lines.enumerated() {
+            if i > 0 { y += lineGap + gapsBefore[i] }
+            if lines[i].highlight {
+                let bar = NSRect(x: box.minX + padding / 2, y: y - 2,
+                                 width: boxW - padding, height: sizes[i].height + 4)
+                NSColor(calibratedRed: 0.40, green: 0.78, blue: 0.74, alpha: 0.18).setFill()
+                NSBezierPath(roundedRect: bar, xRadius: 3, yRadius: 3).fill()
+            }
+            let rect = NSRect(x: box.minX + padding, y: y,
+                              width: textWidth, height: sizes[i].height)
+            attrs[i].draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+            y += sizes[i].height
+        }
     }
 
     /// Rebuild border overlays from current state.

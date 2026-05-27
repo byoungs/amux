@@ -505,6 +505,30 @@ public enum Tmux {
         )
     }
 
+    /// Capture the rendered text of a pane. `-p` prints to stdout, `-J` joins
+    /// wrapped lines. Returns "" on failure (non-throwing) so the watcher poll
+    /// loop never aborts on a transient tmux error.
+    ///
+    /// `lines <= 0` (default) captures only the VISIBLE screen — no scrollback.
+    /// The watcher uses this so an answered prompt that scrolls into history
+    /// stops being detected (otherwise a scrollback copy keeps the alert lit
+    /// after the prompt is gone). `lines > 0` includes that many scrollback
+    /// rows (used by tests that render a fixture which scrolls off-screen).
+    public static func capturePane(_ session: String, paneIndex: Int, lines: Int = 0) -> String {
+        let target = "\(session):.\(paneIndex)"
+        var args = ["capture-pane", "-p", "-J", "-t", target]
+        if lines > 0 { args += ["-S", "-\(lines)"] }
+        return runRaw(args)
+    }
+
+    /// Send key tokens to a pane. Each token is a tmux key name ("Enter",
+    /// "Escape") or literal text. Used to answer a permission prompt in a
+    /// pane the user is not focused on.
+    public static func sendKeys(_ session: String, paneIndex: Int, keys: [String]) throws {
+        let target = "\(session):.\(paneIndex)"
+        try runChecked(["send-keys", "-t", target] + keys, context: "tmux send-keys failed")
+    }
+
     /// Get the pane ID at a specific index.
     public static func paneIdAt(_ session: String, index: Int) throws -> String {
         try runChecked(
@@ -595,6 +619,27 @@ public enum Tmux {
     /// Update the @amux-alert-count session option.
     public static func setAlertCount(_ session: String, count: Int) {
         runIgnoring(["set-option", "-t", session, "@amux-alert-count", String(count)])
+    }
+
+    /// Set the @amux-peek-count session option (drives the amber permission-peek
+    /// indicator + ⌘y hint in the status bar; see Config.statusRightFormat).
+    public static func setPeekCount(_ session: String, count: Int) {
+        runIgnoring(["set-option", "-t", session, "@amux-peek-count", String(count)])
+    }
+
+    /// Publish the global permission-peek count to every managed session's
+    /// status bar, then force the attached client's status line to redraw.
+    ///
+    /// The count is global (prompts across all background panes) but the status
+    /// bar is per-session, so we set it on every managed session — whichever is
+    /// attached then shows it. The explicit `refresh-client -S` is needed
+    /// because a background prompt arrives while the foreground is idle, so
+    /// nothing else would trigger a status redraw until the poll interval.
+    public static func publishPeekCount(_ count: Int) {
+        for session in (try? listFocusSessions()) ?? [] {
+            setPeekCount(session, count: count)
+        }
+        runIgnoring(["refresh-client", "-S"])
     }
 
     /// Get the alert count for a session.

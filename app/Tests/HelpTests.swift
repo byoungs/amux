@@ -32,6 +32,8 @@ enum HelpTests {
                   "help must document spaces shortcut")
             check("helpHasHelp", allText.contains("⌘?"),
                   "help must document help shortcut")
+            check("helpHasPeek", allText.contains("⌘y"),
+                  "help must document permission-peek shortcut")
         }
 
         print("HelpTests: \(passed) passed, \(failed) failed")

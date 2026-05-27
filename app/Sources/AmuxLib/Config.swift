@@ -44,12 +44,18 @@ public enum Config {
         // Cmd-held: bright text (colour252) when ⌘ is held, dim (colour242) normally
         let dim = "#{?#{==:#{@amux-cmd-held},1},#[fg=colour252],#[fg=colour242]}"
 
-        // Alert indicator (amber ● count) — always amber, appended when count > 0
-        let alert = "#{?#{>:#{@amux-alert-count},0}, #[fg=colour214 bold]● #{@amux-alert-count},}"
+        // Status-bar indicator (amber ● count + ⌘y hint) — shown when a
+        // background pane has a pending Claude permission prompt. Same amber ●
+        // as the heading dot; the ⌘y is the actionable hint, only visible while
+        // the indicator is. @amux-peek-count is pushed from the app
+        // (PermissionWatcher → Tmux.publishPeekCount). Rightmost so it stays
+        // visible even if the legend truncates. Replaces the older
+        // @amux-alert-count ● indicator (per-pane border alerts unchanged).
+        let peek = "#{?#{>:#{@amux-peek-count},0}, #[fg=colour214 bold]● #{@amux-peek-count} #[fg=colour250 nobold]⌘y,}"
 
         // Mode-specific legends
-        let working = "#[fg=colour245]WORKING \(dim)⌘+/- zoom · ⌘[] cycle · ⌘1-9 focus · ⌘? help · ⌘l split · ⌘s send · ⌘p spaces\(alert)"
-        let fullScreen = "#[fg=yellow bold]FULL SCREEN \(dim)⌘- zoom out · ⌘[] cycle · ⌘1-9 switch · ⌘? help · ⌘s send · ⌘p spaces\(alert)"
+        let working = "#[fg=colour245]WORKING \(dim)⌘+/- zoom · ⌘[] cycle · ⌘1-9 focus · ⌘? help · ⌘l split · ⌘s send · ⌘p spaces\(peek)"
+        let fullScreen = "#[fg=yellow bold]FULL SCREEN \(dim)⌘- zoom out · ⌘[] cycle · ⌘1-9 switch · ⌘? help · ⌘s send · ⌘p spaces\(peek)"
         let splitPick = "#[fg=colour196 bold]SPLIT #[fg=colour252]← #{@amux-split-first-label} #[fg=colour238]│ ←→↑↓ · 1-9 · Enter · Esc"
         let splitView = "#[fg=cyan bold]SPLIT \(dim)⌘- exit · ⌘? help · ⌘p spaces"
 
@@ -168,6 +174,9 @@ public enum Config {
                 ["set", "-t", session, "status-left",
                  "#[fg=colour43,bold] amux #[fg=colour238]│ "],
                 ["set", "-t", session, "@amux-cmd-held", "0"],
+                // Initialize so no stale peek indicator shows before the first
+                // watcher poll on launch (the app pushes the real count).
+                ["set", "-t", session, "@amux-peek-count", "0"],
                 ["set", "-t", session, "status-right", statusRightFormat],
                 ["set", "-t", session, "status-left-length", "20"],
                 ["set", "-t", session, "status-right-length", "120"],

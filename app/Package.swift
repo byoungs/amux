@@ -50,7 +50,8 @@ let package = Package(
         .executableTarget(
             name: "amux-integration-tests",
             dependencies: ["AmuxLib"],
-            path: "Tests"
+            path: "Tests",
+            exclude: ["Fixtures"]
         ),
     ]
 )

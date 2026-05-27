@@ -43,6 +43,7 @@ public class AppController {
             case .splitPickCurrent:     try handleSplitPickCurrent()
             case .splitCancel:          try handleSplitCancel()
             case .splitExit:            try handleZoomOut() // Cmd-- in split = exit
+            case .peek:                 break // handled in AppDelegate (UI overlay), never reaches here
             case .selectPaneLeft:       try handleSelectDirection("-L")
             case .selectPaneRight:      try handleSelectDirection("-R")
             case .selectPaneUp:         try handleSelectDirection("-U")

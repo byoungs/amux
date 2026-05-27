@@ -55,6 +55,9 @@ struct AmuxTermApp {
             AlertEventTransportTests.runAll()
             ClickDispatchTests.runAll()
             CliDispatchTests.runAll()
+            PermissionPromptTests.runAll()
+            PromptQueueTests.runAll()
+            PermissionWatcherTests.runAll()
             print("All tests passed")
             #else
             print("Tests only available in debug builds")
@@ -123,6 +126,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private let notificationPoster = UNNotificationPoster()
     private var alertServer: UnixSocketAlertEventServer?
     private let clickActivator = NSAppActivator()
+
+    // Permission-peek: polls background panes for Claude permission prompts
+    // and drives the status-bar indicator (amber ● + ⌘y) + Cmd-Y popup overlay.
+    var permissionWatcher: PermissionWatcher?
+    // Last peek count pushed to the status bar; avoids redundant option-sets
+    // and status refreshes when the count is unchanged between polls.
+    private var lastPeekCount = -1
 
     // App Nap activity assertion. macOS throttles backgrounded apps —
     // including their main dispatch queue — which delays the
@@ -309,8 +319,50 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             }
             #endif
 
+            // Permission-peek popup: while open it owns the keyboard.
+            if let tv = self.termView, tv.peekPopupOpen,
+               let watcher = self.permissionWatcher,
+               let prompt = watcher.queue.current?.prompt {
+                // Resolve a chosen option: the reject option (the "No" option,
+                // identified by label not position) engages (full-screen + send
+                // key); all others answer in place.
+                let resolve: (Int) -> Void = { num in
+                    if num == prompt.rejectOption?.number {
+                        watcher.engageReject(optionNumber: num)
+                        tv.closePeekPopup()
+                    } else {
+                        watcher.answerCurrent(optionNumber: num)
+                        tv.updatePeekState(watcher.queue)
+                        if watcher.queue.current == nil { tv.closePeekPopup() }
+                    }
+                }
+                switch event.keyCode {
+                case 53: // Escape → dismiss whole queue to background
+                    watcher.dismissAll(); tv.closePeekPopup(); return nil
+                case 126: tv.movePeekHighlight(-1); return nil   // Up
+                case 125: tv.movePeekHighlight(+1); return nil   // Down
+                case 36:                                          // Enter → highlighted
+                    if let num = tv.highlightedOptionNumber(in: prompt) { resolve(num) }
+                    return nil
+                default:
+                    let chars = event.charactersIgnoringModifiers ?? ""
+                    // Cmd-Y toggles the popup closed but KEEPS the queue (unlike
+                    // Esc, which dismisses the whole queue); Cmd-Y reopens it.
+                    if event.modifierFlags.contains(.command), chars == "y" {
+                        tv.closePeekPopup(); return nil
+                    }
+                    if let d = Int(chars), prompt.options.contains(where: { $0.number == d }) {
+                        resolve(d)
+                    }
+                    return nil // swallow all other keys while popup is open
+                }
+            }
+
             let action = KeyInput.action(for: event, mode: controller.mode)
             switch action {
+            case .amux(.peek):
+                self.termView?.togglePeekPopup(current: self.permissionWatcher?.queue.current?.prompt)
+                return nil
             case .amux(let command):
                 controller.handleAction(command)
                 return nil
@@ -345,6 +397,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             reason: "amux alert notifications must deliver while backgrounded")
 
         startAlertEventServer()
+
+        // Permission-peek watcher: polls background panes every 4s for Claude
+        // permission prompts; never touches the focused pane the user sees.
+        let watcher = PermissionWatcher(attachedSession: { [weak self] in
+            guard let self = self, let controller = self.controller else { return nil }
+            let active = (try? Tmux.activePaneIndex(controller.session)) ?? -1
+            return (controller.session, active)
+        })
+        watcher.onChange = { [weak self] in
+            // onChange already hops to main inside the watcher's poll; the
+            // action methods call it on main too. Marshal defensively.
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                let queue = self.permissionWatcher?.queue
+                // Push the count to the status bar only when it changes.
+                let count = queue?.count ?? 0
+                if count != self.lastPeekCount {
+                    self.lastPeekCount = count
+                    Tmux.publishPeekCount(count)
+                }
+                // Keep the popup in sync if it's open.
+                self.termView?.updatePeekState(queue)
+            }
+        }
+        self.permissionWatcher = watcher
+        watcher.start()
     }
 
     private func startAlertEventServer() {
@@ -373,6 +451,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func applicationWillTerminate(_ notification: Notification) {
         alertServer?.stop()
+        permissionWatcher?.stop()
     }
 
     // MARK: - UNUserNotificationCenterDelegate

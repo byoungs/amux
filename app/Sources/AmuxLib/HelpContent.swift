@@ -39,6 +39,13 @@ public enum HelpContent {
         Section(title: "Spaces", entries: [
             Entry(key: "⌘p", description: "Spaces — open the space picker to switch workspaces"),
         ]),
+        Section(title: "Permission Peek", entries: [
+            Entry(key: "⌘y", description: "Peek — open the oldest pending permission prompt (amber ● count in the status bar)"),
+            Entry(key: "1-9", description: "Answer in place — Yes / don't-ask without leaving your pane"),
+            Entry(key: "↑↓", description: "Navigate — move the highlight between options"),
+            Entry(key: "Enter", description: "Confirm — answer the highlighted option"),
+            Entry(key: "Esc", description: "Dismiss — hide the popup; prompts stay pending"),
+        ]),
         Section(title: "General", entries: [
             Entry(key: "⌘? ⌘/", description: "Help — show this screen"),
             Entry(key: "⌘q", description: "Quit — close the application"),

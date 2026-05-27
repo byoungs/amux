@@ -95,3 +95,9 @@ separate binary invoked from tmux key bindings and hooks.
   `LayoutEngine.computeAdd` does not set `action.selectPane`, so focus is
   the caller's responsibility. Otherwise the new pane appears but the
   cursor stays in the old one.
+- `select-pane` to a *different* pane auto-unzooms the window (verified on
+  real tmux). So `select-pane` then "zoom if not zoomed" lands you full-screen
+  on the target — no manual unzoom/rezoom dance needed. Before treating a
+  tmux-interaction as a bug, reproduce it against real tmux (`tmux -L <sock>`
+  on an isolated socket); FakeTmux models zoom as a plain window flag and does
+  not capture this behavior.

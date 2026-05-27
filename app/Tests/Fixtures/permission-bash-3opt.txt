@@ -1,0 +1,44 @@
+ ▐▛███▜▌   Claude Code v2.1.150
+▝▜█████▛▘  Opus 4.7 (1M context) · Claude Max
+  ▘▘ ▝▝    ~/src/scratch-claude/proj
+
+❯ Run this bash command: sw_vers                                                                                        
+
+⏺ Bash(sw_vers)                                                                                                         
+  ⎿  Waiting…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   sw_vers
+   Show macOS version                                                                                                   
+                  
+ This command requires approval
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don’t ask again for: sw_vers *
+   3. No
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

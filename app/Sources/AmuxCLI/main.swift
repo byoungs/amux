@@ -927,9 +927,132 @@ func main() throws {
             exit(2)
         }
 
+    case "prompt":
+        // amux-cli prompt park SESSION    — popup to pick pane to park when at cap
+        // amux-cli prompt close SESSION   — popup to pull from backlog after last close
+        let sub = args.count >= 2 ? args[1] : ""
+        switch sub {
+        case "park":
+            guard args.count >= 3 else {
+                fputs("Usage: amux-cli prompt park SESSION\n", stderr)
+                exit(2)
+            }
+            runParkPrompt(session: args[2])
+            exit(0)
+        case "close":
+            guard args.count >= 3 else {
+                fputs("Usage: amux-cli prompt close SESSION\n", stderr)
+                exit(2)
+            }
+            runCloseLastPrompt(session: args[2])
+            exit(0)
+        default:
+            fputs("Usage: amux-cli prompt park|close SESSION\n", stderr)
+            exit(2)
+        }
+
     default:
         fputs("Unknown command: \(command)\n", stderr)
         exit(1)
+    }
+}
+
+// MARK: - Park prompt (fires on 5th-pane open at cap)
+
+func drawParkPrompt(panes: [PaneInfo], selected: Int) {
+    var out = ansiClear
+    out += "\r\n  \(ansiBoldCyan)4 panes already open\(ansiReset)  \(ansiGray)pick one to send to backlog\(ansiReset)\r\n\r\n"
+    for (i, p) in panes.enumerated() {
+        let arrow = i == selected ? "\(ansiCyan)\u{2192}\(ansiReset)" : " "
+        let title = p.title.isEmpty ? "(pane \(p.index + 1))" : p.title
+        let styled = i == selected ? "\(ansiBold)\(title)\(ansiReset)" : title
+        out += "  \(arrow) \(ansiYellow)\(p.index + 1)\(ansiReset) \(styled)\r\n"
+    }
+    out += "\r\n  \(ansiGray)Enter: park selected · Esc: open anyway (override cap)\(ansiReset)\r\n"
+    print(out, terminator: "")
+    fflush(stdout)
+}
+
+func runParkPrompt(session: String) {
+    let panes = (try? Tmux.listPanes(session)) ?? []
+    if panes.isEmpty { return }
+    let lrf = (try? Tmux.leastRecentlyFocusedPane(session)) ?? panes[0].index
+    var selected = panes.firstIndex(where: { $0.index == lrf }) ?? 0
+    let orig = enterRawMode()
+    defer { restoreTerminal(orig) }
+    while true {
+        drawParkPrompt(panes: panes, selected: selected)
+        let key = readRawKey()
+        switch key {
+        case .up:
+            if selected > 0 { selected -= 1 }
+        case .down:
+            if selected + 1 < panes.count { selected += 1 }
+        case .enter:
+            let pick = panes[selected]
+            restoreTerminal(orig)
+            _ = try? Tmux.parkPane(session, paneIndex: pick.index)
+            _ = try? Tmux.createPane(session, cwd: nil)
+            return
+        case .escape:
+            restoreTerminal(orig)
+            Tmux.setCapOverridden(session, overridden: true)
+            _ = try? Tmux.createPane(session, cwd: nil)
+            return
+        default:
+            break
+        }
+    }
+}
+
+// MARK: - Close-last prompt (fires on last-pane-close when backlog non-empty)
+
+func drawCloseLastPrompt(sessions: [BackgroundSession], selected: Int) {
+    var out = ansiClear
+    out += "\r\n  \(ansiBoldCyan)Last pane closed\(ansiReset)  \(ansiGray)pull one from backlog?\(ansiReset)\r\n\r\n"
+    for (i, s) in sessions.enumerated() {
+        let arrow = i == selected ? "\(ansiCyan)\u{2192}\(ansiReset)" : " "
+        let title = s.title.isEmpty ? s.name : s.title
+        let styled = i == selected ? "\(ansiBold)\(title)\(ansiReset)" : title
+        let ago = formatAgo(seconds: nowSeconds() - s.parkedAt)
+        out += "  \(arrow) \(styled)  \(ansiDim)(from \(s.parkedFrom), \(ago))\(ansiReset)\r\n"
+    }
+    out += "\r\n  \(ansiGray)Enter: pull here · Esc: leave empty\(ansiReset)\r\n"
+    print(out, terminator: "")
+    fflush(stdout)
+}
+
+func runCloseLastPrompt(session: String) {
+    let backlog = (try? Tmux.listBackgroundSessions()) ?? []
+    if backlog.isEmpty { return }
+    var sorted = backlog
+    sorted.sort { (a, b) in
+        let aFromSelf = a.parkedFrom == session
+        let bFromSelf = b.parkedFrom == session
+        if aFromSelf != bFromSelf { return aFromSelf }
+        return a.parkedAt > b.parkedAt
+    }
+    var selected = 0
+    let orig = enterRawMode()
+    defer { restoreTerminal(orig) }
+    while true {
+        drawCloseLastPrompt(sessions: sorted, selected: selected)
+        let key = readRawKey()
+        switch key {
+        case .up:
+            if selected > 0 { selected -= 1 }
+        case .down:
+            if selected + 1 < sorted.count { selected += 1 }
+        case .enter:
+            let pick = sorted[selected]
+            restoreTerminal(orig)
+            try? Tmux.unparkSession(pick.name, mode: .merge(into: session))
+            return
+        case .escape:
+            return
+        default:
+            break
+        }
     }
 }
 

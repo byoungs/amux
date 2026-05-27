@@ -907,6 +907,11 @@ public enum Tmux {
         runIgnoring(["set-environment", "-t", session, "AMUX_SPLIT_PANE_ORDER",
                      originalIds.joined(separator: ",")])
 
+        // Save and clear stacked flag while in split view. exitSplit restores it.
+        let stacked = runRaw(["show-options", "-t", session, "-v", AmuxSessionOption.stacked])
+        runIgnoring(["set-environment", "-t", session, "AMUX_SPLIT_PRIOR_STACKED", stacked])
+        runIgnoring(["set-option", "-t", session, AmuxSessionOption.stacked, "0"])
+
         let idA = try paneIdAt(session, index: paneA)
         let idB = try paneIdAt(session, index: paneB)
 
@@ -1007,7 +1012,16 @@ public enum Tmux {
             runIgnoring(["set-environment", "-t", session, "-u", "AMUX_SPLIT_PANE_ORDER"])
         }
 
+        // Restore prior stacked flag saved by enterSplit.
+        let prior = runRaw(["show-environment", "-t", session, "AMUX_SPLIT_PRIOR_STACKED"])
+        if prior.contains("=") {
+            let val = String(prior.split(separator: "=").last ?? "")
+            runIgnoring(["set-option", "-t", session, AmuxSessionOption.stacked, val])
+            runIgnoring(["set-environment", "-t", session, "-u", "AMUX_SPLIT_PRIOR_STACKED"])
+        }
+
         try applyLayout(session, event: .resize)
+        try? ensureStackedZoom(session)
     }
 
     // MARK: - Bell watch

@@ -161,6 +161,13 @@ final class VTerminal {
         }
     }
 
+    /// Clear all screen state. Used by scan-mode tile rendering to replay a
+    /// fresh snapshot into an existing VTerminal without re-allocating.
+    func reset() {
+        vterm_screen_reset(screen, 1)
+        fullRedrawNeeded = true
+    }
+
     func flushDamage() {
         vterm_screen_flush_damage(screen)
         isDirty = false

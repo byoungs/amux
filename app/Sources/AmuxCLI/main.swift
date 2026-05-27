@@ -626,7 +626,29 @@ func main() throws {
             exit(1)
         }
         let session = args[1]
+        // Last-pane-close detection: if the session emptied out and the
+        // backlog isn't empty, fire the close-prompt popup instead of the
+        // usual layout reapply. The popup runs amux-cli prompt close.
+        let count = (try? Tmux.paneCount(session)) ?? 0
+        if count == 0 {
+            let backlogCount = (try? Tmux.listBackgroundSessions().count) ?? 0
+            if backlogCount > 0 {
+                let bin = Config.findAmuxCLI()
+                Tmux.launch([
+                    "display-popup", "-t", session, "-E", "-w", "70", "-h", "16",
+                    "-T", " Last pane closed — pull from backlog? ",
+                    "\(bin) prompt close \(session)",
+                ])
+                exit(0)
+            }
+        }
         try Tmux.applyLayout(session, event: .resize)
+        // Cap-override re-arm: if pane count drops back at or under the cap,
+        // clear the override flag so the next newPane re-prompts.
+        let cap = (try? Tmux.getSessionCap(session)) ?? 4
+        if count <= cap {
+            Tmux.setCapOverridden(session, overridden: false)
+        }
 
     case "update-title":
         // amux-cli update-title PANE_INDEX CWD

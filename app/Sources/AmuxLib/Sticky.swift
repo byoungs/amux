@@ -373,14 +373,17 @@ public func computeLayout(
     }
 }
 
-/// Resize: recompute the grid at new dimensions, match panes by position.
+/// Resize: rescale slots to the new dimensions while preserving the
+/// current layout shape. Asks `currentShape` for the variant — never picks
+/// a canonical template blindly. Without this, the `pane-exited` tmux hook
+/// (which fires `.resize` immediately after every kill) would collapse a
+/// right-full-3 back to standard left-full-3, shuffling the column-mate.
 private func computeResize(current: [Pane], windowW: Int, windowH: Int) -> [Pane] {
-    let count = current.count
-    if count == 0 {
+    if current.isEmpty {
         return []
     }
-
-    let rects = gridPositions(count: count, width: windowW, height: windowH)
+    let shape = currentShape(panes: current)
+    let rects = slotsFor(shape: shape, width: windowW, height: windowH)
     let slots: [SlotCenter] = rects.map { r in
         let (cx, cy) = rectCenter(x: r.x, y: r.y, w: r.w, h: r.h)
         return SlotCenter(cx: cx, cy: cy)
@@ -423,7 +426,9 @@ private func computeAdd(current: [Pane], newId: Int, windowW: Int, windowH: Int)
         prevCount = current.count
     }
 
-    let rects = gridPositions(count: newCount, width: windowW, height: windowH)
+    // Adds always produce a standard layout — the right-full-3 variant is
+    // only reachable by removing from the right column.
+    let rects = slotsFor(shape: .standard(count: newCount), width: windowW, height: windowH)
     let slots: [SlotCenter] = rects.map { r in
         let (cx, cy) = rectCenter(x: r.x, y: r.y, w: r.w, h: r.h)
         return SlotCenter(cx: cx, cy: cy)
@@ -451,6 +456,12 @@ private func computeAdd(current: [Pane], newId: Int, windowW: Int, windowH: Int)
 
 /// Remove: filter out the removed pane, compute grid for surviving panes,
 /// match surviving panes using structural rules.
+///
+/// The target shape is derived from the survivors' geometry via
+/// `currentShape`. For a 4→3 removal from the right column, the lone
+/// column pane in the survivor set is the column-mate, sitting on the
+/// right side of the centroid — `currentShape` returns `.rightFull3`,
+/// so the column stays on the side where the removal happened.
 private func computeRemove(current: [Pane], removedId: Int, windowW: Int, windowH: Int) -> [Pane] {
     let alreadyKilled = !current.contains { $0.id == removedId }
 
@@ -469,25 +480,12 @@ private func computeRemove(current: [Pane], removedId: Int, windowW: Int, window
         return []
     }
 
-    // Detect 4->3 right-column removal for right-full layout variant
+    let shape = currentShape(panes: surviving)
+    let rects = slotsFor(shape: shape, width: windowW, height: windowH)
+
     let paneCenters: [PaneCenter] = surviving.map { p in
         let (cx, cy) = rectCenter(x: p.x, y: p.y, w: p.w, h: p.h)
         return PaneCenter(id: p.id, cx: cx, cy: cy, prevCx: nil, prevCy: nil)
-    }
-
-    let rightFull3: Bool = {
-        guard newCount == 3, prevCount == 4 else { return false }
-        guard let loneIdx = findLoneColumnPane(panes: paneCenters) else { return false }
-        let loneCx = Int64(paneCenters[loneIdx].cx)
-        let avgCx = paneCenters.map { Int64($0.cx) }.reduce(0, +) / Int64(paneCenters.count)
-        return loneCx > avgCx
-    }()
-
-    let rects: [Rect]
-    if rightFull3 {
-        rects = gridPositions3Right(width: windowW, height: windowH)
-    } else {
-        rects = gridPositions(count: newCount, width: windowW, height: windowH)
     }
 
     let slots: [SlotCenter] = rects.map { r in
@@ -673,6 +671,158 @@ public enum StickyTests {
             check("add_3_to_4_split_C TR=B", result[1].id == 11, "result: \(result.map { $0.id })")
             check("add_3_to_4_split_C BL=NEW", result[2].id == 99, "result: \(result.map { $0.id })")
             check("add_3_to_4_split_C BR=C", result[3].id == 12, "result: \(result.map { $0.id })")
+        }
+
+        // layout_add_3right_to_4
+        // Right-full 3-pane (slots: TL, BL, full-right) -> 4-pane.
+        // Reproduces user's bug: close BR from 2x2, then create new pane.
+        // After remove_4_br, panes are A=TL_small, C=BL_small, B=right-full.
+        // Spec (sticky-panes.md "column-mate expands" symmetric add):
+        // right column splits; B (right-full) stays in right column, NEW fills
+        // the freshly vacated BR slot.
+        do {
+            let r3r = gridPositions3Right(width: W, height: H)
+            let A = Pane(id: 10, x: r3r[0].x, y: r3r[0].y, w: r3r[0].w, h: r3r[0].h)
+            let C = Pane(id: 12, x: r3r[1].x, y: r3r[1].y, w: r3r[1].w, h: r3r[1].h)
+            let B = Pane(id: 11, x: r3r[2].x, y: r3r[2].y, w: r3r[2].w, h: r3r[2].h)
+            let current = [A, C, B]
+            let result = computeLayout(current: current, event: .add(99), windowW: W, windowH: H)
+            check("add_3right_to_4 count", result.count == 4)
+            check("add_3right_to_4 TL=A", result[0].id == 10, "result: \(result.map { $0.id })")
+            check("add_3right_to_4 TR=B", result[1].id == 11, "result: \(result.map { $0.id })")
+            check("add_3right_to_4 BL=C", result[2].id == 12, "result: \(result.map { $0.id })")
+            check("add_3right_to_4 BR=NEW", result[3].id == 99, "result: \(result.map { $0.id })")
+        }
+
+        // layout_add_3right_to_4_already_joined_split_B
+        // After kill-BR, tmux focus typically stays on the column-mate (B,
+        // formerly TR, now full-right). split-window -v on B yields:
+        // A=TL_small, C=BL_small, B=top-right_small, NEW=bot-right_small.
+        // The "natural" tmux geometry already matches 2x2 — sticky must
+        // preserve it. Spec: 4-pane = [A=TL, B=TR, C=BL, NEW=BR].
+        do {
+            let r3r = gridPositions3Right(width: W, height: H)
+            let A = Pane(id: 10, x: r3r[0].x, y: r3r[0].y, w: r3r[0].w, h: r3r[0].h)
+            let C = Pane(id: 12, x: r3r[1].x, y: r3r[1].y, w: r3r[1].w, h: r3r[1].h)
+            // B was full-right; after split-v, B shrinks to top, NEW fills bottom.
+            let bRegionH = r3r[2].h
+            let bH = (bRegionH - 1) / 2
+            let newH = bRegionH - bH - 1
+            let B = Pane(id: 11, x: r3r[2].x, y: r3r[2].y, w: r3r[2].w, h: bH)
+            let NEW = Pane(id: 99, x: r3r[2].x, y: r3r[2].y + bH + 1, w: r3r[2].w, h: newH)
+            let current = [A, C, B, NEW]
+            let result = computeLayout(current: current, event: .add(99), windowW: W, windowH: H)
+            check("add_3right_to_4_split_B count", result.count == 4)
+            check("add_3right_to_4_split_B TL=A", result[0].id == 10, "result: \(result.map { $0.id })")
+            check("add_3right_to_4_split_B TR=B", result[1].id == 11, "result: \(result.map { $0.id })")
+            check("add_3right_to_4_split_B BL=C", result[2].id == 12, "result: \(result.map { $0.id })")
+            check("add_3right_to_4_split_B BR=NEW", result[3].id == 99, "result: \(result.map { $0.id })")
+        }
+
+        // layout_add_3right_to_4_already_joined_split_A
+        // tmux split-window -v on top-left pane (A). A keeps top half of its
+        // region, NEW fills bottom half. B and C unchanged.
+        // Spec: 4-pane = [A=TL, B=TR, C=BL, NEW=BR].
+        do {
+            let r3r = gridPositions3Right(width: W, height: H)
+            let aRegionH = r3r[0].h
+            let aH = (aRegionH - 1) / 2
+            let newH = aRegionH - aH - 1
+            let A = Pane(id: 10, x: r3r[0].x, y: r3r[0].y, w: r3r[0].w, h: aH)
+            let NEW = Pane(id: 99, x: r3r[0].x, y: r3r[0].y + aH + 1, w: r3r[0].w, h: newH)
+            let C = Pane(id: 12, x: r3r[1].x, y: r3r[1].y, w: r3r[1].w, h: r3r[1].h)
+            let B = Pane(id: 11, x: r3r[2].x, y: r3r[2].y, w: r3r[2].w, h: r3r[2].h)
+            let current = [A, NEW, C, B]
+            let result = computeLayout(current: current, event: .add(99), windowW: W, windowH: H)
+            check("add_3right_to_4_split_A count", result.count == 4)
+            check("add_3right_to_4_split_A TL=A", result[0].id == 10, "result: \(result.map { $0.id })")
+            check("add_3right_to_4_split_A TR=B", result[1].id == 11, "result: \(result.map { $0.id })")
+            check("add_3right_to_4_split_A BL=C", result[2].id == 12, "result: \(result.map { $0.id })")
+            check("add_3right_to_4_split_A BR=NEW", result[3].id == 99, "result: \(result.map { $0.id })")
+        }
+
+        // layout_add_3right_to_4_already_joined_split_C
+        // tmux split-window -v on bot-left pane (C). C keeps top, NEW fills
+        // bottom of C's region. A and B unchanged.
+        // Spec: 4-pane = [A=TL, B=TR, C=BL, NEW=BR].
+        do {
+            let r3r = gridPositions3Right(width: W, height: H)
+            let cRegionH = r3r[1].h
+            let cH = (cRegionH - 1) / 2
+            let newH = cRegionH - cH - 1
+            let A = Pane(id: 10, x: r3r[0].x, y: r3r[0].y, w: r3r[0].w, h: r3r[0].h)
+            let C = Pane(id: 12, x: r3r[1].x, y: r3r[1].y, w: r3r[1].w, h: cH)
+            let NEW = Pane(id: 99, x: r3r[1].x, y: r3r[1].y + cH + 1, w: r3r[1].w, h: newH)
+            let B = Pane(id: 11, x: r3r[2].x, y: r3r[2].y, w: r3r[2].w, h: r3r[2].h)
+            let current = [A, C, NEW, B]
+            let result = computeLayout(current: current, event: .add(99), windowW: W, windowH: H)
+            check("add_3right_to_4_split_C count", result.count == 4)
+            check("add_3right_to_4_split_C TL=A", result[0].id == 10, "result: \(result.map { $0.id })")
+            check("add_3right_to_4_split_C TR=B", result[1].id == 11, "result: \(result.map { $0.id })")
+            check("add_3right_to_4_split_C BL=C", result[2].id == 12, "result: \(result.map { $0.id })")
+            check("add_3right_to_4_split_C BR=NEW", result[3].id == 99, "result: \(result.map { $0.id })")
+        }
+
+        // resize_preserves_3right_full
+        // After remove_4_br produces a 3-pane right-full layout, a subsequent
+        // .resize event (e.g., fired by the pane-exited tmux hook or by a
+        // window resize) must preserve that variant rather than collapsing it
+        // back to standard 3-left-full. Otherwise the column-mate (B) gets
+        // shuffled to BR, and the user's next "add pane" produces the wrong
+        // slot (the BL-bug).
+        do {
+            let r3r = gridPositions3Right(width: W, height: H)
+            // Panes as they sit after remove_4_br
+            let A = Pane(id: 10, x: r3r[0].x, y: r3r[0].y, w: r3r[0].w, h: r3r[0].h)
+            let C = Pane(id: 12, x: r3r[1].x, y: r3r[1].y, w: r3r[1].w, h: r3r[1].h)
+            let B = Pane(id: 11, x: r3r[2].x, y: r3r[2].y, w: r3r[2].w, h: r3r[2].h)
+            let current = [A, C, B]
+            let result = computeLayout(current: current, event: .resize, windowW: W, windowH: H)
+            check("resize_3right count", result.count == 3)
+            // Same slot order as gridPositions3Right: TL, BL, full-right
+            check("resize_3right TL=A", result[0].id == 10, "result: \(result.map { $0.id })")
+            check("resize_3right BL=C", result[1].id == 12, "result: \(result.map { $0.id })")
+            check("resize_3right rightfull=B", result[2].id == 11, "result: \(result.map { $0.id })")
+            check("resize_3right B full height", result[2].h == H,
+                  "B should remain full-height, got h=\(result[2].h)")
+            check("resize_3right B right side", result[2].x > result[0].w,
+                  "B should be on the right; got x=\(result[2].x), left w=\(result[0].w)")
+        }
+
+        // bug_repro_remove_br_then_add
+        // Full sequence matching the user's reported bug:
+        //   1. Start with 2x2 [A=TL, B=TR, C=BL, D=BR]
+        //   2. Close BR (D): .removePane(13) → 3-right-full [A=TL, C=BL, B=right-full]
+        //   3. pane-exited hook: .resize → MUST preserve 3-right-full
+        //   4. User on B, split-window -v: B' top of right col, NEW bot of right col
+        //   5. .addPane(99) → 4-pane [A=TL, B=TR, C=BL, NEW=BR]
+        do {
+            let start = panesAt(count: 4, ids: [10, 11, 12, 13], w: W, h: H)
+            // Step 2: remove BR
+            let afterRemove = computeLayout(current: start, event: .remove(13), windowW: W, windowH: H)
+            check("bug_repro after remove count", afterRemove.count == 3)
+            // Step 3: pane-exited hook fires .resize on the post-remove state
+            let afterResize = computeLayout(current: afterRemove, event: .resize, windowW: W, windowH: H)
+            check("bug_repro after resize count", afterResize.count == 3)
+            check("bug_repro after resize B still right-full",
+                  afterResize.first(where: { $0.id == 11 })?.h == H,
+                  "B (column-mate) must stay full-height; got panes: \(afterResize.map { ($0.id, $0.x, $0.h) })")
+            // Step 4: user is on B (right-full); split-v puts NEW below B
+            let bIdx = afterResize.firstIndex(where: { $0.id == 11 })!
+            let bPane = afterResize[bIdx]
+            let bH = (bPane.h - 1) / 2
+            let newH = bPane.h - bH - 1
+            var withNew = afterResize
+            withNew[bIdx] = Pane(id: 11, x: bPane.x, y: bPane.y, w: bPane.w, h: bH)
+            withNew.append(Pane(id: 99, x: bPane.x, y: bPane.y + bH + 1, w: bPane.w, h: newH))
+            // Step 5: add NEW
+            let final = computeLayout(current: withNew, event: .add(99), windowW: W, windowH: H)
+            check("bug_repro final count", final.count == 4)
+            check("bug_repro final TL=A", final[0].id == 10, "got \(final.map { $0.id })")
+            check("bug_repro final TR=B", final[1].id == 11, "got \(final.map { $0.id })")
+            check("bug_repro final BL=C", final[2].id == 12, "got \(final.map { $0.id })")
+            check("bug_repro final BR=NEW", final[3].id == 99,
+                  "BUG: new pane should land at BR, but landed at slot \(final.firstIndex(where: { $0.id == 99 }) ?? -1). Full result: \(final.map { $0.id })")
         }
 
         // layout_add_4_to_5

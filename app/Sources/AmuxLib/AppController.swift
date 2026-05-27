@@ -101,16 +101,30 @@ public class AppController {
     // MARK: - New pane
 
     private func handleNewPane() throws {
-        // Inherit the active pane's working directory
+        let count = try Tmux.paneCount(session)
+        let cap = (try? Tmux.getSessionCap(session)) ?? 4
+        let overridden = (try? Tmux.isCapOverridden(session)) ?? false
+        if count >= cap && !overridden {
+            launchParkPromptPopup()
+            return
+        }
         let activeIndex = try Tmux.activePaneIndex(session)
         let activeCwd = try Tmux.paneCwd(session, paneIndex: activeIndex)
         let paneIndex = try Tmux.createPane(session, cwd: activeCwd.isEmpty ? nil : activeCwd)
-        // Auto-title the new pane from its cwd
         let cwd = try Tmux.paneCwd(session, paneIndex: paneIndex)
         if !cwd.isEmpty {
             let title = Util.autoTitle(dir: cwd)
             try Tmux.setTitle(session, paneIndex: paneIndex, title: title)
         }
+    }
+
+    private func launchParkPromptPopup() {
+        let bin = Config.findAmuxCLI()
+        Tmux.launch([
+            "display-popup", "-t", session, "-E", "-w", "70", "-h", "16",
+            "-T", " Cap reached — pick a pane to send to backlog ",
+            "\(bin) prompt park \(session)",
+        ])
     }
 
     // MARK: - Spaces / Send (fire-and-forget popup — tmux manages lifecycle)

@@ -240,6 +240,34 @@ public enum FakeTmuxTests {
             print("FAIL: leastRecentlyFocusedPane — \(error)")
         }
 
+        // ensureStackedZoom zooms when stacked flag is on
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("s")
+            try fake.execute(["set-option", "-t", "s", "@amux-stacked", "1"])
+            _ = try Tmux.createPane("s")
+            try Tmux.ensureStackedZoom("s")
+            check("ensureStackedZoom-on-zooms", try Tmux.isZoomed("s"))
+        } catch {
+            failed += 1
+            print("FAIL: ensureStackedZoom-on — \(error)")
+        }
+
+        // ensureStackedZoom no-op when stacked flag is off
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("s")
+            try fake.execute(["set-option", "-t", "s", "@amux-stacked", "0"])
+            _ = try Tmux.createPane("s")
+            try Tmux.ensureStackedZoom("s")
+            check("ensureStackedZoom-off-noop", !(try Tmux.isZoomed("s")))
+        } catch {
+            failed += 1
+            print("FAIL: ensureStackedZoom-off — \(error)")
+        }
+
         // listSpacesWithAlerts excludes background sessions
         do {
             let fake = FakeTmux()

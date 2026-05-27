@@ -675,6 +675,19 @@ public enum Tmux {
         return stdout == "1"
     }
 
+    /// If session has @amux-stacked=1 and is not zoomed, zoom it.
+    /// No-op when stacked is off, when the session is currently in split
+    /// view (window_index > 0), or when already zoomed.
+    public static func ensureStackedZoom(_ session: String) throws {
+        let stacked = runRaw(["show-options", "-t", session, "-v", AmuxSessionOption.stacked]) == "1"
+        guard stacked else { return }
+        let wIdx = runRaw(["display-message", "-t", session, "-p", "#{window_index}"])
+        guard wIdx == "0" || wIdx.isEmpty else { return }
+        if try !isZoomed(session) {
+            try toggleZoom(session)
+        }
+    }
+
     // MARK: - Layout
 
     /// Read current pane positions from tmux as Pane structs.

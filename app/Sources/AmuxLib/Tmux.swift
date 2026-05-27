@@ -538,6 +538,34 @@ public enum Tmux {
         return try run(["display-message", "-t", target, "-p", "#{@amux-title}"])
     }
 
+    // MARK: - Focus timestamp
+
+    /// Read @amux-focused-at on a pane (0 if unset).
+    public static func getPaneFocusedAt(_ session: String, paneIndex: Int) throws -> UInt64 {
+        let target = "\(session):.\(paneIndex)"
+        let raw = runRaw(["show-options", "-p", "-t", target, "-v", "@amux-focused-at"])
+        return UInt64(raw) ?? 0
+    }
+
+    /// Return the pane index of the least-recently-focused pane in a session.
+    /// Falls back to lowest pane index if no focus times are set.
+    public static func leastRecentlyFocusedPane(_ session: String) throws -> Int {
+        let panes = try listPanes(session)
+        guard !panes.isEmpty else {
+            throw AmuxError.tmux("leastRecentlyFocusedPane: no panes")
+        }
+        var bestIdx = panes[0].index
+        var bestTime = UInt64.max
+        for p in panes {
+            let t = (try? getPaneFocusedAt(session, paneIndex: p.index)) ?? 0
+            if t < bestTime {
+                bestTime = t
+                bestIdx = p.index
+            }
+        }
+        return bestIdx
+    }
+
     // MARK: - Alert management
 
     /// Set or clear the alert flag on a pane.

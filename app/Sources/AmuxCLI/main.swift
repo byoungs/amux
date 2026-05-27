@@ -655,6 +655,15 @@ func main() throws {
         try Tmux.setTitle(session, paneIndex: paneIndex, title: title)
         try? Tmux.dismissAlert(session, paneIndex: paneIndex)
 
+        // Stamp per-pane focus time so we can find least-recently-focused
+        // when prompting at the cap.
+        if !session.isEmpty {
+            let now = String(UInt64(Date().timeIntervalSince1970))
+            let target = "\(session):.\(paneIndex)"
+            _ = try? Tmux.executor.execute(
+                ["set-option", "-p", "-t", target, "@amux-focused-at", now])
+        }
+
     case "alert-pane":
         guard args.count >= 2 else {
             fputs("Usage: amux-cli alert-pane PANE_INDEX\n", stderr)

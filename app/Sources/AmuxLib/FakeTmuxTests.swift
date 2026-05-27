@@ -219,6 +219,27 @@ public enum FakeTmuxTests {
             print("FAIL: isCapOverridden — \(error)")
         }
 
+        // least-recently-focused helper picks the oldest pane
+        do {
+            let fake = FakeTmux()
+            Tmux.executor = fake
+            try Tmux.createSession("s")
+            _ = try Tmux.createPane("s") // 2 panes
+            _ = try Tmux.createPane("s") // 3 panes
+            let panes = try Tmux.listPanes("s")
+            for (i, p) in panes.enumerated() {
+                try fake.execute([
+                    "set-option", "-p", "-t", "s:.\(p.index)",
+                    "@amux-focused-at", String(1000 + i * 10),
+                ])
+            }
+            let lrf = try Tmux.leastRecentlyFocusedPane("s")
+            check("least-recently-focused is pane 0", lrf == panes[0].index)
+        } catch {
+            failed += 1
+            print("FAIL: leastRecentlyFocusedPane — \(error)")
+        }
+
         // listSpacesWithAlerts excludes background sessions
         do {
             let fake = FakeTmux()

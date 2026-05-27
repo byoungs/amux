@@ -845,6 +845,11 @@ public enum Tmux {
         if action.openSpaces {
             try openSpacesPopup()
         }
+
+        // Step 8: Stacked mode — single enforcement point. After any layout
+        // op, ensure the active pane is the sole visible one when @amux-stacked=1.
+        // No-op when stacked is off or when the session is in split view.
+        try? ensureStackedZoom(session)
     }
 
     /// The unified layout pipeline: gather → compute → execute.

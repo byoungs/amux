@@ -190,6 +190,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Create AppController and run startup (creates session, applies config, hooks)
         let controller = AppController(session: session)
         self.controller = controller
+        // Wire scan-mode entry callback: when user zooms out from a zoomed
+        // pane, the controller signals us to overlay scan tiles on TerminalView.
+        controller.onEnterScanMode = { [weak self] sessionName in
+            DispatchQueue.main.async {
+                self?.termView?.enterScanMode(session: sessionName)
+            }
+        }
         do {
             try controller.startup()
         } catch {

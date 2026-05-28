@@ -720,19 +720,6 @@ public enum Tmux {
         return stdout == "1"
     }
 
-    /// If session has @amux-stacked=1 and is not zoomed, zoom it.
-    /// No-op when stacked is off, when the session is currently in split
-    /// view (window_index > 0), or when already zoomed.
-    public static func ensureStackedZoom(_ session: String) throws {
-        let stacked = runRaw(["show-options", "-t", session, "-v", AmuxSessionOption.stacked]) == "1"
-        guard stacked else { return }
-        let wIdx = runRaw(["display-message", "-t", session, "-p", "#{window_index}"])
-        guard wIdx == "0" || wIdx.isEmpty else { return }
-        if try !isZoomed(session) {
-            try toggleZoom(session)
-        }
-    }
-
     // MARK: - Layout
 
     /// Read current pane positions from tmux as Pane structs.
@@ -890,11 +877,6 @@ public enum Tmux {
         if action.openSpaces {
             try openSpacesPopup()
         }
-
-        // Step 8: Stacked mode — single enforcement point. After any layout
-        // op, ensure the active pane is the sole visible one when @amux-stacked=1.
-        // No-op when stacked is off or when the session is in split view.
-        try? ensureStackedZoom(session)
     }
 
     /// The unified layout pipeline: gather → compute → execute.
@@ -951,11 +933,6 @@ public enum Tmux {
         let originalIds = idsOutput.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
         runIgnoring(["set-environment", "-t", session, "AMUX_SPLIT_PANE_ORDER",
                      originalIds.joined(separator: ",")])
-
-        // Save and clear stacked flag while in split view. exitSplit restores it.
-        let stacked = runRaw(["show-options", "-t", session, "-v", AmuxSessionOption.stacked])
-        runIgnoring(["set-environment", "-t", session, "AMUX_SPLIT_PRIOR_STACKED", stacked])
-        runIgnoring(["set-option", "-t", session, AmuxSessionOption.stacked, "0"])
 
         let idA = try paneIdAt(session, index: paneA)
         let idB = try paneIdAt(session, index: paneB)
@@ -1057,16 +1034,7 @@ public enum Tmux {
             runIgnoring(["set-environment", "-t", session, "-u", "AMUX_SPLIT_PANE_ORDER"])
         }
 
-        // Restore prior stacked flag saved by enterSplit.
-        let prior = runRaw(["show-environment", "-t", session, "AMUX_SPLIT_PRIOR_STACKED"])
-        if prior.contains("=") {
-            let val = String(prior.split(separator: "=").last ?? "")
-            runIgnoring(["set-option", "-t", session, AmuxSessionOption.stacked, val])
-            runIgnoring(["set-environment", "-t", session, "-u", "AMUX_SPLIT_PRIOR_STACKED"])
-        }
-
         try applyLayout(session, event: .resize)
-        try? ensureStackedZoom(session)
     }
 
     // MARK: - Bell watch

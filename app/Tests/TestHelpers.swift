@@ -90,6 +90,9 @@ func amuxCmd(session: String, args: [String]) -> ProcessResult {
             try Tmux.applyLayout(session, event: .resize)
         case "refresh":
             try Config.applyConfig(session: session)
+            // Integration tests run in non-stacked mode (see TestSession init).
+            // Re-apply that override after Config.applyConfig.
+            Tmux.runRaw(["set-option", "-t", session, "@amux-stacked", "0"])
             try Tmux.setupAllBellWatches(session)
             let panes = try Tmux.listPanes(session)
             for pane in panes {
@@ -300,6 +303,10 @@ class TestSession {
                 Tmux.batchRaw(splits)
             }
             try! Config.applyConfig(session: name)
+            // Integration tests verify pre-stacked tiled-layout behavior.
+            // Disable @amux-stacked so ensureStackedZoom doesn't re-zoom
+            // after every layout op. Production app keeps stacked=1.
+            Tmux.runRaw(["set-option", "-t", name, "@amux-stacked", "0"])
             try! Tmux.setupAllBellWatches(name)
             try! Tmux.applyLayout(name, event: .resize)
             try! Tmux.selectPane(name, paneIndex: 0)

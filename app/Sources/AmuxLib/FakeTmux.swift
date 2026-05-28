@@ -123,6 +123,24 @@ public class FakeTmux: TmuxExecutor {
             return try handleResizePane(args)
         case "display-message":
             return try handleDisplayMessage(args)
+        case "capture-pane":
+            // Stub: scan-mode tests can inject content via the
+            // __test-content pane option. Production callers shell out to
+            // real tmux. Returns the option value or empty string.
+            var target: String?
+            var i = 1
+            while i < args.count {
+                if args[i] == "-t", i + 1 < args.count {
+                    target = args[i + 1]; i += 2
+                } else {
+                    i += 1
+                }
+            }
+            if let t = target {
+                let (_, _, pane) = resolveTarget(t)
+                return pane?.options["__test-content"] ?? ""
+            }
+            return ""
         case "select-layout":
             return try handleSelectLayout(args)
         case "swap-pane":

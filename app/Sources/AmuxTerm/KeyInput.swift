@@ -127,26 +127,6 @@ enum KeyInput {
         return event.characters?.data(using: .utf8)
     }
 
-    // MARK: - Scan-mode key forwarding
-
-    /// Translate an NSEvent into a tmux send-keys keysym string. Letters and
-    /// other typed characters pass through as-is; special keys (Enter, Esc,
-    /// arrows, etc.) become their tmux keysym names. Used by scan-mode tile
-    /// key forwarding.
-    static func tmuxKeyNotation(for event: NSEvent) -> String? {
-        switch event.keyCode {
-        case 36:  return "Enter"
-        case 53:  return "Escape"
-        case 51:  return "BSpace"
-        case 48:  return "Tab"
-        case 123: return "Left"
-        case 124: return "Right"
-        case 125: return "Down"
-        case 126: return "Up"
-        default:  return event.characters
-        }
-    }
-
     // MARK: - Legacy API (kept for existing tests)
 
     /// Convert a keyDown NSEvent to PTY bytes.

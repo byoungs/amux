@@ -157,9 +157,9 @@ public enum LayoutEngine {
         var action = LayoutAction()
         if state.zoomed {
             action.zoom = false
+        } else {
+            action.openSpaces = true
         }
-        // Scan-mode entry is owned by AppController; LayoutEngine no longer
-        // surfaces openSpaces from zoomOut.
         return action
     }
 
@@ -316,11 +316,11 @@ public enum LayoutEngineTests {
             check("zoom out does not open spaces", action.openSpaces == false)
         }
 
-        // zoom out from working no longer opens spaces (handled by AppController + scan mode)
+        // zoom out from working opens spaces
         do {
             let state = makeState(paneCount: 4, zoomed: false)
             let action = LayoutEngine.computeLayout(state: state, event: .zoomOut)
-            check("zoom out from working does not open spaces", action.openSpaces == false)
+            check("zoom out from working opens spaces", action.openSpaces == true)
             check("zoom out from working no zoom change", action.zoom == nil)
         }
 

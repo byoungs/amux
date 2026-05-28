@@ -1329,19 +1329,6 @@ public enum Tmux {
         runIgnoring(["display-message", "-t", session, message])
     }
 
-    // MARK: - Capture (scan-mode tile snapshots)
-
-    /// Capture pane content via `tmux capture-pane -p -e -J` for snapshot
-    /// rendering in scan mode. `-e` includes escape sequences (colors),
-    /// `-J` joins wrapped lines into logical lines.
-    public static func capturePane(paneId: String) throws -> Data {
-        let stdout = try runChecked(
-            ["capture-pane", "-p", "-e", "-J", "-t", paneId],
-            context: "capturePane failed"
-        )
-        return stdout.data(using: .utf8) ?? Data()
-    }
-
     // MARK: - Version
 
     /// Check that tmux >= 3.2 is installed.

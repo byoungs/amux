@@ -61,25 +61,11 @@ public class AppController {
         try Tmux.applyLayout(session, event: .zoomIn)
     }
 
-    /// Callback wired by AppDelegate. Called when zoom-out should put the
-    /// terminal view into scan-mode tile overlay. Param is the session name.
-    public var onEnterScanMode: ((String) -> Void)?
-
     private func handleZoomOut() throws {
         if try Tmux.windowCount(session) > 1 {
             try Tmux.exitSplit(session)
-            return
-        }
-        if try Tmux.isZoomed(session) {
-            // Stacked mode: zoomed is the resting state. Unzoom briefly so
-            // scan-mode tile overlay can render across the real pane geometry,
-            // then signal AppDelegate to enter scan mode.
+        } else if try Tmux.isZoomed(session) {
             try Tmux.applyLayout(session, event: .zoomOut)
-            if let cb = onEnterScanMode {
-                cb(session)
-            } else {
-                handleSpaces()
-            }
         } else {
             handleSpaces()
         }

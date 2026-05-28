@@ -33,6 +33,11 @@ final class TerminalView: NSView {
     private var detectedLinks: [DetectedLink] = []
     private var cmdHeld = false
 
+    // Scan mode: overlay tile grid replacing tmux's resize-to-grid bird's-eye.
+    var scanController: ScanModeController?
+    private var scanTileViews: [TileView] = []
+    private var scanTrackingArea: NSTrackingArea?
+
     // Wheel direction the user last drove (events with momentumPhase empty).
     // Used to suppress macOS trackpad inertia bounce-back: when the user
     // scrolls firmly down and lifts off, AppKit emits a brief sequence of
@@ -488,6 +493,20 @@ final class TerminalView: NSView {
     // and integrates with tmux's copy mode.
 
     override func mouseDown(with event: NSEvent) {
+        // Scan mode: click on a tile = select that pane in tmux + exit scan.
+        // Stacked-zoom (Phase 4) then full-windows the newly active pane.
+        if let ctrl = scanController, ctrl.active {
+            let pt = convert(event.locationInWindow, from: nil)
+            for (i, tv) in scanTileViews.enumerated() where tv.frame.contains(pt) {
+                let paneId = ctrl.tiles[i].paneId
+                _ = try? Tmux.executor.execute(["select-pane", "-t", paneId])
+                let sessionForZoom = ctrl.session
+                exitScanMode()
+                try? Tmux.ensureStackedZoom(sessionForZoom)
+                return
+            }
+            return
+        }
         // Cmd-Click: open link at cursor position
         if event.modifierFlags.contains(.command) {
             let pos = cellPosition(for: event)
@@ -506,6 +525,19 @@ final class TerminalView: NSView {
         if let data = press.data(using: .utf8) {
             pty.write(data)
         }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard let ctrl = scanController, ctrl.active else { return }
+        let pt = convert(event.locationInWindow, from: nil)
+        for (i, tv) in scanTileViews.enumerated() where tv.frame.contains(pt) {
+            ctrl.setHovered(slot: i)
+            updateTileViews()
+            return
+        }
+        ctrl.setHovered(slot: nil)
+        updateTileViews()
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -733,6 +765,15 @@ final class TerminalView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func keyDown(with event: NSEvent) {
+        // Scan mode: forward keys to the hovered tile's underlying pane via
+        // tmux send-keys, then bail. Lets the user ack a permission prompt
+        // (e.g., 'y') without leaving the bird's-eye view.
+        if let ctrl = scanController, ctrl.active {
+            if let keysym = KeyInput.tmuxKeyNotation(for: event) {
+                ctrl.forwardKey(keysym)
+            }
+            return
+        }
         #if DEBUG
         if profilingEnabled {
             lastKeyTime = CFAbsoluteTimeGetCurrent()
@@ -799,5 +840,110 @@ final class TerminalView: NSView {
         combined.append(pasteData)
         combined.append(endMarker)
         pty.write(combined)
+    }
+
+    // MARK: - Scan mode
+
+    func enterScanMode(session: String) {
+        if scanController == nil || scanController?.session != session {
+            scanController = ScanModeController(session: session) { [weak self] in
+                DispatchQueue.main.async { self?.updateTileViews() }
+            }
+        }
+        scanController?.enter()
+        // Mouse tracking so we get mouseMoved events
+        if let prior = scanTrackingArea {
+            removeTrackingArea(prior)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseMoved, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+        scanTrackingArea = area
+        updateTileViews()
+    }
+
+    func exitScanMode() {
+        scanController?.exit()
+        scanTileViews.forEach { $0.removeFromSuperview() }
+        scanTileViews.removeAll()
+        if let area = scanTrackingArea {
+            removeTrackingArea(area)
+            scanTrackingArea = nil
+        }
+        needsDisplay = true
+    }
+
+    private func updateTileViews() {
+        guard let ctrl = scanController, ctrl.active else { return }
+        while scanTileViews.count < ctrl.tiles.count {
+            let tv = TileView()
+            addSubview(tv)
+            scanTileViews.append(tv)
+        }
+        while scanTileViews.count > ctrl.tiles.count {
+            let extra = scanTileViews.removeLast()
+            extra.removeFromSuperview()
+        }
+        layoutTileViews()
+        for (i, tile) in ctrl.tiles.enumerated() {
+            scanTileViews[i].paneTitle = tile.title
+            scanTileViews[i].content = tile.capturedContent
+            scanTileViews[i].isActive = (ctrl.hoveredSlot == i)
+        }
+    }
+
+    private func layoutTileViews() {
+        let count = scanTileViews.count
+        guard count > 0 else { return }
+        let cols = count <= 2 ? count : 2
+        let rows = (count + cols - 1) / cols
+        let w = bounds.width / CGFloat(cols)
+        let h = bounds.height / CGFloat(rows)
+        for (i, tv) in scanTileViews.enumerated() {
+            let col = i % cols
+            let row = i / cols
+            tv.frame = NSRect(x: CGFloat(col) * w, y: CGFloat(row) * h,
+                              width: w, height: h)
+        }
+    }
+}
+
+// MARK: - TileView (scan-mode snapshot tile)
+
+final class TileView: NSView {
+    let terminal = VTerminal(rows: 24, cols: 80)
+    var paneTitle: String = ""
+    var isActive: Bool = false { didSet { needsDisplay = true } }
+    var content: Data = Data() {
+        didSet {
+            terminal.reset()
+            terminal.write(data: content)
+            terminal.flushDamage()
+            needsDisplay = true
+        }
+    }
+    override var isFlipped: Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        let bg = isActive
+            ? NSColor.systemTeal.withAlphaComponent(0.1)
+            : NSColor.black
+        bg.setFill()
+        bounds.fill()
+        let path = NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 1))
+        path.lineWidth = isActive ? 2 : 1
+        (isActive ? NSColor.systemTeal : NSColor.darkGray).setStroke()
+        path.stroke()
+        let titleRect = NSRect(x: bounds.minX + 4, y: bounds.minY + 2,
+                               width: bounds.width - 8, height: 14)
+        (paneTitle as NSString).draw(in: titleRect, withAttributes: [
+            .font: NSFont.systemFont(ofSize: 10),
+            .foregroundColor: NSColor.lightGray,
+        ])
+        let contentRect = bounds
+            .insetBy(dx: 4, dy: 4)
+            .offsetBy(dx: 0, dy: 16)
+        VTerminalRenderer.render(terminal: terminal, in: contentRect, fontSize: 9)
     }
 }

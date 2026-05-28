@@ -152,6 +152,80 @@ enum VTerminalTests {
             check("mousemode-decrst-none", term.mouseMode == .none)
         }
 
+        // --- Test 10: OSC 52 set-clipboard routes to onSetClipboard ---
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            var captured: String? = nil
+            term.onSetClipboard = { captured = $0 }
+            let payload = "osc52-direct-BBBB"
+            let b64 = Data(payload.utf8).base64EncodedString()
+            // ESC ] 52 ; c ; <b64> ESC \
+            let seq = "\u{1B}]52;c;\(b64)\u{1B}\\"
+            term.write(data: seq.data(using: .utf8)!)
+            check("osc52-direct-payload", captured == payload,
+                  "expected '\(payload)', got '\(captured ?? "nil")'")
+        }
+
+        // --- Test 11: OSC 52 wrapped in tmux DCS passthrough ---
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            var captured: String? = nil
+            term.onSetClipboard = { captured = $0 }
+            let payload = "osc52-probe-AAAA"
+            let b64 = Data(payload.utf8).base64EncodedString()
+            // \ePtmux;\e\e]52;c;<b64>\e\e\\\e\\
+            let seq = "\u{1B}Ptmux;\u{1B}\u{1B}]52;c;\(b64)\u{1B}\u{1B}\\\u{1B}\\"
+            term.write(data: seq.data(using: .utf8)!)
+            check("osc52-tmux-passthrough", captured == payload,
+                  "expected '\(payload)', got '\(captured ?? "nil")'")
+        }
+
+        // --- Test 12: tmux DCS passthrough split across write() calls ---
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            var captured: String? = nil
+            term.onSetClipboard = { captured = $0 }
+            let payload = "split-write-payload"
+            let b64 = Data(payload.utf8).base64EncodedString()
+            let seq = "\u{1B}Ptmux;\u{1B}\u{1B}]52;c;\(b64)\u{1B}\u{1B}\\\u{1B}\\"
+            // Split into three arbitrary chunks
+            let bytes = Array(seq.utf8)
+            let third = bytes.count / 3
+            term.write(data: Data(bytes[..<third]))
+            term.write(data: Data(bytes[third..<(2 * third)]))
+            term.write(data: Data(bytes[(2 * third)...]))
+            check("osc52-tmux-split-write", captured == payload,
+                  "expected '\(payload)', got '\(captured ?? "nil")'")
+        }
+
+        // --- Test 13: ESC without DCS-P is forwarded transparently ---
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            // ESC [ H is CUP (home cursor). After "abc" + CUP + "X", X should
+            // overwrite position 0,0.
+            term.write(data: "abc\u{1B}[HX".data(using: .utf8)!)
+            term.flushDamage()
+            check("passthrough-non-dcs-esc",
+                  VTerminal.cellString(term.cell(row: 0, col: 0)) == "X",
+                  "expected X at (0,0)")
+        }
+
+        // --- Test 14: \eP non-tmux DCS does not trip the decoder ---
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            // ESC P 1 $ q m ESC \ — a DECRQSS request. Should pass through to
+            // vterm (which will respond, harmlessly ignored here), and the
+            // surrounding text should render normally.
+            term.write(data: "A\u{1B}P1$qm\u{1B}\\B".data(using: .utf8)!)
+            term.flushDamage()
+            check("passthrough-non-tmux-dcs-A",
+                  VTerminal.cellString(term.cell(row: 0, col: 0)) == "A",
+                  "expected A at (0,0)")
+            check("passthrough-non-tmux-dcs-B",
+                  VTerminal.cellString(term.cell(row: 0, col: 1)) == "B",
+                  "expected B at (0,1)")
+        }
+
         print("VTerminal tests: \(passed) passed, \(failed) failed")
         if failed > 0 { fatalError("VTerminal tests failed") }
     }

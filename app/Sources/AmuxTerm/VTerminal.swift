@@ -37,6 +37,35 @@ private func onSetTermProp(_ prop: VTermProp, _ val: UnsafeMutablePointer<VTermV
     return 1
 }
 
+// OSC 52 set-selection: libvterm has already parsed `OSC 52 ; <targets> ; <b64>`
+// and base64-decoded the payload into the buffer we registered. Fragments
+// arrive in order; we accumulate and flush to the macOS pasteboard on the
+// final fragment. We do not implement the query callback — OSC 52 read is
+// the security-sensitive half and stays off.
+private func onSelectionSet(_ mask: VTermSelectionMask, _ frag: VTermStringFragment, _ user: UnsafeMutableRawPointer?) -> Int32 {
+    guard let user = user else { return 1 }
+    let terminal = Unmanaged<VTerminal>.fromOpaque(user).takeUnretainedValue()
+    if frag.initial {
+        terminal.selectionAccum.removeAll(keepingCapacity: true)
+    }
+    if let str = frag.str, frag.len > 0 {
+        str.withMemoryRebound(to: UInt8.self, capacity: Int(frag.len)) { p in
+            terminal.selectionAccum.append(contentsOf: UnsafeBufferPointer(start: p, count: Int(frag.len)))
+        }
+    }
+    if frag.final {
+        let bytes = terminal.selectionAccum
+        terminal.selectionAccum.removeAll(keepingCapacity: true)
+        // Skip empty payloads. libvterm fires `set` with an empty final
+        // fragment when the OSC 52 was malformed or the "clear" form was
+        // used; clobbering the existing pasteboard would surprise the user.
+        if !bytes.isEmpty {
+            terminal.onSetClipboard(String(decoding: bytes, as: UTF8.self))
+        }
+    }
+    return 1
+}
+
 final class VTerminal {
     enum MouseMode: Int {
         case none = 0
@@ -58,7 +87,27 @@ final class VTerminal {
     var dirtyRows: Set<Int> = []
     var fullRedrawNeeded: Bool = true  // first draw is always full
 
+    // Accumulator for fragments delivered by libvterm's OSC 52 set callback.
+    fileprivate var selectionAccum: [UInt8] = []
+
+    // OSC 52 -> system clipboard sink. Tests override to observe without
+    // touching NSPasteboard.
+    var onSetClipboard: (String) -> Void = { text in
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+    }
+
     private var callbacks = VTermScreenCallbacks()
+    private var selectionCallbacks = VTermSelectionCallbacks()
+    // libvterm decodes the OSC 52 base64 payload into this buffer before
+    // calling our set callback. Sized to hold typical clipboard contents in
+    // one fragment; larger payloads are delivered in multiple fragments and
+    // accumulated in selectionAccum.
+    private let selectionBuffer: UnsafeMutablePointer<CChar>
+    private let selectionBufferLen = 65536
+
+    private var passthrough = PassthroughDecoder()
 
     init(rows: Int, cols: Int) {
         self.rows = rows
@@ -66,6 +115,7 @@ final class VTerminal {
         self.vt = vterm_new(Int32(rows), Int32(cols))
         vterm_set_utf8(self.vt, 1)
         self.screen = vterm_obtain_screen(self.vt)
+        self.selectionBuffer = UnsafeMutablePointer<CChar>.allocate(capacity: selectionBufferLen)
 
         callbacks.damage = onDamage
         callbacks.movecursor = onMoveCursor
@@ -77,6 +127,13 @@ final class VTerminal {
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         vterm_screen_set_callbacks(screen, &callbacks, selfPtr)
 
+        selectionCallbacks.set = onSelectionSet
+        // query intentionally left nil — OSC 52 read is the security-sensitive
+        // half and we do not implement it.
+        let state = vterm_obtain_state(vt)
+        vterm_state_set_selection_callbacks(state, &selectionCallbacks, selfPtr,
+                                            selectionBuffer, selectionBufferLen)
+
         vterm_screen_set_damage_merge(screen, VTERM_DAMAGE_SCROLL)
         // Allocate alt-screen buffer so DECSET 1049/1047/47 actually engage
         // and libvterm fires VTERM_PROP_ALTSCREEN settermprop callbacks.
@@ -84,12 +141,22 @@ final class VTerminal {
         vterm_screen_reset(screen, 1)
     }
 
-    deinit { vterm_free(vt) }
+    deinit {
+        vterm_free(vt)
+        selectionBuffer.deallocate()
+    }
 
     func write(data: Data) {
-        data.withUnsafeBytes { buf in
-            if let ptr = buf.baseAddress?.assumingMemoryBound(to: CChar.self) {
-                vterm_input_write(vt, ptr, data.count)
+        // Unwrap any tmux DCS passthrough wrappers (`\ePtmux;…\e\\`) before
+        // feeding bytes to libvterm. libvterm's parser mishandles the doubled
+        // ESCs inside the body, so the contained sequence (e.g. OSC 52) would
+        // be lost otherwise. Bytes outside a passthrough are forwarded
+        // verbatim.
+        let processed = passthrough.process(data)
+        guard !processed.isEmpty else { return }
+        processed.withUnsafeBufferPointer { buf in
+            _ = buf.baseAddress?.withMemoryRebound(to: CChar.self, capacity: buf.count) { ptr in
+                vterm_input_write(vt, ptr, buf.count)
             }
         }
     }

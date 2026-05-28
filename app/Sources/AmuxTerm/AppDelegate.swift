@@ -19,11 +19,26 @@ struct AmuxTermApp {
             // dispatchToCli exits unconditionally.
         }
 
+        // --test-osc52: drive a VTerminal in-process with the bug's reproducer
+        // byte sequences and verify they land on the macOS pasteboard. Used to
+        // confirm the OSC 52 fix end-to-end (the unit tests cover the
+        // decoder/parser path but inject a fake clipboard sink). Backs up and
+        // restores the pasteboard around the run.
+        if CommandLine.arguments.contains("--test-osc52") {
+            #if DEBUG
+            exit(Osc52Reproducer.run() ? 0 : 1)
+            #else
+            print("--test-osc52 only available in debug builds")
+            exit(1)
+            #endif
+        }
+
         // --run-tests: run unit tests and exit without launching GUI
         if CommandLine.arguments.contains("--run-tests") {
             #if DEBUG
             KeyInputTests.runAll()
             ScrollAccumulatorTests.runAll()
+            PassthroughDecoderTests.runAll()
             VTerminalTests.runAll()
             LayoutTests.runAll()
             BellTests.runAll()

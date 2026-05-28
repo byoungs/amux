@@ -72,14 +72,26 @@ public class LiveTmux: TmuxExecutor {
         let errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
+
+        // Wait for termination via a semaphore signalled from the termination
+        // handler — NOT `Process.waitUntilExit()`. `waitUntilExit()` pumps the
+        // calling thread's run loop, so on the main thread it can fire a
+        // scheduled Timer or drain a queued main-queue block re-entrantly
+        // *while we still hold `processLock`*. If that re-entrant work issues
+        // its own tmux command, it blocks on the non-recursive lock the same
+        // thread already owns — a self-deadlock that freezes the app. A plain
+        // semaphore wait blocks the thread without servicing the run loop, so
+        // nothing can re-enter while the lock is held.
+        let done = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in done.signal() }
         try process.run()
 
-        // Read BEFORE waitUntilExit so a large child output can't fill the
-        // pipe buffer and deadlock, and so we read via the FileHandle we
-        // still own rather than racing tmux/Foundation teardown.
+        // Read BEFORE waiting so a large child output can't fill the pipe
+        // buffer and deadlock, and so we read via the FileHandle we still own
+        // rather than racing tmux/Foundation teardown.
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        done.wait()
 
         // Release the parent's read-end FDs immediately rather than
         // waiting for ARC. (Foundation itself closes the parent's

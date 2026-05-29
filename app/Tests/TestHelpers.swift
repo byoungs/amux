@@ -317,4 +317,23 @@ class TestSession {
         tmux("kill-session", "-t", name)
         releaseSessionSlot(slot)
     }
+
+    /// Replace `paneIndex`'s process with a clean, rc-free interactive shell
+    /// (`zsh -f`) and wait until it has drawn a prompt.
+    ///
+    /// Tests that type a command into a pane and read its rendered output back
+    /// must not depend on the developer's interactive login shell: a heavy
+    /// `.zshrc` can take seconds to reach a prompt in a freshly-spawned pane —
+    /// long enough that the first `send-keys` lands before the line editor is
+    /// live and is silently dropped, so the command never runs and the test
+    /// flakes (host-config-dependent). `zsh -f` skips all rc files and prompts
+    /// immediately, making such tests deterministic across machines. Call this
+    /// right after construction, before sending any keys.
+    func useCleanShell(paneIndex: Int = 0) {
+        Tmux.runRaw(["respawn-pane", "-k", "-t", "\(name):.\(paneIndex)", "zsh -f"])
+        for _ in 0..<50 {
+            if Tmux.capturePane(name, paneIndex: paneIndex, lines: 0).contains("%") { return }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
 }

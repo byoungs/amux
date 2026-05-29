@@ -265,6 +265,9 @@ enum ConfigTests {
         do {
             let ts = TestSession(paneCount: 1)
             _ = ts
+            // Clean rc-free shell so the stty command isn't dropped by a slow
+            // .zshrc before it runs (see TestSession.useCleanShell).
+            ts.useCleanShell()
             _ = tmux("resize-window", "-t", ts.name, "-x", "150", "-y", "30")
             try? Tmux.applyLayout(ts.name, event: .resize)
             let resultFile = "/tmp/amux-stty-test-\(ProcessInfo.processInfo.processIdentifier).out"
@@ -305,6 +308,9 @@ enum ConfigTests {
         do {
             let ts = TestSession(paneCount: 1)
             _ = ts
+            // Clean rc-free shell so the echo command isn't dropped by a slow
+            // .zshrc before it runs (see TestSession.useCleanShell).
+            ts.useCleanShell()
             _ = tmux("resize-window", "-t", ts.name, "-x", "100", "-y", "10")
             let line100 = String(repeating: "X", count: 100)
             _ = tmux("send-keys", "-t", ts.name, "echo \(line100)", "Enter")

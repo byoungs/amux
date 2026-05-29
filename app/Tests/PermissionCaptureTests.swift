@@ -18,6 +18,9 @@ enum PermissionCaptureTests {
             .appendingPathComponent("Fixtures")
 
         let session = TestSession(paneCount: 1)
+        // Render under a clean, rc-free shell so a slow .zshrc can't swallow the
+        // typed command before it runs (see TestSession.useCleanShell).
+        session.useCleanShell()
 
         /// Render a committed fixture into pane 0 via the shell, then capture it
         /// back through real tmux. Returns the captured screen text (or "" if the

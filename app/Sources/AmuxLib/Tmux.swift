@@ -48,7 +48,6 @@ public enum AmuxSessionOption {
     public static let parkedFrom = "@amux-parked-from"
     public static let cap = "@amux-cap"
     public static let capOverridden = "@amux-cap-overridden"
-    public static let stacked = "@amux-stacked"
 }
 
 // MARK: - BackgroundSession

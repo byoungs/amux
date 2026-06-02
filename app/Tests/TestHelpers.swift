@@ -109,17 +109,17 @@ func amuxCmd(session: String, args: [String]) -> ProcessResult {
                 try Tmux.toggleZoom(session)
             }
             setPaneStyle(session: session, pane: active, splitSelected: true)
-            try Tmux.setPicking(session, picking: true)
+            Tmux.setPicking(session, picking: true)
             let title = panes.first(where: { $0.index == active })?.title ?? ""
-            try Tmux.setSplitFirstLabel(session, label: "\(active + 1) \(title)")
+            Tmux.setSplitFirstLabel(session, label: "\(active + 1) \(title)")
         case "split-pick":
             if let paneStr = effectiveArgs.dropFirst().first, let secondPane = Int(paneStr) {
                 let envResult = Tmux.runRaw(["show-environment", "-t", session, "AMUX_SPLIT_FIRST"])
                 let firstPane = envResult.components(separatedBy: "=").last
                     .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
                 setPaneStyle(session: session, pane: firstPane, splitSelected: false)
-                try Tmux.setPicking(session, picking: false)
-                try Tmux.clearSplitFirstLabel(session)
+                Tmux.setPicking(session, picking: false)
+                Tmux.clearSplitFirstLabel(session)
                 Tmux.runRaw(["set-environment", "-t", session, "-u", "AMUX_SPLIT_WAS_ZOOMED"])
                 try Tmux.enterSplit(session, paneA: firstPane, paneB: secondPane)
                 Tmux.runRaw(["set-environment", "-t", session, "-u", "AMUX_SPLIT_FIRST"])
@@ -130,8 +130,8 @@ func amuxCmd(session: String, args: [String]) -> ProcessResult {
                let firstPane = Int(firstPaneStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
                 setPaneStyle(session: session, pane: firstPane, splitSelected: false)
             }
-            try Tmux.setPicking(session, picking: false)
-            try Tmux.clearSplitFirstLabel(session)
+            Tmux.setPicking(session, picking: false)
+            Tmux.clearSplitFirstLabel(session)
             let zoomResult = Tmux.runRaw(["show-environment", "-t", session, "AMUX_SPLIT_WAS_ZOOMED"])
             if zoomResult.trimmingCharacters(in: .whitespacesAndNewlines) == "AMUX_SPLIT_WAS_ZOOMED=1" {
                 try Tmux.toggleZoom(session)

@@ -128,9 +128,6 @@ private func scanByte(state: inout BellScanState.State, byte: UInt8) -> Bool {
     case (.stringEsc, _):
         state = .stringSeq
         return false
-
-    default:
-        return false
     }
 }
 

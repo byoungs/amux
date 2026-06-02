@@ -185,7 +185,7 @@ public class AppController {
 
         // Notify TerminalView to draw red border overlay on this pane
         let paneInfo = panes.first(where: { $0.index == active })
-        if let p = paneInfo {
+        if paneInfo != nil {
             // Query pane position from tmux
             let posStr = Tmux.runRaw(["display-message", "-t", "\(session):.\(active)", "-p",
                 "#{pane_top} #{pane_left} #{pane_width} #{pane_height}"])

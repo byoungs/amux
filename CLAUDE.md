@@ -101,3 +101,14 @@ separate binary invoked from tmux key bindings and hooks.
   tmux-interaction as a bug, reproduce it against real tmux (`tmux -L <sock>`
   on an isolated socket); FakeTmux models zoom as a plain window flag and does
   not capture this behavior.
+- Never hold `LiveTmux.processLock` across a run-loop-pumping wait.
+  `Process.waitUntilExit()` pumps the calling thread's run loop, so on the
+  main thread it can fire a scheduled Timer (or drain a main-queue block)
+  re-entrantly into the same non-recursive lock → self-deadlock. Wait on a
+  `DispatchSemaphore` signalled from `terminationHandler` instead.
+- Integration tests that `send-keys` a command into a tmux pane and read its
+  rendered output back must call `TestSession.useCleanShell()` first. The
+  developer's interactive `.zshrc` can be too slow to reach a prompt in a
+  freshly-spawned pane, so the typed command lands before the line editor is
+  live and is silently dropped — the test then flakes host-dependently.
+  `zsh -f` prompts immediately and deterministically.

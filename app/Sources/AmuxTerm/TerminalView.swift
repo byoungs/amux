@@ -210,7 +210,7 @@ final class TerminalView: NSView {
         guard cmdHeld else { return }
         cmdHeld = false
         if !session.isEmpty {
-            setCmdHeld(session: session, held: false)
+            setCmdHeldAsync(session: session, held: false)
         }
         if !detectedLinks.isEmpty {
             detectedLinks = []
@@ -729,7 +729,9 @@ final class TerminalView: NSView {
             // Cmd pressed — scan for links, show underlines, brighten status bar
             cmdHeld = true
             if !session.isEmpty {
-                setCmdHeld(session: session, held: true)
+                // Async: this is the key-event path — the sync subprocess can
+                // park main behind a PermissionWatcher capture-pane burst.
+                setCmdHeldAsync(session: session, held: true)
             }
             detectedLinks = scanForLinks()
             if !detectedLinks.isEmpty {
@@ -740,7 +742,7 @@ final class TerminalView: NSView {
             // Cmd released — clear underlines, dim status bar
             cmdHeld = false
             if !session.isEmpty {
-                setCmdHeld(session: session, held: false)
+                setCmdHeldAsync(session: session, held: false)
             }
             if !detectedLinks.isEmpty {
                 detectedLinks = []

@@ -83,6 +83,17 @@ public func setCmdHeld(session: String, held: Bool) {
     Tmux.runRaw(["set-option", "-t", session, "@amux-cmd-held", held ? "1" : "0"])
 }
 
+/// setCmdHeld, off the caller's thread. Fires on every Cmd press/release
+/// from the key-event path on main; the subprocess must not park the main
+/// thread (it can wait out a whole PermissionWatcher capture-pane burst on
+/// LiveTmux's process-wide lock). The shared serial queue preserves
+/// press/release ordering.
+public func setCmdHeldAsync(session: String, held: Bool) {
+    Tmux.backgroundQueue.async {
+        setCmdHeld(session: session, held: held)
+    }
+}
+
 /// 24-bit RGB color for a top-border overlay.
 public struct OverlayColor: Equatable {
     public let r: UInt8

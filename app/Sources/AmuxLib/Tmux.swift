@@ -83,6 +83,14 @@ public enum Tmux {
     /// Tests set this to FakeTmux before running.
     nonisolated(unsafe) public static var executor: TmuxExecutor = LiveTmux()
 
+    /// Serial queue for fire-and-forget tmux work initiated from the main
+    /// thread. LiveTmux.execute parks the calling thread for the full
+    /// subprocess lifetime (and contends a process-wide lock with the
+    /// PermissionWatcher's background polls), so status-bar updates and
+    /// other no-result commands must not run on main. One serial queue
+    /// keeps them ordered relative to each other.
+    public static let backgroundQueue = DispatchQueue(label: "amux.tmux.background")
+
     // MARK: - Internal helpers (delegate to executor)
 
     /// Run a tmux command and return trimmed stdout.
@@ -635,10 +643,20 @@ public enum Tmux {
     /// because a background prompt arrives while the foreground is idle, so
     /// nothing else would trigger a status redraw until the poll interval.
     public static func publishPeekCount(_ count: Int) {
-        for session in (try? listFocusSessions()) ?? [] {
-            setPeekCount(session, count: count)
+        var commands = ((try? listFocusSessions()) ?? []).map { session in
+            ["set-option", "-t", session, "@amux-peek-count", String(count)]
         }
-        runIgnoring(["refresh-client", "-S"])
+        commands.append(["refresh-client", "-S"])
+        batchRaw(commands)
+    }
+
+    /// publishPeekCount, off the caller's thread. The caller (status-bar
+    /// update on prompt-count change) runs on main and needs no result;
+    /// the subprocess work happens on backgroundQueue.
+    public static func publishPeekCountAsync(_ count: Int) {
+        backgroundQueue.async {
+            publishPeekCount(count)
+        }
     }
 
     /// Get the alert count for a session.

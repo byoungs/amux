@@ -58,6 +58,7 @@ struct AmuxTermApp {
             PermissionPromptTests.runAll()
             PromptQueueTests.runAll()
             PermissionWatcherTests.runAll()
+            TmuxBackgroundTests.runAll()
             print("All tests passed")
             #else
             print("Tests only available in debug builds")
@@ -408,7 +409,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 let count = queue?.count ?? 0
                 if count != self.lastPeekCount {
                     self.lastPeekCount = count
-                    Tmux.publishPeekCount(count)
+                    // Async: N set-options + refresh are fire-and-forget; the
+                    // sync version parks the main thread for the subprocess
+                    // (plus any in-flight watcher poll holding LiveTmux's lock).
+                    Tmux.publishPeekCountAsync(count)
                 }
                 // Keep the popup in sync if it's open.
                 self.termView?.updatePeekState(queue)

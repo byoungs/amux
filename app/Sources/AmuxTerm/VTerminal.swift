@@ -19,6 +19,15 @@ private func onMoveCursor(_ pos: VTermPos, _ oldpos: VTermPos, _ visible: Int32,
     terminal.cursorRow = Int(pos.row)
     terminal.cursorCol = Int(pos.col)
     terminal.cursorVisible = visible != 0
+    // A cursor move repaints two rows: the one it left (to erase the old
+    // cursor block) and the one it entered (to draw the new one). libvterm
+    // reports cursor motion separately from cell damage, so a pure
+    // reposition (CUP, arrow keys, TUI redraws) would otherwise leave
+    // dirtyRows empty and the renderer would schedule no repaint — the
+    // on-screen cursor froze at its previous position.
+    terminal.isDirty = true
+    terminal.dirtyRows.insert(Int(oldpos.row))
+    terminal.dirtyRows.insert(Int(pos.row))
     return 1
 }
 

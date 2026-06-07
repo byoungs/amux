@@ -226,6 +226,46 @@ enum VTerminalTests {
                   "expected B at (0,1)")
         }
 
+        // --- Test 15: Pure cursor move (no cell damage) marks the old row dirty ---
+        // Regression: a cursor reposition with no cell changes (CUP, arrow keys,
+        // TUI redraws) left dirtyRows empty, so the renderer scheduled no repaint
+        // and the on-screen cursor stayed at its previous position.
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            term.write(data: "hello".data(using: .utf8)!)  // cursor at (0,5)
+            term.flushDamage()
+            term.fullRedrawNeeded = false
+            term.dirtyRows.removeAll()
+            // CUP to row 6, col 11 (1-based) — pure reposition, no cell damage
+            term.write(data: "\u{1B}[6;11H".data(using: .utf8)!)
+            term.flushDamage()
+            check("cursor-move-position",
+                  term.cursorRow == 5 && term.cursorCol == 10,
+                  "expected (5,10), got (\(term.cursorRow),\(term.cursorCol))")
+            check("cursor-move-old-row-dirty",
+                  term.dirtyRows.contains(0),
+                  "expected old cursor row 0 dirty, got \(term.dirtyRows)")
+        }
+
+        // --- Test 16: Same-row pure cursor move still flags the row ---
+        // Moving left within a row repaints nothing without this: the cursor
+        // block lingers at the old column.
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            term.write(data: "hello".data(using: .utf8)!)  // cursor at (0,5)
+            term.flushDamage()
+            term.fullRedrawNeeded = false
+            term.dirtyRows.removeAll()
+            term.write(data: "\u{1B}[2D".data(using: .utf8)!)  // CUB 2 → (0,3)
+            term.flushDamage()
+            check("cursor-move-same-row-position",
+                  term.cursorRow == 0 && term.cursorCol == 3,
+                  "expected (0,3), got (\(term.cursorRow),\(term.cursorCol))")
+            check("cursor-move-same-row-dirty",
+                  term.dirtyRows.contains(0),
+                  "expected row 0 dirty after in-row cursor move, got \(term.dirtyRows)")
+        }
+
         print("VTerminal tests: \(passed) passed, \(failed) failed")
         if failed > 0 { fatalError("VTerminal tests failed") }
     }

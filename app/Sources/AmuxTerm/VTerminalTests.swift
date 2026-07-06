@@ -266,6 +266,68 @@ enum VTerminalTests {
                   "expected row 0 dirty after in-row cursor move, got \(term.dirtyRows)")
         }
 
+        // --- Test 17: OSC 8 hyperlink stamps the label's cells ---
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            term.write(data: "see \u{1B}]8;;https://example.com\u{1B}\\LINK\u{1B}]8;;\u{1B}\\ done".data(using: .utf8)!)
+            term.flushDamage()
+            check("osc8-label-stamped",
+                  term.hyperlinkURI(row: 0, col: 4) == "https://example.com"
+                      && term.hyperlinkURI(row: 0, col: 7) == "https://example.com",
+                  "cols 4-7 should carry the URI, got \(String(describing: term.hyperlinkURI(row: 0, col: 4)))")
+            check("osc8-outside-clear",
+                  term.hyperlinkURI(row: 0, col: 3) == nil && term.hyperlinkURI(row: 0, col: 8) == nil,
+                  "cells outside the label must not carry the URI")
+        }
+
+        // --- Test 18: OSC 8 works with BEL terminator and id param ---
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            term.write(data: "\u{1B}]8;id=tmux1;https://a.com\u{07}X\u{1B}]8;;\u{07}".data(using: .utf8)!)
+            term.flushDamage()
+            check("osc8-bel-id",
+                  term.hyperlinkURI(row: 0, col: 0) == "https://a.com",
+                  "got \(String(describing: term.hyperlinkURI(row: 0, col: 0)))")
+        }
+
+        // --- Test 19: OSC 8 split across write() chunks still lands ---
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            term.write(data: "\u{1B}]8;;https://spl".data(using: .utf8)!)
+            term.write(data: "it.example.com\u{1B}\\AB\u{1B}]8;;\u{1B}\\".data(using: .utf8)!)
+            term.flushDamage()
+            check("osc8-chunked",
+                  term.hyperlinkURI(row: 0, col: 0) == "https://split.example.com"
+                      && term.hyperlinkURI(row: 0, col: 1) == "https://split.example.com",
+                  "got \(String(describing: term.hyperlinkURI(row: 0, col: 0)))")
+        }
+
+        // --- Test 20: hyperlink stamps follow a scroll ---
+        do {
+            let term = VTerminal(rows: 4, cols: 20)
+            // Label on row 1, then three newlines: the last one scrolls the
+            // screen up a row, so the label (and its stamp) land on row 0.
+            term.write(data: "top\r\n\u{1B}]8;;https://s.com\u{1B}\\SCROLL\u{1B}]8;;\u{1B}\\".data(using: .utf8)!)
+            term.write(data: "\r\n\r\n\r\n".data(using: .utf8)!)
+            term.flushDamage()
+            check("osc8-scroll-follows",
+                  term.hyperlinkURI(row: 0, col: 0) == "https://s.com"
+                      && term.hyperlinkURI(row: 1, col: 0) == nil,
+                  "got row0 \(String(describing: term.hyperlinkURI(row: 0, col: 0))), row1 \(String(describing: term.hyperlinkURI(row: 1, col: 0)))")
+        }
+
+        // --- Test 21: plain rewrite over a link clears the stamp ---
+        do {
+            let term = VTerminal(rows: 24, cols: 80)
+            term.write(data: "\u{1B}]8;;https://old.com\u{1B}\\OLDLABEL\u{1B}]8;;\u{1B}\\".data(using: .utf8)!)
+            term.write(data: "\r".data(using: .utf8)!)
+            term.write(data: "plaintext".data(using: .utf8)!)
+            term.flushDamage()
+            check("osc8-rewrite-clears",
+                  term.hyperlinkURI(row: 0, col: 2) == nil,
+                  "got \(String(describing: term.hyperlinkURI(row: 0, col: 2)))")
+        }
+
         print("VTerminal tests: \(passed) passed, \(failed) failed")
         if failed > 0 { fatalError("VTerminal tests failed") }
     }

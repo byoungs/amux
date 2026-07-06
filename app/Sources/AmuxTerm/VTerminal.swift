@@ -19,6 +19,11 @@ private func onMoveCursor(_ pos: VTermPos, _ oldpos: VTermPos, _ visible: Int32,
     terminal.cursorRow = Int(pos.row)
     terminal.cursorCol = Int(pos.col)
     terminal.cursorVisible = visible != 0
+    // Hyperlink stamping: libvterm fires movecursor synchronously after each
+    // text chunk, so a same-row forward move is the cells just written.
+    terminal.hyperlinks.cursorMoved(
+        fromRow: Int(oldpos.row), fromCol: Int(oldpos.col),
+        toRow: Int(pos.row), toCol: Int(pos.col))
     // A cursor move repaints two rows: the one it left (to erase the old
     // cursor block) and the one it entered (to draw the new one). libvterm
     // reports cursor motion separately from cell damage, so a pure
@@ -37,12 +42,40 @@ private func onSetTermProp(_ prop: VTermProp, _ val: UnsafeMutablePointer<VTermV
     switch prop {
     case VTERM_PROP_ALTSCREEN:
         terminal.isAltScreen = val.pointee.boolean != 0
+        // The buffer switch replaces every cell and the application redraws
+        // (re-emitting any OSC 8 links); stale stamps must not carry over.
+        terminal.hyperlinks.clearAll()
     case VTERM_PROP_MOUSE:
         let raw = Int(val.pointee.number)
         terminal.mouseMode = VTerminal.MouseMode(rawValue: raw) ?? .none
     default:
         break
     }
+    return 1
+}
+
+private func onMoveRect(_ dest: VTermRect, _ src: VTermRect, _ user: UnsafeMutableRawPointer?) -> Int32 {
+    let terminal = Unmanaged<VTerminal>.fromOpaque(user!).takeUnretainedValue()
+    terminal.hyperlinks.moveRect(
+        destStartRow: Int(dest.start_row), destStartCol: Int(dest.start_col),
+        srcStartRow: Int(src.start_row), srcStartCol: Int(src.start_col),
+        rowCount: Int(dest.end_row - dest.start_row),
+        colCount: Int(dest.end_col - dest.start_col))
+    // Return 0 so libvterm still damages the destination rect — this hook
+    // only mirrors the move for hyperlink stamps; the renderer's existing
+    // damage-driven repaint path must stay exactly as before.
+    return 0
+}
+
+// OSC 8 hyperlinks arrive via libvterm's unrecognised-OSC fallback (libvterm
+// has no native handler for command 8). Bodies may be fragmented; the
+// HyperlinkGrid accumulates and applies them.
+private func onUnrecognisedOSC(_ command: Int32, _ frag: VTermStringFragment, _ user: UnsafeMutableRawPointer?) -> Int32 {
+    guard command == 8, let user = user else { return 0 }
+    let terminal = Unmanaged<VTerminal>.fromOpaque(user).takeUnretainedValue()
+    terminal.hyperlinks.feed(
+        bytes: frag.str, length: Int(frag.len),
+        initial: frag.initial, final: frag.final)
     return 1
 }
 
@@ -96,6 +129,9 @@ final class VTerminal {
     var dirtyRows: Set<Int> = []
     var fullRedrawNeeded: Bool = true  // first draw is always full
 
+    /// Per-cell OSC 8 hyperlink stamps (libvterm cells can't carry them).
+    let hyperlinks: HyperlinkGrid
+
     // Accumulator for fragments delivered by libvterm's OSC 52 set callback.
     fileprivate var selectionAccum: [UInt8] = []
 
@@ -109,6 +145,7 @@ final class VTerminal {
 
     private var callbacks = VTermScreenCallbacks()
     private var selectionCallbacks = VTermSelectionCallbacks()
+    private var fallbacks = VTermStateFallbacks()
     // libvterm decodes the OSC 52 base64 payload into this buffer before
     // calling our set callback. Sized to hold typical clipboard contents in
     // one fragment; larger payloads are delivered in multiple fragments and
@@ -121,6 +158,7 @@ final class VTerminal {
     init(rows: Int, cols: Int) {
         self.rows = rows
         self.cols = cols
+        self.hyperlinks = HyperlinkGrid(rows: rows, cols: cols)
         self.vt = vterm_new(Int32(rows), Int32(cols))
         vterm_set_utf8(self.vt, 1)
         self.screen = vterm_obtain_screen(self.vt)
@@ -128,6 +166,7 @@ final class VTerminal {
 
         callbacks.damage = onDamage
         callbacks.movecursor = onMoveCursor
+        callbacks.moverect = onMoveRect
         callbacks.settermprop = onSetTermProp
 
         // LIFETIME: selfPtr is an unretained pointer to self. VTerminal must
@@ -142,6 +181,10 @@ final class VTerminal {
         let state = vterm_obtain_state(vt)
         vterm_state_set_selection_callbacks(state, &selectionCallbacks, selfPtr,
                                             selectionBuffer, selectionBufferLen)
+
+        // OSC 8 hyperlinks: libvterm routes OSCs it doesn't handle here.
+        fallbacks.osc = onUnrecognisedOSC
+        vterm_screen_set_unrecognised_fallbacks(screen, &fallbacks, selfPtr)
 
         vterm_screen_set_damage_merge(screen, VTERM_DAMAGE_SCROLL)
         // Allocate alt-screen buffer so DECSET 1049/1047/47 actually engage
@@ -185,8 +228,21 @@ final class VTerminal {
     func resize(rows: Int, cols: Int) {
         self.rows = rows
         self.cols = cols
+        // Stamps don't survive a resize; tmux fully redraws (re-emitting
+        // OSC 8 for visible links) after the size change.
+        hyperlinks.resize(rows: rows, cols: cols)
         vterm_set_size(vt, Int32(rows), Int32(cols))
         fullRedrawNeeded = true
+    }
+
+    /// The OSC 8 hyperlink id stamped on a cell (0 = none).
+    func hyperlinkID(row: Int, col: Int) -> UInt32 {
+        hyperlinks.id(row: row, col: col)
+    }
+
+    /// The OSC 8 hyperlink target stamped on a cell.
+    func hyperlinkURI(row: Int, col: Int) -> String? {
+        hyperlinks.uri(row: row, col: col)
     }
 
     /// Extract the Unicode string from a VTermScreenCell.

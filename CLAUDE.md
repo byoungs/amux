@@ -52,7 +52,8 @@ separate binary invoked from tmux key bindings and hooks.
 - `VTerminal.swift` — vt100/xterm emulation state
 - `PTY.swift` — pseudoterminal I/O
 - `KeyInput.swift` — NSEvent → KeyAction translation
-- `LinkDetector.swift` — Cmd-click URL/file detection
+- `LinkDetector.swift` — Cmd-click URL/file detection (plain text, wrap-joining)
+- `Hyperlinks.swift` — OSC 8 hyperlink tracking (per-cell stamps + URI table)
 - `UNNotificationPoster.swift` — macOS notification delivery
 
 **AmuxLib** (`app/Sources/AmuxLib/`) — tmux orchestration + pure logic

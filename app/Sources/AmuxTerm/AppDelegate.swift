@@ -52,6 +52,7 @@ struct AmuxTermApp {
             SplitRestoreTests.runAll()
             PaneStyleTests.runAll()
             LinkDetectorTests.runAll()
+            HyperlinksTests.runAll()
             AlertEventTransportTests.runAll()
             ClickDispatchTests.runAll()
             CliDispatchTests.runAll()
@@ -145,6 +146,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     // promptly even when amux is not frontmost.
     private var appNapAssertion: NSObjectProtocol?
 
+    /// Command line for the embedded tmux client. `-T hyperlinks` declares
+    /// OSC 8 support for this client: tmux tracks hyperlinks in its grid but
+    /// only re-emits them to clients that advertise the feature, and the
+    /// xterm-256color terminfo the PTY presents does not. Without it, tmux
+    /// draws link labels and silently drops the URIs.
+    static func tmuxAttachArgs(session: String) -> [String] {
+        ["tmux", "-T", "hyperlinks", "attach-session", "-t", session]
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
 
@@ -213,7 +223,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Attach to the tmux session via PTY (NOT launching amux binary)
         guard let pty = PTY(executable: tmuxPath,
-                            args: ["tmux", "attach-session", "-t", session],
+                            args: AppDelegate.tmuxAttachArgs(session: session),
                             rows: rows, cols: cols,
                             env: ["PATH": enhancedPath]) else {
             fatalError("Failed to create PTY for tmux attach")

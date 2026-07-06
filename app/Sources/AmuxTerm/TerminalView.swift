@@ -753,9 +753,10 @@ final class TerminalView: NSView {
         super.flagsChanged(with: event)
     }
 
-    /// Scan all visible rows for URL/path patterns using LinkDetector.
-    /// Uses per-cell color info so colored filenames (e.g., from Claude or
-    /// `make`) with spaces in them are detected correctly.
+    /// Scan all visible rows for links. Explicit OSC 8 hyperlinks (stamped
+    /// per-cell by VTerminal) take precedence; the text scan fills in plain
+    /// URLs — joining ones Claude Code wrapped across rows — and colored
+    /// filenames (e.g., from Claude or `make`) with spaces in them.
     private func scanForLinks() -> [DetectedLink] {
         var rows: [String] = []
         var colors: [[LinkDetector.CellColor]] = []
@@ -764,7 +765,41 @@ final class TerminalView: NSView {
             rows.append(text)
             colors.append(rowColors)
         }
-        return LinkDetector.scanRows(rows, colors: colors)
+        let detected = LinkDetector.scanScreen(rows: rows, colors: colors, cols: terminal.cols)
+        return LinkDetector.merging(explicit: hyperlinkSpans(), detected: detected)
+    }
+
+    /// Contiguous per-row runs of cells stamped with the same OSC 8
+    /// hyperlink, trimmed of blank cells (stale stamps survive on erased
+    /// cells but those have no text, so they must not form spans).
+    private func hyperlinkSpans() -> [DetectedLink] {
+        var links: [DetectedLink] = []
+        for row in 0..<terminal.rows {
+            var col = 0
+            while col < terminal.cols {
+                let id = terminal.hyperlinkID(row: row, col: col)
+                if id == 0 {
+                    col += 1
+                    continue
+                }
+                var end = col
+                while end + 1 < terminal.cols, terminal.hyperlinkID(row: row, col: end + 1) == id {
+                    end += 1
+                }
+                var start = col
+                col = end + 1
+                while start <= end, isBlankCell(row: row, col: start) { start += 1 }
+                while end >= start, isBlankCell(row: row, col: end) { end -= 1 }
+                guard start <= end, let uri = terminal.hyperlinkURI(row: row, col: start) else { continue }
+                links.append(DetectedLink(row: row, startCol: start, endCol: end, url: uri))
+            }
+        }
+        return links
+    }
+
+    private func isBlankCell(row: Int, col: Int) -> Bool {
+        let text = VTerminal.cellString(terminal.cell(row: row, col: col))
+        return text.isEmpty || text == " "
     }
 
     /// Extract text + per-cell color info from a terminal row.
@@ -811,23 +846,35 @@ final class TerminalView: NSView {
             if let nsURL = URL(string: url) {
                 NSWorkspace.shared.open(nsURL)
             }
+        } else if url.hasPrefix("file://") {
+            // OSC 8 file URI (e.g. `ls --hyperlink`): open the path in the
+            // editor, same as detected filenames.
+            if let fileURL = URL(string: url), fileURL.isFileURL {
+                openInEditor(fileURL.path)
+            }
         } else if url.hasPrefix("file:") {
+            // Detected filename ("file:" + path, LinkDetector's convention).
             let filePath = String(url.dropFirst(5))
 
             // Resolve relative paths against the active pane's working directory
             let paneCwd = Tmux.runRaw(["display-message", "-p", "#{pane_current_path}"])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let basePath = paneCwd.isEmpty ? FileManager.default.currentDirectoryPath : paneCwd
-            let resolvedPath = filePath.hasPrefix("/") ? filePath : basePath + "/" + filePath
-
-            // Open in VS Code (works for all file types)
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["code", resolvedPath]
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            try? process.run()
+            openInEditor(filePath.hasPrefix("/") ? filePath : basePath + "/" + filePath)
+        } else if let nsURL = URL(string: url), nsURL.scheme != nil {
+            // Any other OSC 8 scheme (mailto:, vscode:, …) — let macOS route it.
+            NSWorkspace.shared.open(nsURL)
         }
+    }
+
+    /// Open a file path in VS Code (works for all file types).
+    private func openInEditor(_ path: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["code", path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
     }
 
     override func scrollWheel(with event: NSEvent) {

@@ -105,6 +105,7 @@ public enum Config {
             // amux owns resize via setFrameSize/SIGWINCH; users don't need
             // mouse-driven pane resizing.
             ["unbind-key", "-T", "root", "MouseDrag1Border"],
+            ["unbind-key", "-T", "root", "M-MouseDrag1Border"],
             // Scroll wheel: tmux intercepts and routes based on alt-screen state.
             //   Main screen → enter copy-mode and scroll pane history.
             //   Alt screen → pass wheel through to the pane app.

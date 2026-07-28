@@ -40,6 +40,7 @@ struct AmuxTermApp {
             ScrollAccumulatorTests.runAll()
             PassthroughDecoderTests.runAll()
             VTerminalTests.runAll()
+            SyncOutputTests.runAll()
             LayoutTests.runAll()
             BellTests.runAll()
             LandingTests.runAll()

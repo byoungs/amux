@@ -22,6 +22,9 @@ final class TerminalView: NSView {
     private var fontAscent: CGFloat = 0
     private var resizeTimer: Timer?
     private var pendingDraw: Bool = false
+    // When the currently-open DEC 2026 update was first observed, or nil if no
+    // update is open. Frames are held while it is set (see syncHoldsFrame).
+    private var syncBlockOpenedAt: TimeInterval?
     // CTLine cache: avoids recreating CoreText layout for identical cells.
     // Key: "char|bold|italic|r,g,b" — Value: CTLine
     private var lineCache: [String: CTLine] = [:]
@@ -134,6 +137,15 @@ final class TerminalView: NSView {
             // Feed data to libvterm (updates cell grid in memory)
             self.terminal.write(data: data)
 
+            // Hold the frame while tmux has a synchronized-output update open.
+            // The pty tears updates at ~1024-byte reads; painting a torn prefix
+            // shows tmux's scratch state (cursor hidden, parked mid-redraw) for
+            // one frame before the next chunk restores it — the cursor flicker.
+            // Damage keeps accumulating in dirtyRows meanwhile, so the chunk
+            // carrying the ESU paints all of it at once.
+            self.noteSyncState(now: CACurrentMediaTime())
+            if self.syncHoldsFrame(now: CACurrentMediaTime()) { return }
+
             // Coalesce rapid output chunks into a single draw.
             // tmux often sends a keystroke echo in 2-3 chunks 0.5-2ms apart.
             // Without coalescing, each chunk triggers a separate draw() — the
@@ -230,10 +242,32 @@ final class TerminalView: NSView {
         if lineCacheGeneration % 60 == 0 {
             lineCache.removeAll(keepingCapacity: true)
         }
-        if terminal.isDirty {
-            terminal.flushDamage()
-            needsDisplay = true
+        guard terminal.isDirty else { return }
+        // Same gate as the coalesced path. This is also what breaks the hold:
+        // if an update opens and no more bytes ever arrive, onOutput never runs
+        // again, so the display link is the only thing left to time it out.
+        noteSyncState(now: CACurrentMediaTime())
+        if syncHoldsFrame(now: CACurrentMediaTime()) { return }
+        terminal.flushDamage()
+        needsDisplay = true
+    }
+
+    // MARK: - Synchronized output gate
+
+    /// Record when the open update started (imperative half — writes state).
+    private func noteSyncState(now: TimeInterval) {
+        if terminal.isInsideSyncUpdate {
+            if syncBlockOpenedAt == nil { syncBlockOpenedAt = now }
+        } else {
+            syncBlockOpenedAt = nil
         }
+    }
+
+    /// Whether painting must wait for the ESU (query half — reads only).
+    private func syncHoldsFrame(now: TimeInterval) -> Bool {
+        guard let openedAt = syncBlockOpenedAt else { return false }
+        return !SyncOutput.holdExpired(openedAt: openedAt, now: now,
+                                       timeout: SyncOutput.holdTimeout)
     }
 
     deinit { displayLink?.invalidate() }

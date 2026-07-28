@@ -40,6 +40,16 @@ private func onSetTermProp(_ prop: VTermProp, _ val: UnsafeMutablePointer<VTermV
     guard let val = val, let user = user else { return 1 }
     let terminal = Unmanaged<VTerminal>.fromOpaque(user).takeUnretainedValue()
     switch prop {
+    case VTERM_PROP_CURSORVISIBLE:
+        // DECTCEM (ESC [ ? 25 h/l) arrives here and nowhere else. libvterm's
+        // movecursor callback also reports visibility, but only fires when the
+        // position actually changes (state.c updatecursor returns early
+        // otherwise) — so without this case a show/hide that isn't followed by
+        // a cursor move never reaches the renderer, and the block stays painted
+        // (or stays gone) until unrelated motion happens to correct it.
+        terminal.cursorVisible = val.pointee.boolean != 0
+        terminal.isDirty = true
+        terminal.dirtyRows.insert(terminal.cursorRow)
     case VTERM_PROP_ALTSCREEN:
         terminal.isAltScreen = val.pointee.boolean != 0
         // The buffer switch replaces every cell and the application redraws
@@ -154,6 +164,11 @@ final class VTerminal {
     private let selectionBufferLen = 65536
 
     private var passthrough = PassthroughDecoder()
+    private var syncScanner = SyncOutputScanner()
+
+    /// True while tmux has a DEC 2026 synchronized-output update open — the
+    /// screen is mid-update and must not be painted. See SyncOutput.swift.
+    var isInsideSyncUpdate: Bool { syncScanner.isInsideUpdate }
 
     init(rows: Int, cols: Int) {
         self.rows = rows
@@ -206,6 +221,10 @@ final class VTerminal {
         // verbatim.
         let processed = passthrough.process(data)
         guard !processed.isEmpty else { return }
+        // Track BSU/ESU on the same bytes libvterm sees. libvterm ignores DEC
+        // 2026 entirely, so this is the only thing that knows the screen is
+        // mid-update.
+        syncScanner.scan(processed)
         processed.withUnsafeBufferPointer { buf in
             _ = buf.baseAddress?.withMemoryRebound(to: CChar.self, capacity: buf.count) { ptr in
                 vterm_input_write(vt, ptr, buf.count)

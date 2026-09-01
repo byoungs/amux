@@ -59,6 +59,24 @@ Three signals, most trustworthy first:
 | `topic_match` | word overlap between pane title and transcript topic, assigned uniquely |
 | `none` | nothing convincing — restore opens a shell and prints the topic |
 
+Candidate transcripts for a pane come from its own project dir **and any dir
+nested inside it**: a pane usually sits in the repo root while Claude runs in a
+worktree below it, and Claude files the transcript under the worktree's slug.
+A sibling that merely shares a name prefix (`…-amux2` vs `…-amux`) is excluded.
+Without this, a pane running an amux worktree session resolved to no id at all.
+
+Reading is two-phase, because capture runs on every focus change and one
+project dir here holds 423 MB across 32 transcripts:
+
+1. **cheap** — 16 KB head per transcript, enough for the first timestamp, which
+   is all `.resumeArg` and `.startTime` need.
+2. **only if a Claude pane is still unresolved** — 256 KB head + 64 KB tail for
+   topic text, and only for that pane's project dir.
+
+A full capture of a live 4-pane session measures ~0.7 s wall, ~0.07 s CPU — the
+cost is `ps`/`pgrep` spawns, not file reads, and it happens in a short-lived
+`amux-cli` process, never on the app's main thread.
+
 Facts that cost a session to learn (verified 2026-09-01):
 
 - The project slug is the cwd with every non-alphanumeric character → `-`.

@@ -124,9 +124,20 @@ public enum SnapshotCapture {
                           title: obs.title, paneCommand: obs.paneCommand,
                           processes: ClaudeScan.processes(paneProcessID: obs.panePID))
         }
+        // Two passes. The first reads a few KB per transcript, which settles
+        // every pane launched with --resume or started recently enough to match
+        // its transcript's first timestamp. Only if a Claude pane is still
+        // unresolved do we read topic text, and only for its project directory
+        // — those files run to hundreds of megabytes, and this whole capture
+        // fires on every pane focus change.
         let slugs = Set(panes.map { ClaudeSession.slugFor($0.cwd) })
-        let transcripts = ClaudeScan.transcripts(slugs: slugs)
-        let resolutions = ClaudeSession.resolveSessionIDs(panes: panes, transcripts: transcripts)
+        let heads = ClaudeScan.transcriptHeads(slugs: slugs)
+        var resolutions = ClaudeSession.resolveSessionIDs(panes: panes, transcripts: heads)
+        let needTopics = ClaudeSession.slugsNeedingTopics(panes: panes, resolutions: resolutions)
+        if !needTopics.isEmpty {
+            let enriched = ClaudeScan.withTopics(heads, slugs: needTopics)
+            resolutions = ClaudeSession.resolveSessionIDs(panes: panes, transcripts: enriched)
+        }
 
         let snapshot = buildSnapshot(
             observations: observations, resolutions: resolutions,

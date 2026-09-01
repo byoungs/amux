@@ -102,6 +102,28 @@ public enum ClaudeSessionTests {
         check("claude-detected-by-version-cmd",
               ClaudeSession.isClaudePane(paneCommand: "2.1.156", processes: []))
 
+        // 7b. A pane sitting in the repo root while Claude works in a worktree
+        //     under it. The transcript lives under the worktree's own slug, so
+        //     matching the pane's cwd slug exactly finds nothing — observed on
+        //     a live session, and worktrees are this repo's normal dev flow.
+        let worktreeCwd = "/Users/b/src/amux/.claude/worktrees/fix"
+        let inWorktree = resolveOne(
+            panes: [pane(0, title: "amux", starts: [1_000])],
+            transcripts: [transcript("worktree-session", first: 1_010, last: 1_500,
+                                     blob: "x", cwd: worktreeCwd)])
+        check("worktree-slug-matches",
+              inWorktree[ref(0)] == ClaudePaneID(sessionID: "worktree-session", confidence: .startTime),
+              String(describing: inWorktree[ref(0)]))
+
+        // ...but a sibling directory that merely shares a name prefix is a
+        // different project and must not be raided.
+        let sibling = resolveOne(
+            panes: [pane(0, title: "amux", starts: [1_000])],
+            transcripts: [transcript("other-project", first: 1_010, last: 1_500,
+                                     blob: "x", cwd: "/Users/b/src/amux2")])
+        check("sibling-prefix-not-matched", sibling[ref(0)]?.sessionID == nil,
+              String(describing: sibling[ref(0)]))
+
         // 8. Transcripts from another project dir are never candidates.
         let otherDir = resolveOne(
             panes: [pane(0, title: "amux", starts: [1_000])],

@@ -15,6 +15,11 @@ public enum ClaudeScan {
     /// level under the pane shell, two when wrapped in `sh -c`.
     public static let descendantDepth = 3
 
+    /// Enough to reach the first timestamped line of a transcript. Kept small
+    /// on purpose: this read happens for every transcript in every project
+    /// directory an open pane sits in, on every pane focus change.
+    private static let firstLineBytes = 16 * 1024
+    /// Only read when topic matching is actually needed.
     private static let headBytes = 256 * 1024
     private static let tailBytes = 64 * 1024
 
@@ -88,40 +93,84 @@ public enum ClaudeScan {
             .appendingPathComponent("projects")
     }
 
-    /// Metadata for every transcript in the given project slugs.
-    public static func transcripts(slugs: Set<String>, projectsDir: URL = projectsDir) -> [TranscriptMeta] {
+    /// Cheap pass: the id and start time of every transcript in these slugs.
+    ///
+    /// That is everything `.resumeArg` and `.startTime` need, and it reads a
+    /// few KB per file instead of hundreds. A single project directory here
+    /// runs to hundreds of megabytes across dozens of transcripts, and this
+    /// runs on every pane focus change.
+    public static func transcriptHeads(slugs: Set<String>,
+                                       projectsDir: URL = projectsDir) -> [TranscriptMeta] {
         var out: [TranscriptMeta] = []
-        for slug in slugs {
-            let dir = projectsDir.appendingPathComponent(slug)
-            let files = (try? FileManager.default.contentsOfDirectory(at: dir,
-                                                                     includingPropertiesForKeys: nil)) ?? []
-            for file in files where file.pathExtension == "jsonl" {
-                if let meta = transcriptMeta(file: file, slug: slug) { out.append(meta) }
+        for slug in expand(slugs: slugs, projectsDir: projectsDir) {
+            for file in transcriptFiles(slug: slug, projectsDir: projectsDir) {
+                guard let handle = try? FileHandle(forReadingFrom: file) else { continue }
+                defer { try? handle.close() }
+                let chunk = String(decoding: (try? handle.read(upToCount: firstLineBytes)) ?? Data(),
+                                   as: UTF8.self)
+                out.append(TranscriptMeta(
+                    sessionID: file.deletingPathExtension().lastPathComponent,
+                    slug: slug,
+                    firstTimestamp: firstTimestamp(in: chunk),
+                    lastTimestamp: nil,
+                    topicBlob: ""))
             }
         }
         return out
     }
 
-    private static func transcriptMeta(file: URL, slug: String) -> TranscriptMeta? {
-        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
-        defer { try? handle.close() }
-        let size = (try? handle.seekToEnd()).map(Int.init) ?? 0
-        try? handle.seek(toOffset: 0)
-        let head = String(decoding: (try? handle.read(upToCount: headBytes)) ?? Data(), as: UTF8.self)
-        var tail = ""
-        if size > headBytes {
-            try? handle.seek(toOffset: UInt64(max(0, size - tailBytes)))
-            tail = String(decoding: (try? handle.read(upToCount: tailBytes)) ?? Data(), as: UTF8.self)
-        }
+    /// Expensive pass: add topic text and last-write time, for the named slugs
+    /// only. Called just for the project directories that still hold a Claude
+    /// pane the deterministic signals could not settle.
+    public static func withTopics(_ metas: [TranscriptMeta],
+                                  slugs: Set<String>,
+                                  projectsDir: URL = projectsDir) -> [TranscriptMeta] {
+        metas.map { meta in
+            let wanted = slugs.contains { ClaudeSession.slugMatches(meta.slug, paneSlug: $0) }
+            guard wanted else { return meta }
+            let file = projectsDir.appendingPathComponent(meta.slug)
+                .appendingPathComponent("\(meta.sessionID).jsonl")
+            guard let handle = try? FileHandle(forReadingFrom: file) else { return meta }
+            defer { try? handle.close() }
 
-        let firstTimestamp = firstTimestamp(in: head)
-        let lastTimestamp = lastTimestamp(in: tail.isEmpty ? head : tail) ?? firstTimestamp
-        return TranscriptMeta(
-            sessionID: file.deletingPathExtension().lastPathComponent,
-            slug: slug,
-            firstTimestamp: firstTimestamp,
-            lastTimestamp: lastTimestamp,
-            topicBlob: topicBlob(head: head, tail: tail))
+            let size = (try? handle.seekToEnd()).map(Int.init) ?? 0
+            try? handle.seek(toOffset: 0)
+            let head = String(decoding: (try? handle.read(upToCount: headBytes)) ?? Data(),
+                              as: UTF8.self)
+            var tail = ""
+            if size > headBytes {
+                try? handle.seek(toOffset: UInt64(max(0, size - tailBytes)))
+                tail = String(decoding: (try? handle.read(upToCount: tailBytes)) ?? Data(),
+                              as: UTF8.self)
+            }
+            return TranscriptMeta(
+                sessionID: meta.sessionID,
+                slug: meta.slug,
+                firstTimestamp: meta.firstTimestamp,
+                lastTimestamp: lastTimestamp(in: tail.isEmpty ? head : tail) ?? meta.firstTimestamp,
+                topicBlob: topicBlob(head: head, tail: tail))
+        }
+    }
+
+    /// Each requested slug plus any project dir nested inside it — a pane in a
+    /// repo root has to see the worktree Claude is actually running in.
+    private static func expand(slugs: Set<String>, projectsDir: URL) -> Set<String> {
+        let onDisk = (try? FileManager.default.contentsOfDirectory(
+            atPath: projectsDir.path)) ?? []
+        var out = slugs
+        for candidate in onDisk {
+            if slugs.contains(where: { ClaudeSession.slugMatches(candidate, paneSlug: $0) }) {
+                out.insert(candidate)
+            }
+        }
+        return out
+    }
+
+    private static func transcriptFiles(slug: String, projectsDir: URL) -> [URL] {
+        let dir = projectsDir.appendingPathComponent(slug)
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil)) ?? []
+        return files.filter { $0.pathExtension == "jsonl" }
     }
 
     /// Epoch of the first `"timestamp":"…"` in a chunk of transcript.

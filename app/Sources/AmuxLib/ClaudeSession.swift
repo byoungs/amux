@@ -156,6 +156,19 @@ public enum ClaudeSession {
         String(cwd.map { $0.isLetter || $0.isNumber ? $0 : "-" })
     }
 
+    /// Whether `slug` is the pane's own project dir or one nested inside it.
+    ///
+    /// A pane often sits in a repo root while Claude runs in a worktree below
+    /// it, and Claude files the transcript under the worktree's slug. Matching
+    /// the pane's slug exactly finds nothing in that case. The trailing
+    /// separator check keeps a sibling that merely shares a name prefix
+    /// (`…-amux2` against `…-amux`) out of the candidate set.
+    public static func slugMatches(_ slug: String, paneSlug: String) -> Bool {
+        if slug == paneSlug { return true }
+        guard slug.hasPrefix(paneSlug) else { return false }
+        return slug.dropFirst(paneSlug.count).first == "-"
+    }
+
     // MARK: - Resolution
 
     /// Resolve a session id for every Claude pane. Non-Claude panes are absent
@@ -184,7 +197,13 @@ public enum ClaudeSession {
             }
         }
 
-        let bySlug = Dictionary(grouping: transcripts, by: \.slug)
+        // Candidates for a pane: its own project dir plus any nested one, so a
+        // pane in a repo root still finds the session Claude is running in a
+        // worktree beneath it.
+        func candidateTranscripts(forCwd cwd: String) -> [TranscriptMeta] {
+            let paneSlug = slugFor(cwd)
+            return transcripts.filter { slugMatches($0.slug, paneSlug: paneSlug) }
+        }
 
         // 2. Process start time vs the transcript's first entry. Scored across
         //    all unresolved panes at once, then assigned smallest-delta-first
@@ -193,7 +212,7 @@ public enum ClaudeSession {
         for p in claudePanes where result[ref(p)]?.sessionID == nil {
             let starts = p.processes.filter { isClaudeCommand($0.command) }.map(\.startTime)
             guard !starts.isEmpty else { continue }
-            for t in bySlug[slugFor(p.cwd)] ?? [] {
+            for t in candidateTranscripts(forCwd: p.cwd) {
                 guard let first = t.firstTimestamp, !claimed.contains(t.sessionID) else { continue }
                 for start in starts {
                     let delta = abs(first - start)
@@ -216,11 +235,11 @@ public enum ClaudeSession {
         //    Heuristic — labelled `.topicMatch` so the restore prompt can flag
         //    it before a wrong resume happens rather than after.
         let unresolved = claudePanes.filter { result[ref($0)]?.sessionID == nil }
-        for (slug, group) in Dictionary(grouping: unresolved, by: { slugFor($0.cwd) }) {
+        for (_, group) in Dictionary(grouping: unresolved, by: { slugFor($0.cwd) }) {
             // Liveness: the running sessions are the most recently written
             // transcripts, so only the N freshest unclaimed ones are eligible.
             // That stops an old same-topic conversation from being latched on to.
-            let pool = (bySlug[slug] ?? [])
+            let pool = candidateTranscripts(forCwd: group[0].cwd)
                 .filter { !claimed.contains($0.sessionID) }
                 .sorted { ($0.lastTimestamp ?? 0) > ($1.lastTimestamp ?? 0) }
                 .prefix(group.count)
@@ -252,6 +271,21 @@ public enum ClaudeSession {
 
     private static func ref(_ p: PaneProcesses) -> PaneRef {
         PaneRef(session: p.session, index: p.index)
+    }
+
+    /// Project slugs that still hold an unresolved Claude pane after the
+    /// deterministic signals have run — the only ones worth reading topic
+    /// text for. Everything else keeps its cheap head-only read.
+    public static func slugsNeedingTopics(panes: [PaneProcesses],
+                                          resolutions: [PaneRef: ClaudePaneID]) -> Set<String> {
+        var out = Set<String>()
+        for pane in panes {
+            let resolved = resolutions[ref(pane)]
+            if resolved != nil && resolved?.sessionID == nil {
+                out.insert(slugFor(pane.cwd))
+            }
+        }
+        return out
     }
 
     // MARK: - Topic tokens

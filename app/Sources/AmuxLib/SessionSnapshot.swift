@@ -90,12 +90,8 @@ public struct SessionSnapshot: Equatable {
         spaces.reduce(0) { $0 + $1.panes.count }
     }
 
-    /// ~/.amux/session-snapshot.json
-    public static var defaultPath: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".amux")
-            .appendingPathComponent("session-snapshot.json")
-    }
+    /// ~/.amux/session-snapshot.json (or $AMUX_HOME).
+    public static var defaultPath: URL { AmuxPaths.snapshot() }
 
     /// Load a snapshot. Missing, unreadable, or corrupt file → nil, no throw:
     /// a bad snapshot must never stop amux from starting.
@@ -130,12 +126,8 @@ public struct RestorePrefs: Codable, Equatable {
         case consumedCapturedAt = "consumed_captured_at"
     }
 
-    /// ~/.amux/restore-prefs.json
-    public static var defaultPath: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".amux")
-            .appendingPathComponent("restore-prefs.json")
-    }
+    /// ~/.amux/restore-prefs.json (or $AMUX_HOME).
+    public static var defaultPath: URL { AmuxPaths.restorePrefs() }
 
     /// Missing or corrupt prefs mean "no preference expressed yet".
     public static func load(from path: URL) -> RestorePrefs {

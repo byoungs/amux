@@ -58,12 +58,8 @@ public struct AmuxState: Codable {
         try AtomicFile.write(try encoder.encode(self), to: path)
     }
 
-    /// Return the default state file path: ~/.amux/state.json
-    public static var defaultPath: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".amux")
-            .appendingPathComponent("state.json")
-    }
+    /// Return the default state file path: ~/.amux/state.json (or $AMUX_HOME).
+    public static var defaultPath: URL { AmuxPaths.state() }
 
     /// Reconcile saved state against the current live tmux windows.
     ///

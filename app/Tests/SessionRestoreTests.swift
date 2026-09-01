@@ -22,6 +22,20 @@ enum SessionRestoreTests {
             }
         }
 
+        /// Pane cwds, once tmux has them. `pane_current_path` reads the pane
+        /// process's cwd, which is empty for the moment between the split and
+        /// the shell being exec'd — reading it straight after a restore is a
+        /// race that shows up as a blank first entry under load.
+        func settledCwds(_ session: String, count: Int) -> [String] {
+            var cwds: [String] = []
+            for _ in 0..<50 {
+                cwds = (0..<count).map { (try? Tmux.paneCwd(session, paneIndex: $0)) ?? "" }
+                if !cwds.contains("") { return cwds }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            return cwds
+        }
+
         let scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("amux-restore-it-\(ProcessInfo.processInfo.processIdentifier)")
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -78,7 +92,7 @@ enum SessionRestoreTests {
             check("restore-pane-count", panes.count == 3, "\(panes.count)")
             check("restore-titles", panes.map(\.title) == ["one", "two", "three"],
                   panes.map(\.title).joined(separator: ","))
-            let cwds = (0..<panes.count).map { (try? Tmux.paneCwd(name, paneIndex: $0)) ?? "" }
+            let cwds = settledCwds(name, count: panes.count)
             check("restore-cwds", cwds == ["/usr", "/usr/lib", "/usr/share"],
                   cwds.joined(separator: ","))
             check("restore-selected", panes.first(where: \.active)?.index == 2,
@@ -93,6 +107,51 @@ enum SessionRestoreTests {
             check("restore-idempotent", second.skippedSpaces == [name]
                   && ((try? Tmux.paneCount(name)) ?? 0) == 3,
                   "\(second.skippedSpaces) \((try? Tmux.paneCount(name)) ?? -1)")
+        }
+
+        // 2b. Regression: pane order at six panes.
+        //
+        // Two bugs met here. Splitting the window rather than the pane just
+        // created reversed the order (detached splits leave pane 0 active, so
+        // every new pane was inserted at index 1), and without a re-tile
+        // between splits tmux refuses the sixth with "no space for a new pane".
+        do {
+            let name = "amux-restore-six-\(ProcessInfo.processInfo.processIdentifier)"
+            defer { tmux("kill-session", "-t", name) }
+
+            let dirs = ["/usr", "/usr/lib", "/usr/share", "/usr/bin", "/usr/local", "/usr/libexec"]
+            let snapshot = SessionSnapshot(
+                capturedAt: 4_000, cleanExit: true,
+                spaces: [SpaceSnapshot(name: name, panes: dirs.enumerated().map { i, dir in
+                    PaneSnapshot(index: i, cwd: dir, title: "pane\(i)", kind: .shell)
+                }, selectedPane: 0)],
+                backlog: [])
+            SessionRestore.execute(
+                SessionRestore.planRestore(snapshot: snapshot, existing: [:], now: 4_000))
+
+            check("six-panes-all-created", ((try? Tmux.paneCount(name)) ?? 0) == 6,
+                  "\((try? Tmux.paneCount(name)) ?? -1)")
+            let cwds = settledCwds(name, count: 6)
+            check("six-panes-in-saved-order", cwds == dirs, cwds.joined(separator: ","))
+        }
+
+        // 2c. Regression: a session parked with no @amux-parked-from must still
+        //     appear in the backlog. stdout is whitespace-trimmed on the way
+        //     back, so an empty *trailing* format field takes its tab with it
+        //     and the row fails the field-count guard — the session vanishes
+        //     from the picker with no error anywhere.
+        do {
+            let name = "amux-restore-noform-\(ProcessInfo.processInfo.processIdentifier)"
+            defer { tmux("kill-session", "-t", name) }
+            tmux("new-session", "-d", "-s", name)
+            tmux("set-option", "-t", name, "@amux-managed", "1")
+            tmux("set-option", "-t", name, "@amux-parked-at", "5000")
+            tmux("set-option", "-t", name, "@amux-state", "background")
+
+            let parked = (try? Tmux.listBackgroundSessions()) ?? []
+            check("backlog-lists-session-without-parked-from",
+                  parked.contains(where: { $0.name == name }),
+                  parked.map(\.name).joined(separator: ","))
         }
 
         // 3. A backlog space comes back parked, not as a visible space.

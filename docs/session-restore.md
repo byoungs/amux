@@ -116,3 +116,32 @@ spaces are re-parked; focus is restored last.
 
 A Claude pane resumes with `claude --resume <id>`. With no id it gets a shell
 at the right cwd and a printed hint — never a guess.
+
+## Testing it, including the prompt
+
+Nothing here needs a human at a keyboard.
+
+| Layer | Where |
+|---|---|
+| id resolution, planning, gating | `ClaudeSessionTests`, `RestorePlanTests` (pure, no tmux) |
+| startup arms the prompt hook | `AppControllerTests` against `FakeTmux` |
+| capture + restore against real tmux | `app/Tests/SessionRestoreTests.swift` |
+| the prompt itself, keystroke by keystroke | `app/Tests/RestorePromptUITests.swift` |
+
+The prompt tests run the real `amux-cli prompt restore` in a real tmux pane,
+read the screen back with `capture-pane`, send keys, and assert what tmux and
+the prefs file look like afterwards (`PromptHarness`). Two seams make that safe
+and possible:
+
+- **`AMUX_HOME`** moves every amux state file (snapshot, prefs, coalescing
+  marker) into a scratch directory. All paths resolve through `AmuxPaths`, so
+  the override cannot half-apply and leak into the real `~/.amux`.
+- **`$TMUX`** decides which tmux server `amux-cli` talks to (`TmuxSocket`).
+  Inside a pane that is the server that spawned it — the isolated test server
+  during tests, the user's own server in production.
+
+`AppController.snapshotPath` / `.restorePrefsPath` are injectable for the same
+reason, so the startup gate can be driven without touching real state.
+
+Both tmux behaviours above (split ordering, trailing empty format field) have
+regression tests that were confirmed to fail when the fix is reverted.

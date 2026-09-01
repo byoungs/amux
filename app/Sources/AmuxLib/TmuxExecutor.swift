@@ -29,7 +29,7 @@ public protocol TmuxExecutor {
 /// tests can run on an isolated tmux server that doesn't leak messages
 /// (like "Pane 7 does not exist") to the user's live tmux session.
 public class LiveTmux: TmuxExecutor {
-    private let socket: String?
+    private let socket: TmuxSocket
 
     /// Serializes Process.run()/readback/waitUntilExit across all LiveTmux
     /// calls in this process.
@@ -49,16 +49,20 @@ public class LiveTmux: TmuxExecutor {
     /// lock is effectively free.
     private static let processLock = NSLock()
 
+    /// Named socket (`tmux -L`), as integration tests use.
     public init(socket: String? = nil) {
+        self.socket = socket.map(TmuxSocket.name) ?? .default
+    }
+
+    /// Any resolved server — including the one named in $TMUX, which is what
+    /// amux-cli talks to when it runs from inside a pane.
+    public init(socket: TmuxSocket) {
         self.socket = socket
     }
 
-    /// Build the full tmux argv, injecting `-L socket` if configured.
+    /// Build the full tmux argv for the configured server.
     private func tmuxArgs(_ args: [String]) -> [String] {
-        if let socket = socket {
-            return ["tmux", "-L", socket] + args
-        }
-        return ["tmux"] + args
+        socket.tmuxArgv(args)
     }
 
     public func execute(_ args: [String]) throws -> String {

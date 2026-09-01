@@ -116,6 +116,12 @@ separate binary invoked from tmux key bindings and hooks.
   `LiveTmux.execute` trims trailing whitespace off stdout, so an unset trailing
   option takes its tab separator with it and the row fails the field-count
   guard — silently dropping the session (hit with `@amux-parked-from`).
+- A raw-mode CLI TUI (the restore prompt, the pickers) is testable without a
+  human: run it in a real pane, read it back with `capture-pane`, send keys,
+  assert the resulting tmux state — see `app/Tests/PromptHarness.swift`. Point
+  it at a scratch `$AMUX_HOME` (all state paths resolve through `AmuxPaths`);
+  `amux-cli` follows `$TMUX` to the server that spawned it, so a pane on the
+  test socket keeps the test off the developer's live amux.
 - Integration tests that `send-keys` a command into a tmux pane and read its
   rendered output back must call `TestSession.useCleanShell()` first. The
   developer's interactive `.zshrc` can be too slow to reach a prompt in a

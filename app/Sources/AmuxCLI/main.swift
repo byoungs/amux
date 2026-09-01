@@ -640,6 +640,12 @@ func main() throws {
         setenv("LANG", "en_US.UTF-8", 1)
     }
 
+    // Talk to the tmux server that invoked us. Hooks and popups run inside a
+    // pane, where tmux names its server in $TMUX; using the default socket
+    // instead would be wrong for anyone running a non-default server, and it
+    // is what let integration tests point the real CLI at their own server.
+    Tmux.executor = LiveTmux(socket: TmuxSocket.resolve())
+
     let args = Array(CommandLine.arguments.dropFirst()) // drop binary name
     guard let command = args.first else {
         fputs("Usage: amux-cli <command> [args...]\n", stderr)

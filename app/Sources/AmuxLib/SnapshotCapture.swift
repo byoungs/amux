@@ -144,12 +144,9 @@ public enum SnapshotCapture {
 
     // MARK: - Coalescing
 
-    /// ~/.amux/snapshot-request — holds the token of the most recent request.
-    public static var requestMarkerPath: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".amux")
-            .appendingPathComponent("snapshot-request")
-    }
+    /// ~/.amux/snapshot-request (or $AMUX_HOME) — holds the token of the most
+    /// recent request.
+    public static var requestMarkerPath: URL { AmuxPaths.snapshotRequest() }
 
     /// Claim the trailing edge of a burst of events.
     ///

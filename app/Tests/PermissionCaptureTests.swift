@@ -25,25 +25,39 @@ enum PermissionCaptureTests {
         /// Render a committed fixture into pane 0 via the shell, then capture it
         /// back through real tmux. Returns the captured screen text (or "" if the
         /// fixture is missing / the prompt never rendered).
-        func render(_ fixtureName: String) -> String {
+        ///
+        /// `marker` must be text unique to this fixture. Waiting on a shared
+        /// string like "Do you want to proceed?" returns the moment the
+        /// *previous* fixture's screen is seen — the capture includes
+        /// scrollback — and the test then asserts against the wrong prompt.
+        func render(_ fixtureName: String, waitingFor marker: String) -> String {
             let fixture = fixturesDir.appendingPathComponent(fixtureName).path
             guard FileManager.default.fileExists(atPath: fixture) else {
                 check("fixture-present-\(fixtureName)", false, "missing \(fixture)")
                 return ""
             }
-            try? Tmux.sendKeys(session.name, paneIndex: 0, keys: ["-l", "clear; cat '\(fixture)'"])
+            // Drop the previous fixture out of scrollback before rendering this
+            // one. The capture has to include scrollback (a fixture is taller
+            // than the pane), so without this the poll below can match text the
+            // last fixture left behind and return the wrong screen.
+            try? Tmux.sendKeys(session.name, paneIndex: 0, keys: ["-l", "clear"])
+            try? Tmux.sendKeys(session.name, paneIndex: 0, keys: ["Enter"])
+            Thread.sleep(forTimeInterval: 0.2)
+            Tmux.runRaw(["clear-history", "-t", "\(session.name):.0"])
+
+            try? Tmux.sendKeys(session.name, paneIndex: 0, keys: ["-l", "cat '\(fixture)'"])
             try? Tmux.sendKeys(session.name, paneIndex: 0, keys: ["Enter"])
             var captured = ""
             for _ in 0..<50 {
                 captured = Tmux.capturePane(session.name, paneIndex: 0, lines: 60)
-                if captured.contains("Do you want to proceed?") { break }
+                if captured.contains(marker), captured.contains("Do you want to proceed?") { break }
                 Thread.sleep(forTimeInterval: 0.1)
             }
             return captured
         }
 
         // 3-option Bash prompt (single-column layout).
-        let threeOpt = render("permission-bash-3opt.txt")
+        let threeOpt = render("permission-bash-3opt.txt", waitingFor: "sw_vers")
         check("3opt-capture-contains-prompt", threeOpt.contains("Do you want to proceed?"),
               "captured:\n\(threeOpt)")
         if let p = detectPermissionPrompt(threeOpt) {
@@ -56,7 +70,7 @@ enum PermissionCaptureTests {
         // Narrow-pane prompt: option 2's long "don't ask again for" pattern wraps
         // into a right-hand column across multiple rows (real 64-col capture). The
         // detector must still find all 3 options and identify "No" as the reject.
-        let narrow = render("permission-bash-narrow.txt")
+        let narrow = render("permission-bash-narrow.txt", waitingFor: "longbinary")
         check("narrow-capture-contains-prompt", narrow.contains("Do you want to proceed?"),
               "captured:\n\(narrow)")
         if let p = detectPermissionPrompt(narrow) {

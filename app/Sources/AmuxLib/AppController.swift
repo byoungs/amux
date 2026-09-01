@@ -13,6 +13,12 @@ public class AppController {
     /// when the user switches spaces. Set by AppDelegate after PTY creation.
     public var clientTTY: String?
 
+    /// Where startup looks for the session snapshot and the user's restore
+    /// preferences. Injectable so tests can drive the real startup path
+    /// without reading or writing the developer's live ~/.amux.
+    public var snapshotPath: URL = SessionSnapshot.defaultPath
+    public var restorePrefsPath: URL = RestorePrefs.defaultPath
+
     /// Callback for visual border overlay. Set by AppDelegate to update TerminalView.
     /// Parameters: (top, left, width, height) of the pane to highlight, or nil to clear.
     public var onSplitSelectedChanged: (((Int, Int, Int, Int)?) -> Void)?
@@ -318,8 +324,8 @@ public class AppController {
         // client-attached hook, and restore is the more urgent of the two.
         if SessionRestore.shouldOfferRestore(
             hadExistingSessions: hadExistingSessions,
-            snapshot: SessionSnapshot.load(from: SessionSnapshot.defaultPath),
-            prefs: RestorePrefs.load(from: RestorePrefs.defaultPath)) {
+            snapshot: SessionSnapshot.load(from: snapshotPath),
+            prefs: RestorePrefs.load(from: restorePrefsPath)) {
             Tmux.setStartupRestoreHook(session)
             return
         }

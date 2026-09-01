@@ -63,6 +63,8 @@ struct AmuxTermApp {
             SessionSnapshotTests.runAll()
             ClaudeSessionTests.runAll()
             RestorePlanTests.runAll()
+            AmuxPathsTests.runAll()
+            TmuxSocketTests.runAll()
             print("All tests passed")
             #else
             print("Tests only available in debug builds")

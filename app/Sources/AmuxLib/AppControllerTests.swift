@@ -361,6 +361,61 @@ public enum AppControllerTests {
         }
 
         // ============================================================
+        // Startup — restore prompt wiring
+        //
+        // The decision itself is covered in RestorePlanTests; what matters
+        // here is that startup arms the one-shot client-attached hook when
+        // the gate opens, and leaves it alone when it doesn't.
+        // ============================================================
+
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("amux-startup-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let snapshotPath = dir.appendingPathComponent("session-snapshot.json")
+            let prefsPath = dir.appendingPathComponent("restore-prefs.json")
+            try? SessionSnapshot(
+                capturedAt: 1_000, cleanExit: false,
+                spaces: [SpaceSnapshot(name: "old-space", panes: [
+                    PaneSnapshot(index: 0, cwd: "/src", title: "one", kind: .shell),
+                ], selectedPane: 0)],
+                backlog: []).save(to: snapshotPath)
+
+            func startupHook(existingManagedSession: String?, prefs: RestorePrefs) -> String {
+                let fake = FakeTmux()
+                Tmux.executor = fake
+                if let existing = existingManagedSession {
+                    try? Tmux.createSession(existing)
+                    Tmux.markAsManaged(existing)
+                    Tmux.setSessionState(existing, state: .foreground)
+                }
+                try? prefs.save(to: prefsPath)
+                let controller = AppController(session: "restore-startup")
+                controller.snapshotPath = snapshotPath
+                controller.restorePrefsPath = prefsPath
+                try? controller.startup()
+                return fake.sessions["restore-startup"]?.hooks["client-attached"] ?? ""
+            }
+
+            check("startup-arms-restore-prompt",
+                  startupHook(existingManagedSession: nil, prefs: RestorePrefs())
+                    .contains("restore-popup"),
+                  startupHook(existingManagedSession: nil, prefs: RestorePrefs()))
+            // A surviving managed session means the app was relaunched (e.g.
+            // `make dev`) while tmux kept running — those panes are the truth.
+            check("startup-skips-prompt-when-sessions-live",
+                  !startupHook(existingManagedSession: "already-here", prefs: RestorePrefs())
+                    .contains("restore-popup"))
+            check("startup-honors-dont-ask",
+                  !startupHook(existingManagedSession: nil, prefs: RestorePrefs(dontAsk: true))
+                    .contains("restore-popup"))
+            check("startup-skips-consumed-snapshot",
+                  !startupHook(existingManagedSession: nil,
+                               prefs: RestorePrefs(consumedCapturedAt: 1_000))
+                    .contains("restore-popup"))
+        }
+
+        // ============================================================
         // Spaces / Send — use launch (fire-and-forget), not runRaw
         // ============================================================
 

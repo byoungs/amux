@@ -1,0 +1,118 @@
+# Session restore
+
+tmux processes die when the machine reboots, but every Claude conversation is
+on disk under `~/.claude/projects/<slug>/<session-id>.jsonl`. amux records what
+was open while it runs, and on a cold start offers to bring it back.
+
+## What is recorded
+
+`~/.amux/session-snapshot.json`, written by `SnapshotCapture`:
+
+```
+SessionSnapshot { version, captured_at, clean_exit, spaces[], backlog[] }
+SpaceSnapshot   { name, panes[], selected_pane, parked_from }
+PaneSnapshot    { index, cwd, title, kind }
+PaneKind        = claude(session_id, confidence) | shell | command(cmd)
+```
+
+`backlog` names the spaces that were parked. `clean_exit` is true only when
+`applicationWillTerminate` wrote the snapshot — anything else means the last
+run died, which the restore prompt says out loud, because a crash snapshot can
+be slightly behind what was on screen.
+
+State lives in a separate file from `~/.amux/state.json` (window labels, view
+mode) on purpose: different concern, different lifetime.
+
+`~/.amux/restore-prefs.json` holds the user's answers — `dont_ask`, and the
+`captured_at` already consumed so the same snapshot is never offered twice.
+It is separate from the snapshot because every capture rewrites the snapshot.
+
+## When it captures
+
+Event-driven, never timed:
+
+- **pane added / closed** — the `pane-exited` hook runs `amux-cli layout-changed`
+- **pane focus change** — the `after-select-pane` hook runs `amux-cli update-title`
+- **clean exit** — `applicationWillTerminate`, with `clean_exit = true`
+
+`client-resized` deliberately does *not* capture; it fires continuously while a
+window is dragged.
+
+Both hooks spawn `amux-cli snapshot`, which stamps `~/.amux/snapshot-request`
+with a token, waits 500 ms, and captures only if no later event replaced it —
+so a burst of focus changes produces one write, of the state the user left.
+
+**The known gap:** typing `claude` into an existing shell pane is not a pane
+event, so a crash before the next focus change loses that id. Hooking focus
+(not just add/close) closes most of it. There is no autosave timer by design.
+
+## Resolving Claude session ids
+
+`ClaudeSession.resolveSessionIDs` is pure — process samples and transcript
+metadata in, ids out — with `ClaudeScan` doing the `ps`/`pgrep`/file reads.
+Three signals, most trustworthy first:
+
+| Confidence | Signal |
+|---|---|
+| `resume_arg` | the process argv is `claude --resume <uuid>` |
+| `start_time` | the transcript's first timestamp is within 300 s of the process start |
+| `topic_match` | word overlap between pane title and transcript topic, assigned uniquely |
+| `none` | nothing convincing — restore opens a shell and prints the topic |
+
+Facts that cost a session to learn (verified 2026-09-01):
+
+- The project slug is the cwd with every non-alphanumeric character → `-`.
+- Claude does not hold the transcript open; `lsof` finds nothing.
+- No session id in the environment, and none in argv unless it was resumed.
+- A pane at Claude's "resume from summary?" prompt still reports its *shell*
+  as `pane_current_command` — the process scan decides, not the pane command.
+- Transcript mtimes are not a recency signal (a bulk touch can restamp old
+  files); the timestamps inside the file are.
+
+A wrong id resumes the wrong conversation, so the resolver never falls back to
+"newest transcript in the directory" the way the older python script did, and
+`topic_match` panes are flagged in the prompt before anything is resumed.
+
+## The prompt
+
+Offered only when **all** hold: no amux-managed tmux session survived, a
+snapshot with at least one pane exists, that snapshot was not already consumed,
+and "don't ask again" is unset (`SessionRestore.shouldOfferRestore`).
+
+It is a `display-popup` running `amux-cli prompt restore`, armed by a one-shot
+`client-attached` hook — at `startup()` time the app's PTY has not attached yet
+and a popup would have no client.
+
+```
+  Restore your last session?   (last run ended in a crash)
+
+  amux
+    · scroll reflow    claude
+    · shell            shell
+  parked-fix (backlog)
+    · fix              claude [topic match — verify]
+
+  ❯ 1. Restore 3 panes across 2 spaces  saved 12m ago
+    2. Start fresh
+    3. Don't ask again
+```
+
+## Restoring
+
+`SessionRestore.planRestore` is pure: snapshot + live pane counts → an ordered
+tmux command list. Two rules it exists to enforce:
+
+- **Re-tile before every split.** tmux refuses `split-window` with "no space for
+  a new pane" once the default halving leaves the target too short (hit live at
+  the 6th pane).
+- **Split the pane just created (`-t sess:0.<n-1>`), not the window.** tmux
+  inserts the new pane immediately after the target, and detached splits leave
+  pane 0 active — splitting the window reverses the saved order.
+
+Then: the space amux just created for itself is *adopted* (its single pane
+`cd`s to the saved cwd) rather than skipped, since killing it would drop our
+own client; spaces that already have panes are skipped and reported; backlog
+spaces are re-parked; focus is restored last.
+
+A Claude pane resumes with `claude --resume <id>`. With no id it gets a shell
+at the right cwd and a printed hint — never a guess.

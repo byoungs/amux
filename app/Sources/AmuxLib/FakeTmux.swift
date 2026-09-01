@@ -319,6 +319,9 @@ public class FakeTmux: TmuxExecutor {
         let sess = Session()
         let win = Window(index: 0)
         let pane = FakePane(id: allocatePaneId())
+        if let cwd = flagValue(args, "-c") {
+            pane.cwd = cwd
+        }
         win.panes.append(pane)
         sess.windows.append(win)
         sessions[name] = sess

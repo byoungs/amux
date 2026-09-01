@@ -606,6 +606,34 @@ func runSendPicker() throws {
     }
 }
 
+/// Re-tile a session after its geometry or pane set changed.
+///
+/// Last-pane-close detection lives here: if the session emptied out and the
+/// backlog isn't empty, fire the close-prompt popup instead of the usual
+/// layout reapply. The popup runs `amux-cli prompt close`.
+func reapplyLayout(session: String) throws {
+    let count = (try? Tmux.paneCount(session)) ?? 0
+    if count == 0 {
+        let backlogCount = (try? Tmux.listBackgroundSessions().count) ?? 0
+        if backlogCount > 0 {
+            let bin = Config.findAmuxCLI()
+            Tmux.launch([
+                "display-popup", "-t", session, "-E", "-w", "70", "-h", "16",
+                "-T", " Last pane closed — pull from backlog? ",
+                "\(bin) prompt close \(session)",
+            ])
+            exit(0)
+        }
+    }
+    try Tmux.applyLayout(session, event: .resize)
+    // Cap-override re-arm: if pane count drops back at or under the cap,
+    // clear the override flag so the next newPane re-prompts.
+    let cap = (try? Tmux.getSessionCap(session)) ?? 4
+    if count <= cap {
+        Tmux.setCapOverridden(session, overridden: false)
+    }
+}
+
 func main() throws {
     // Ensure UTF-8
     if ProcessInfo.processInfo.environment["LANG"] == nil {
@@ -620,35 +648,24 @@ func main() throws {
 
     switch command {
     case "layout":
-        // amux-cli layout SESSION
+        // amux-cli layout SESSION — client-resized hook.
         guard args.count >= 2 else {
             fputs("Usage: amux-cli layout SESSION\n", stderr)
             exit(1)
         }
-        let session = args[1]
-        // Last-pane-close detection: if the session emptied out and the
-        // backlog isn't empty, fire the close-prompt popup instead of the
-        // usual layout reapply. The popup runs amux-cli prompt close.
-        let count = (try? Tmux.paneCount(session)) ?? 0
-        if count == 0 {
-            let backlogCount = (try? Tmux.listBackgroundSessions().count) ?? 0
-            if backlogCount > 0 {
-                let bin = Config.findAmuxCLI()
-                Tmux.launch([
-                    "display-popup", "-t", session, "-E", "-w", "70", "-h", "16",
-                    "-T", " Last pane closed — pull from backlog? ",
-                    "\(bin) prompt close \(session)",
-                ])
-                exit(0)
-            }
+        try reapplyLayout(session: args[1])
+
+    case "layout-changed":
+        // amux-cli layout-changed SESSION — pane-exited hook.
+        // Same relayout as `layout`, plus a snapshot: the set of panes just
+        // changed. Kept separate from `layout` so a window resize (which fires
+        // continuously while dragging) does not trigger snapshots.
+        guard args.count >= 2 else {
+            fputs("Usage: amux-cli layout-changed SESSION\n", stderr)
+            exit(1)
         }
-        try Tmux.applyLayout(session, event: .resize)
-        // Cap-override re-arm: if pane count drops back at or under the cap,
-        // clear the override flag so the next newPane re-prompts.
-        let cap = (try? Tmux.getSessionCap(session)) ?? 4
-        if count <= cap {
-            Tmux.setCapOverridden(session, overridden: false)
-        }
+        try reapplyLayout(session: args[1])
+        SnapshotCapture.requestAsync()
 
     case "update-title":
         // amux-cli update-title PANE_INDEX CWD
@@ -685,6 +702,11 @@ func main() throws {
             _ = try? Tmux.executor.execute(
                 ["set-option", "-p", "-t", target, "@amux-focused-at", now])
         }
+
+        // Focus changed — record it for session restore. Focus is hooked as
+        // well as add/close because typing `claude` into an existing shell is
+        // not a pane event; moving to another pane is what happens next.
+        SnapshotCapture.requestAsync()
 
     case "alert-pane":
         guard args.count >= 2 else {
@@ -949,11 +971,52 @@ func main() throws {
             exit(2)
         }
 
+    case "snapshot":
+        // amux-cli snapshot [--clean-exit]
+        // Records every managed pane to ~/.amux/session-snapshot.json.
+        // Invoked from the pane-exited and after-select-pane hooks (via
+        // SnapshotCapture.requestAsync), so bursts are coalesced to one
+        // trailing write; --clean-exit skips the wait and marks the snapshot
+        // as a tidy shutdown.
+        let cleanExit = args.contains("--clean-exit")
+        if !cleanExit && !SnapshotCapture.claimTrailingEdge() {
+            exit(0) // a newer event superseded this one
+        }
+        SnapshotCapture.captureNow(cleanExit: cleanExit)
+        exit(0)
+
+    case "restore-popup":
+        // amux-cli restore-popup SESSION
+        // Runs from the one-shot client-attached hook set by startup(). Clears
+        // the hook first so a later attach never re-prompts, then opens the
+        // prompt as a popup — the prompt is a raw-mode TUI and needs a tty.
+        guard args.count >= 2 else {
+            fputs("Usage: amux-cli restore-popup SESSION\n", stderr)
+            exit(2)
+        }
+        let session = args[1]
+        _ = Tmux.runRaw(["set-hook", "-u", "-t", session, "client-attached"])
+        let bin = Config.findAmuxCLI()
+        Tmux.launch([
+            "display-popup", "-t", session, "-E", "-w", "80", "-h", "24",
+            "-T", " Restore last session ",
+            "\(bin) prompt restore \(session)",
+        ])
+        exit(0)
+
     case "prompt":
         // amux-cli prompt park SESSION    — popup to pick pane to park when at cap
         // amux-cli prompt close SESSION   — popup to pull from backlog after last close
+        // amux-cli prompt restore SESSION — popup to restore the last snapshot
         let sub = args.count >= 2 ? args[1] : ""
         switch sub {
+        case "restore":
+            guard args.count >= 3 else {
+                fputs("Usage: amux-cli prompt restore SESSION\n", stderr)
+                exit(2)
+            }
+            runRestorePrompt(session: args[2])
+            exit(0)
         case "park":
             guard args.count >= 3 else {
                 fputs("Usage: amux-cli prompt park SESSION\n", stderr)
@@ -969,7 +1032,7 @@ func main() throws {
             runCloseLastPrompt(session: args[2])
             exit(0)
         default:
-            fputs("Usage: amux-cli prompt park|close SESSION\n", stderr)
+            fputs("Usage: amux-cli prompt park|close|restore SESSION\n", stderr)
             exit(2)
         }
 
@@ -1076,6 +1139,130 @@ func runCloseLastPrompt(session: String) {
             break
         }
     }
+}
+
+// MARK: - Restore prompt (fires at startup when nothing survived)
+
+enum RestoreChoice: Int, CaseIterable {
+    case restore = 0
+    case fresh = 1
+    case dontAsk = 2
+}
+
+func drawRestorePrompt(snapshot: SessionSnapshot, selected: Int) {
+    var out = ansiClear
+    let crash = snapshot.cleanExit
+        ? ""
+        : "  \(ansiAmber)(last run ended in a crash — may be slightly behind)\(ansiReset)"
+    out += "\r\n  \(ansiBoldCyan)Restore your last session?\(ansiReset)\(crash)\r\n\r\n"
+
+    // Show what comes back, so the choice is informed. Topic-matched ids are
+    // marked: that is the one signal that can resume the wrong conversation,
+    // and it should be visible before it happens rather than after.
+    for space in snapshot.spaces {
+        let parked = snapshot.backlog.contains(space.name) ? " \(ansiDim)(backlog)\(ansiReset)" : ""
+        out += "  \(ansiWhite)\(space.name)\(ansiReset)\(parked)\r\n"
+        for pane in space.panes {
+            let label: String
+            switch pane.kind {
+            case .claude(let id, let confidence):
+                if id == nil {
+                    label = "\(ansiAmber)claude — no id, opens a shell\(ansiReset)"
+                } else if confidence == .topicMatch {
+                    label = "\(ansiGreen)claude\(ansiReset) \(ansiAmber)[topic match — verify]\(ansiReset)"
+                } else {
+                    label = "\(ansiGreen)claude\(ansiReset)"
+                }
+            case .shell:
+                label = "\(ansiGray)shell\(ansiReset)"
+            case .command(let cmd):
+                label = "\(ansiGray)\(cmd)\(ansiReset)"
+            }
+            let title = pane.title.isEmpty ? "(pane \(pane.index + 1))" : pane.title
+            out += "    \(ansiDim)·\(ansiReset) \(title)  \(label)\r\n"
+        }
+    }
+
+    let ago = formatAgo(seconds: nowSeconds() &- UInt64(max(0, snapshot.capturedAt)))
+    let spaceWord = snapshot.spaces.count == 1 ? "space" : "spaces"
+    let options = [
+        "Restore \(snapshot.paneCount) panes across \(snapshot.spaces.count) \(spaceWord)"
+            + "  \(ansiDim)saved \(ago)\(ansiReset)",
+        "Start fresh",
+        "Don't ask again",
+    ]
+    out += "\r\n"
+    for (i, option) in options.enumerated() {
+        let arrow = i == selected ? "\(ansiCyan)❯\(ansiReset)" : " "
+        let number = "\(ansiYellow)\(i + 1).\(ansiReset)"
+        let text = i == selected ? "\(ansiBold)\(option)\(ansiReset)" : option
+        out += "  \(arrow) \(number) \(text)\r\n"
+    }
+    out += "\r\n  \(ansiGray)Enter to confirm · Esc to start fresh\(ansiReset)\r\n"
+    print(out, terminator: "")
+    fflush(stdout)
+}
+
+func runRestorePrompt(session: String) {
+    guard let snapshot = SessionSnapshot.load(from: SessionSnapshot.defaultPath),
+          snapshot.paneCount > 0 else { return }
+
+    var selected = 0
+    let orig = enterRawMode()
+    defer { restoreTerminal(orig) }
+    while true {
+        drawRestorePrompt(snapshot: snapshot, selected: selected)
+        switch readRawKey() {
+        case .up:
+            if selected > 0 { selected -= 1 }
+        case .down:
+            if selected + 1 < RestoreChoice.allCases.count { selected += 1 }
+        case .char(let c) where c >= 0x31 && c <= 0x33:
+            selected = Int(c - 0x31)
+        case .enter:
+            restoreTerminal(orig)
+            applyRestoreChoice(RestoreChoice(rawValue: selected) ?? .fresh,
+                               snapshot: snapshot, session: session)
+            return
+        case .escape:
+            restoreTerminal(orig)
+            applyRestoreChoice(.fresh, snapshot: snapshot, session: session)
+            return
+        default:
+            break
+        }
+    }
+}
+
+func applyRestoreChoice(_ choice: RestoreChoice, snapshot: SessionSnapshot, session: String) {
+    var prefs = RestorePrefs.load(from: RestorePrefs.defaultPath)
+    // Every outcome consumes this snapshot, so relaunching the app (or a
+    // `make dev` cycle) does not ask about the same one twice.
+    prefs.consumedCapturedAt = snapshot.capturedAt
+
+    switch choice {
+    case .restore:
+        let plan = SessionRestore.planRestore(
+            snapshot: snapshot,
+            existing: SessionRestore.existingSessionPaneCounts(),
+            now: nowSeconds(),
+            adoptSession: session)
+        SessionRestore.execute(plan)
+        // Hand the restored panes to amux's own layout engine — the plan
+        // tiles only to keep tmux willing to split.
+        try? Tmux.applyLayout(session, event: .resize)
+        try? Tmux.setupAllBellWatches(session)
+        if !plan.skippedSpaces.isEmpty {
+            Tmux.displayMessage(session,
+                message: "Restore skipped \(plan.skippedSpaces.joined(separator: ", ")) — already open")
+        }
+    case .fresh:
+        break
+    case .dontAsk:
+        prefs.dontAsk = true
+    }
+
+    try? prefs.save(to: RestorePrefs.defaultPath)
 }
 
 try main()

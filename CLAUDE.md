@@ -107,6 +107,15 @@ separate binary invoked from tmux key bindings and hooks.
   main thread it can fire a scheduled Timer (or drain a main-queue block)
   re-entrantly into the same non-recursive lock → self-deadlock. Wait on a
   `DispatchSemaphore` signalled from `terminationHandler` instead.
+- To create panes in a fixed order, split the pane you just created
+  (`split-window -t <sess>:0.<n-1>`), never the window. tmux inserts the new
+  pane immediately after the target, and a detached split (`-d`) leaves pane 0
+  active — so splitting the window inserts at index 1 every time and reverses
+  the intended order. Verified against real tmux 2026-09-01.
+- Never put a possibly-empty field last in a `list-*` `-F` format string.
+  `LiveTmux.execute` trims trailing whitespace off stdout, so an unset trailing
+  option takes its tab separator with it and the row fails the field-count
+  guard — silently dropping the session (hit with `@amux-parked-from`).
 - Integration tests that `send-keys` a command into a tmux pane and read its
   rendered output back must call `TestSession.useCleanShell()` first. The
   developer's interactive `.zshrc` can be too slow to reach a prompt in a

@@ -53,17 +53,9 @@ public struct AmuxState: Codable {
     /// Save state to a file path atomically via a temporary file + rename.
     /// Parent directories are created if they don't exist.
     public func save(to path: URL) throws {
-        if let parent = path.deletingLastPathComponent() as URL? {
-            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
-        }
-
-        // Write to a sibling temp file, then rename for atomicity.
-        let tmpPath = path.deletingPathExtension().appendingPathExtension("json.tmp")
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
-        try data.write(to: tmpPath)
-        _ = try FileManager.default.replaceItemAt(path, withItemAt: tmpPath)
+        try AtomicFile.write(try encoder.encode(self), to: path)
     }
 
     /// Return the default state file path: ~/.amux/state.json

@@ -37,13 +37,22 @@ amux commands or forwards raw bytes to the PTY. A separate CLI binary
 - **HelpContent** — Keyboard shortcut reference data (used by help TUI)
 - **PaneStyle** — Visual state management for pane borders and status bar
 - **Bell** — BEL character scanner for attention alerts
+- **SessionSnapshot / SnapshotCapture** — Records every managed pane
+  (cwd, title, what it runs) to `~/.amux/session-snapshot.json` on pane
+  events and clean exit; see `docs/session-restore.md`
+- **ClaudeSession / ClaudeScan** — Resolves which Claude conversation a
+  pane is running (pure resolver + ps/transcript adapter)
+- **RestorePlan** — Pure snapshot → tmux command list, plus the startup
+  prompt gate
+- **AtomicFile** — Temp-file + replace writes shared by state and snapshots
 
 ### AmuxCLI (command-line tool)
 
 - Called by tmux hooks (`after-select-pane`, `pane-exited`, etc.)
 - Runs interactive TUI popups (spaces picker, send picker, help screen)
-- Commands: `layout`, `update-title`, `alert-pane`, `bell-watch`,
-  `spaces`, `send`, `help`, `hook-install`
+- Commands: `layout`, `layout-changed`, `update-title`, `alert-pane`,
+  `bell-watch`, `spaces`, `send`, `help`, `hook-install`, `snapshot`,
+  `restore-popup`, `prompt park|close|restore`
 
 ## Keyboard Handling
 

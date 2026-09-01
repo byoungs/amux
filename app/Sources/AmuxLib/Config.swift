@@ -191,8 +191,11 @@ public enum Config {
                 // Hooks. Re-apply layout when a pane exits or window resizes;
                 // update the selected pane's title from its cwd on focus
                 // change (after-select-pane).
+                // pane-exited also records a session snapshot (layout-changed);
+                // client-resized deliberately does not, since it fires
+                // continuously while a window is being dragged.
                 ["set-hook", "-t", session, "pane-exited",
-                 "run-shell \"\(bin) layout #{session_name}\""],
+                 "run-shell \"\(bin) layout-changed #{session_name}\""],
                 ["set-hook", "-t", session, "client-resized",
                  "run-shell \"\(bin) layout #{session_name}\""],
                 ["set-hook", "-t", session, "after-select-pane",

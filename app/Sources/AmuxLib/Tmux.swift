@@ -279,9 +279,13 @@ public enum Tmux {
 
     /// List all background sessions, sorted by parkedAt descending.
     public static func listBackgroundSessions() throws -> [BackgroundSession] {
+        // session_name is last on purpose: it is the one field that is never
+        // empty, and stdout is whitespace-trimmed on the way back, so a
+        // trailing unset option (@amux-parked-from on a session parked by
+        // restore) would otherwise take its tab with it and drop the row.
         let stdout = try runChecked(
             ["list-sessions", "-F",
-             "#{session_name}\t#{@amux-managed}\t#{@amux-state}\t#{@amux-parked-at}\t#{@amux-parked-from}"],
+             "#{@amux-managed}\t#{@amux-state}\t#{@amux-parked-at}\t#{@amux-parked-from}\t#{session_name}"],
             context: "listBackgroundSessions: list-sessions failed"
         )
         var out: [BackgroundSession] = []
@@ -289,13 +293,13 @@ public enum Tmux {
             let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
                 .map(String.init)
             guard parts.count >= 5 else { continue }
-            let name = parts[0]
-            let isManaged = parts[1] == "1"
+            let name = parts[4]
+            let isManaged = parts[0] == "1"
             guard isManaged else { continue }
-            let state = SessionState(rawValue: parts[2]) ?? .foreground
+            let state = SessionState(rawValue: parts[1]) ?? .foreground
             guard state == .background else { continue }
-            let parkedAt = UInt64(parts[3]) ?? 0
-            let parkedFrom = parts[4]
+            let parkedAt = UInt64(parts[2]) ?? 0
+            let parkedFrom = parts[3]
             let paneCount = (try? self.paneCount(name)) ?? 1
             // Title: take the first pane's @amux-title if available
             let firstTitle = (try? getTitle(name, paneIndex: 0)) ?? ""
@@ -1341,6 +1345,17 @@ public enum Tmux {
         let bin = Config.findAmuxCLI()
         runIgnoring([
             "display-popup", "-E", "-w", "70", "-h", "20", "-T", " Spaces ", "\(bin) spaces"
+        ])
+    }
+
+    /// Set a one-shot client-attached hook that offers to restore the last
+    /// snapshot. Deferred to attach because a popup needs a client; at the
+    /// point startup() runs, the app's PTY has not attached yet.
+    public static func setStartupRestoreHook(_ session: String) {
+        let bin = Config.findAmuxCLI()
+        runIgnoring([
+            "set-hook", "-t", session, "client-attached",
+            "run-shell \"\(bin) restore-popup #{session_name}\"",
         ])
     }
 

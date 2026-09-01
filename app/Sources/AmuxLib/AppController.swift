@@ -267,6 +267,11 @@ public class AppController {
 
     /// Initialize the session: create or attach, apply config, set up hooks.
     public func startup() throws {
+        // Read this before creating anything: restore is only for the case
+        // where nothing survived. If amux-managed sessions are still running
+        // (app relaunch, `make dev`) those panes are the truth.
+        let hadExistingSessions = !amuxManagedSessions().isEmpty
+
         if !Tmux.sessionExists(session) {
             // amux-app's CWD is `/` when launched by LaunchServices; pass
             // $HOME so the first shell lands somewhere meaningful.
@@ -308,11 +313,29 @@ public class AppController {
         // Ensure Claude Code notification hook is installed
         try? Hooks.ensureClaudeHook()
 
+        // Nothing survived and something was saved: offer to bring it back.
+        // Checked before the spaces picker because both use the one-shot
+        // client-attached hook, and restore is the more urgent of the two.
+        if SessionRestore.shouldOfferRestore(
+            hadExistingSessions: hadExistingSessions,
+            snapshot: SessionSnapshot.load(from: SessionSnapshot.defaultPath),
+            prefs: RestorePrefs.load(from: RestorePrefs.defaultPath)) {
+            Tmux.setStartupRestoreHook(session)
+            return
+        }
+
         // If multiple spaces exist, show spaces picker on attach
         let spaces = (try? Tmux.listFocusSessions()) ?? []
         if spaces.count > 1 {
             Tmux.setStartupSpacesHook(session)
         }
+    }
+
+    /// Every amux-managed session, foreground or parked.
+    private func amuxManagedSessions() -> [String] {
+        let foreground = (try? Tmux.listFocusSessions()) ?? []
+        let background = ((try? Tmux.listBackgroundSessions()) ?? []).map(\.name)
+        return foreground + background
     }
 
     // MARK: - Session resolution

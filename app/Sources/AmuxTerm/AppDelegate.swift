@@ -60,6 +60,9 @@ struct AmuxTermApp {
             PromptQueueTests.runAll()
             PermissionWatcherTests.runAll()
             TmuxBackgroundTests.runAll()
+            SessionSnapshotTests.runAll()
+            ClaudeSessionTests.runAll()
+            RestorePlanTests.runAll()
             print("All tests passed")
             #else
             print("Tests only available in debug builds")
@@ -459,6 +462,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     func applicationWillTerminate(_ notification: Notification) {
         alertServer?.stop()
         permissionWatcher?.stop()
+        // Final snapshot, marked as a tidy shutdown. Anything else on disk
+        // (cleanExit == false) tells the restore prompt the last run died.
+        SnapshotCapture.captureNow(cleanExit: true)
     }
 
     // MARK: - UNUserNotificationCenterDelegate

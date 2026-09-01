@@ -137,13 +137,13 @@ dmg: app tmux-bundle
 	cp build/tmux-bundle/tmux build/amux.app/Contents/MacOS/
 	cp build/tmux-bundle/LICENSE-tmux.txt build/amux.app/Contents/Resources/
 	cp app/Resources/amux.icns build/amux.app/Contents/Resources/
-	@# Copy the SwiftPM-generated resource bundle (contains amux.icns,
-	@# loaded at runtime via Bundle.module). The generated accessor only
-	@# checks Bundle.main.bundleURL/AmuxApp_amux-app.bundle — which for
-	@# an .app means the TOP of the bundle, not Contents/Resources/.
-	@# Without this, the app aborts on launch with "could not load
-	@# resource bundle: from /Applications/amux.app/AmuxApp_amux-app.bundle".
-	cp -R app/.build/release/AmuxApp_amux-app.bundle build/amux.app/
+	@# amux.icns is loaded at runtime via Bundle.main (AppDelegate), not the
+	@# SwiftPM-generated AmuxApp_amux-app.bundle, so that resource bundle is
+	@# not copied in. It used to be, placed loose at the .app root — but
+	@# recent codesign refuses to seal an .app with any top-level item
+	@# besides Contents/ ("unsealed contents present in the bundle root"),
+	@# and the generated resource-bundle accessor only ever looked at the
+	@# .app root, so there was no path inside Contents/ that satisfied both.
 	@# Re-sign so the signing identifier matches CFBundleIdentifier.
 	@# Swift's default adhoc sign uses "amux-app-<hash>" which is a
 	@# different identity than the bundle, and some macOS subsystems

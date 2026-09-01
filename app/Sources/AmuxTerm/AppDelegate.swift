@@ -166,7 +166,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         NSApp.setActivationPolicy(.regular)
 
         // Set app icon
-        if let iconURL = Bundle.module.url(forResource: "amux", withExtension: "icns"),
+        if let iconURL = Bundle.main.url(forResource: "amux", withExtension: "icns"),
            let icon = NSImage(contentsOf: iconURL) {
             NSApp.applicationIconImage = icon
         }

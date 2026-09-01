@@ -75,6 +75,11 @@ run("BorderFormat", BorderFormatTests.runAll)
 // every notification post.
 run("DevBundle", DevBundleTests.runAll)
 
+// Release bundle regression tests: pin down the tmux-configure jemalloc
+// flag, the -lncursesw sed ordering, and the codesign top-level-item
+// restriction that broke `make dmg` on 2026-07-24.
+run("ReleaseBundle", ReleaseBundleTests.runAll)
+
 print("\n=== Integration Tests: \(totalPassed) passed, \(totalFailed) failed ===")
 
 if totalFailed > 0 {

@@ -114,12 +114,13 @@ sh autogen.sh
 PKG_CONFIG_PATH="$BUILD_DIR/lib/pkgconfig" \
 CPPFLAGS="-I$BUILD_DIR/include -I$BUILD_DIR/include/ncursesw" \
 LDFLAGS="-L$BUILD_DIR/lib" \
-./configure --enable-utf8proc
+./configure --enable-utf8proc --disable-jemalloc
 
 # Force static linking: configure adds -lncurses/-lutf8proc/-levent_core
 # which the macOS linker resolves to system dynamic libs. Replace with
 # explicit .a paths so the linker has no choice.
 sed -i '' "s|-lutf8proc|$BUILD_DIR/lib/libutf8proc.a|g" Makefile
+sed -i '' "s|-lncursesw|$BUILD_DIR/lib/libncursesw.a|g" Makefile
 sed -i '' "s|-lncurses|$BUILD_DIR/lib/libncursesw.a|g" Makefile
 sed -i '' "s|-levent_core|$BUILD_DIR/lib/libevent_core.a|g" Makefile
 sed -i '' "s|-levent |$BUILD_DIR/lib/libevent.a |g" Makefile

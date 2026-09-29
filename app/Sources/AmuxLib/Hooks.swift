@@ -13,7 +13,7 @@ public enum Hooks {
     private static let hookCommand = "AMUX_SESSION=$(tmux display-message -t $TMUX_PANE -p '#{session_name}') amux-cli alert-pane $(tmux display-message -t $TMUX_PANE -p '#{pane_index}')"
 
     /// Path to Claude Code's global settings.
-    private static var claudeSettingsPath: URL {
+    public static var claudeSettingsPath: URL {
         URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".claude")
             .appendingPathComponent("settings.json")
@@ -21,9 +21,10 @@ public enum Hooks {
 
     /// Ensure the Claude Code Notification hook is installed.
     /// Reads existing settings, adds the hook if missing, writes back.
-    /// Does nothing if the hook is already present.
-    public static func ensureClaudeHook() throws {
-        let path = claudeSettingsPath
+    /// Does nothing if the hook is already present. `settingsPath` exists so
+    /// tests can point at a scratch file; production uses the default.
+    public static func ensureClaudeHook(settingsPath: URL = claudeSettingsPath) throws {
+        let path = settingsPath
 
         // Read existing settings or start with empty object
         var settings: [String: Any]
@@ -70,7 +71,7 @@ public enum Hooks {
         try jsonData.write(to: path)
 
         FileHandle.standardError.write(
-            "Installed amux notification hook in ~/.claude/settings.json\n".data(using: .utf8)!
+            "Installed amux notification hook in \(path.path)\n".data(using: .utf8)!
         )
     }
 
@@ -84,10 +85,14 @@ public enum Hooks {
             guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return false }
             return entryHooks.contains { hook in
                 guard let command = hook["command"] as? String else { return false }
-                return command.contains("amux alert-pane")
+                return installedCommandMarkers.contains { command.contains($0) }
             }
         }
     }
+
+    /// Substrings that identify an amux hook: the current `amux-cli`
+    /// command (see `hookCommand`) and the legacy `amux` one it replaced.
+    private static let installedCommandMarkers = ["amux-cli alert-pane", "amux alert-pane"]
 }
 
 public enum HooksError: Error, CustomStringConvertible {

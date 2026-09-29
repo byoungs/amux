@@ -7,7 +7,7 @@
 # make publish   Tag and publish to GitHub (requires gh, clean tree)
 # make clean     Remove build artifacts
 
-VERSION := 0.3.0
+VERSION := 0.4.0
 
 .PHONY: dev test validate clean setup app app-dev app-test app-clean tmux-bundle dmg release publish
 
@@ -173,7 +173,9 @@ publish:
 		exit 1; \
 	fi
 	@$(MAKE) release
-	@ASSETS="build/amux.dmg"; \
+	@# demo.gif is gitignored (large) but README embeds it from the latest
+	@# release, so attach it when the local copy exists.
+	@ASSETS="build/amux.dmg $(wildcard demo/demo.gif)"; \
 	git tag -a "v$(VERSION)" -m "v$(VERSION)"; \
 	git push origin "v$(VERSION)"; \
 	gh release create "v$(VERSION)" $$ASSETS --title "amux v$(VERSION)" --generate-notes

@@ -8,6 +8,7 @@ amux is a terminal workspace for running multiple Claude Code agents in parallel
 2. Open the DMG
 3. Drag **amux** to your **Applications** folder
 4. Launch **amux** from Applications (or Spotlight)
+5. First launch only: macOS blocks unnotarized apps. Open **System Settings → Privacy & Security** and click **Open Anyway** (or run `xattr -dr com.apple.quarantine /Applications/amux.app`).
 
 That's it. Everything is bundled — no Homebrew, Rust, or terminal setup needed.
 
@@ -30,8 +31,11 @@ All shortcuts use **Cmd**. No prefix key.
 | **Cmd-+** | Zoom in (full screen) |
 | **Cmd--** | Zoom out (back to grid / space picker) |
 | **Cmd-P** | Space picker |
+| **Cmd-Y** | Peek at and answer a background agent's permission prompt |
 | **Cmd-C** | Copy selected text |
 | **Cmd-V** | Paste |
+| **Cmd-click** | Open a link (URLs in the browser, files in their default app) |
+| **Cmd-/** | Show every shortcut |
 | **Shift-Enter** | Newline in Claude Code input |
 
 ## Workflow
@@ -66,8 +70,8 @@ Spaces are separate workspaces (like virtual desktops for your agents).
 ## Tips
 
 - **Cmd-Q** quits the app but your session stays alive. Relaunch to pick up where you left off.
-- Click on a pane to focus it. Scroll wheel works for history.
-- Right-click for Copy/Paste menu.
+- After a reboot, amux offers to restore your spaces and panes, resuming Claude Code conversations.
+- Click on a pane to focus it. Scroll wheel works for history; drag to select text, then Cmd-C.
 
 ## Requirements
 

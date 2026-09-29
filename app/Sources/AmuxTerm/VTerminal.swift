@@ -201,7 +201,13 @@ final class VTerminal {
         fallbacks.osc = onUnrecognisedOSC
         vterm_screen_set_unrecognised_fallbacks(screen, &fallbacks, selfPtr)
 
-        vterm_screen_set_damage_merge(screen, VTERM_DAMAGE_SCROLL)
+        // ROW, not SCROLL: in SCROLL mode libvterm defers a scroll's moverect
+        // callback to the next flush, but OSC 8 stamps are written as text
+        // arrives — already in post-scroll coordinates. Replaying the scroll
+        // at flush then shifted them a second time, copying a link onto the
+        // row above it. ROW delivers moverect when the scroll happens, in
+        // order with the text. The renderer works from dirtyRows either way.
+        vterm_screen_set_damage_merge(screen, VTERM_DAMAGE_ROW)
         // Allocate alt-screen buffer so DECSET 1049/1047/47 actually engage
         // and libvterm fires VTERM_PROP_ALTSCREEN settermprop callbacks.
         vterm_screen_enable_altscreen(screen, 1)
@@ -297,8 +303,20 @@ final class VTerminal {
         return (c.rgb.red, c.rgb.green, c.rgb.blue)
     }
 
-    // Cache NSColor objects to avoid per-cell allocation
+    /// True for the right half of a double-width glyph. libvterm stores
+    /// (uint32_t)-1 in chars[0] of that cell and reports its width as 1
+    /// (screen.c vterm_screen_get_cell), so width alone can't identify it.
+    /// The lead cell already paints both columns; the continuation must not.
+    static func isWideContinuation(_ cell: VTermScreenCell) -> Bool {
+        cell.chars.0 == UInt32.max
+    }
+
+    // Cache NSColor objects to avoid per-cell allocation. Truecolor output
+    // can mint up to 16M distinct keys, so the cache is dropped wholesale
+    // once it passes the limit; the working set refills within one frame.
+    static let colorCacheLimit = 4096
     private static var colorCache: [UInt32: NSColor] = [:]
+    static var colorCacheCount: Int { colorCache.count }
 
     static func cachedColor(r: UInt8, g: UInt8, b: UInt8) -> NSColor {
         let key = UInt32(r) << 16 | UInt32(g) << 8 | UInt32(b)
@@ -306,6 +324,9 @@ final class VTerminal {
             return cached
         }
         let color = NSColor(red: CGFloat(r)/255, green: CGFloat(g)/255, blue: CGFloat(b)/255, alpha: 1)
+        if colorCache.count >= colorCacheLimit {
+            colorCache.removeAll(keepingCapacity: true)
+        }
         colorCache[key] = color
         return color
     }

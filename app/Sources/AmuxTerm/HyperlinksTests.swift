@@ -148,6 +148,39 @@ enum HyperlinksTests {
                   "link should move from row 1 to row 0")
         }
 
+        // Scrolling down (reverse scroll, e.g. a TUI inserting a line) must
+        // walk rows bottom-up so a moved stamp isn't copied twice.
+        do {
+            let grid = HyperlinkGrid(rows: 4, cols: 10)
+            grid.feed(";https://a.com")
+            grid.cursorMoved(fromRow: 0, fromCol: 0, toRow: 0, toCol: 3)
+            grid.feed(";")
+            // Rows 0..2 move to rows 1..3.
+            grid.moveRect(destStartRow: 1, destStartCol: 0,
+                          srcStartRow: 0, srcStartCol: 0,
+                          rowCount: 3, colCount: 10)
+            check("grid-scroll-down-follows",
+                  grid.uri(row: 1, col: 0) == "https://a.com"
+                      && grid.uri(row: 2, col: 0) == nil && grid.uri(row: 3, col: 0) == nil,
+                  "row1 \(String(describing: grid.uri(row: 1, col: 0))) row2 \(String(describing: grid.uri(row: 2, col: 0)))")
+            check("grid-stamp-count-tracks-moves", grid.stampedCells == 6,
+                  "stampedCells \(grid.stampedCells)")
+        }
+
+        // Once the last link scrolls away the counter is back to zero, which
+        // is what lets per-line scrolls of plain output skip the grid.
+        do {
+            let grid = HyperlinkGrid(rows: 2, cols: 10)
+            grid.feed(";https://a.com")
+            grid.cursorMoved(fromRow: 0, fromCol: 0, toRow: 0, toCol: 4)
+            grid.feed(";")
+            grid.moveRect(destStartRow: 0, destStartCol: 0,
+                          srcStartRow: 1, srcStartCol: 0,
+                          rowCount: 1, colCount: 10)
+            check("grid-stamp-count-zero-after-scroll-off", grid.stampedCells == 0,
+                  "stampedCells \(grid.stampedCells)")
+        }
+
         do {
             let grid = HyperlinkGrid(rows: 2, cols: 10)
             grid.feed(";https://a.com")

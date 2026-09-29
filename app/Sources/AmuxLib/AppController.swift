@@ -5,7 +5,18 @@ import Foundation
 /// Handles user actions by reading tmux state and executing effects
 /// through the Tmux executor. Tests inject FakeTmux via Tmux.executor.
 public class AppController {
-    public private(set) var session: String
+    /// The session our client is attached to. Actions run on a background
+    /// queue while PermissionWatcher reads this from its own, so access is
+    /// locked.
+    public private(set) var session: String {
+        get { sessionLock.lock(); defer { sessionLock.unlock() }; return _session }
+        set { sessionLock.lock(); _session = newValue; sessionLock.unlock() }
+    }
+    private var _session: String
+    private let sessionLock = NSLock()
+
+    /// Written by actions (on the action queue) and read by key planning (on
+    /// main); OrderedDispatcher guarantees the two never overlap.
     public var mode: InputMode = .normal
 
     /// The TTY device path of our PTY's tmux client (e.g., /dev/ttys005).
@@ -24,7 +35,7 @@ public class AppController {
     public var onSplitSelectedChanged: (((Int, Int, Int, Int)?) -> Void)?
 
     public init(session: String) {
-        self.session = session
+        self._session = session
     }
 
     /// Handle a user action (from keyboard dispatch).
@@ -78,15 +89,14 @@ public class AppController {
     }
 
     private func handleZoomTo(_ pane: Int) throws {
-        if try Tmux.windowCount(session) > 1 {
+        let (windows, count) = try Tmux.windowAndPaneCount(session)
+        if windows > 1 {
             // Split view: Cmd-1/2 selects the pane within the split window
-            let count = try Tmux.paneCount(session)
             if pane < count {
                 try Tmux.selectPane(session, paneIndex: pane)
             }
             return
         }
-        let count = try Tmux.paneCount(session)
         if pane >= count {
             Tmux.displayMessage(session, message: "Pane \(pane + 1) does not exist (have \(count))")
             return
@@ -108,13 +118,6 @@ public class AppController {
     // MARK: - New pane
 
     private func handleNewPane() throws {
-        let count = try Tmux.paneCount(session)
-        let cap = (try? Tmux.getSessionCap(session)) ?? 4
-        let overridden = (try? Tmux.isCapOverridden(session)) ?? false
-        if count >= cap && !overridden {
-            launchParkPromptPopup()
-            return
-        }
         let activeIndex = try Tmux.activePaneIndex(session)
         let activeCwd = try Tmux.paneCwd(session, paneIndex: activeIndex)
         let paneIndex = try Tmux.createPane(session, cwd: activeCwd.isEmpty ? nil : activeCwd)
@@ -123,15 +126,6 @@ public class AppController {
             let title = Util.autoTitle(dir: cwd)
             try Tmux.setTitle(session, paneIndex: paneIndex, title: title)
         }
-    }
-
-    private func launchParkPromptPopup() {
-        let bin = Config.findAmuxCLI()
-        Tmux.launch([
-            "display-popup", "-t", session, "-E", "-w", "70", "-h", "16",
-            "-T", " Cap reached — pick a pane to send to backlog ",
-            "\(bin) prompt park \(session)",
-        ])
     }
 
     // MARK: - Spaces / Send (fire-and-forget popup — tmux manages lifecycle)
@@ -353,6 +347,15 @@ public class AppController {
     /// (e.g., in tests). This is needed because `display-message -p`
     /// without a target picks an arbitrary client when multiple exist.
     private func resolveCurrentSession() {
+        if let found = attachedSession(), found != session {
+            session = found
+        }
+    }
+
+    /// Ask tmux which session our client is attached to right now. A query:
+    /// it does not update `session`. One tmux round-trip — never call it on
+    /// the main thread.
+    public func attachedSession() -> String? {
         if let tty = clientTTY {
             let output = Tmux.runRaw([
                 "list-clients", "-F", "#{client_tty}:#{client_session}",
@@ -361,18 +364,13 @@ public class AppController {
                 let parts = line.split(separator: ":", maxSplits: 1)
                 if parts.count == 2, parts[0] == tty {
                     let found = String(parts[1])
-                    if !found.isEmpty, found != session {
-                        session = found
-                    }
-                    return
+                    return found.isEmpty ? nil : found
                 }
             }
         }
         // Fallback (no tty, or client not found)
         let current = Tmux.runRaw(["display-message", "-p", "#{session_name}"])
-        if !current.isEmpty, current != session {
-            session = current
-        }
+        return current.isEmpty ? nil : current
     }
 
     // MARK: - Helpers

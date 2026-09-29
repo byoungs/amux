@@ -52,6 +52,10 @@ public enum TmuxBackgroundTests {
             return try inner.execute(args)
         }
 
+        func executeUntrimmed(_ args: [String]) throws -> String {
+            try execute(args)
+        }
+
         func launch(_ args: [String]) {
             inner.launch(args)
         }

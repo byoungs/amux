@@ -29,7 +29,7 @@ public enum HelpContent {
             Entry(key: "⌘-", description: "Zoom out — return to grid, or open Spaces if already in grid"),
             Entry(key: "⌘]", description: "Next pane — cycle forward through panes"),
             Entry(key: "⌘[", description: "Previous pane — cycle backward through panes"),
-            Entry(key: "⌘1-9", description: "Focus pane by number — zoom directly to pane N"),
+            Entry(key: "⌘1-9", description: "Focus pane by number — press again to zoom it full-screen"),
         ]),
         Section(title: "Pane Management", entries: [
             Entry(key: "⌘n", description: "New pane — create a new shell pane"),
@@ -51,6 +51,7 @@ public enum HelpContent {
             Entry(key: "⌘q", description: "Quit — close the application"),
             Entry(key: "⌘c", description: "Copy — copy selected text to clipboard"),
             Entry(key: "⌘v", description: "Paste — paste from clipboard"),
+            Entry(key: "⌘-click", description: "Open link — URLs in the browser, files in their default app"),
         ]),
         Section(title: "Split-Pick Mode", entries: [
             Entry(key: "←→↑↓", description: "Navigate — move selection between panes"),

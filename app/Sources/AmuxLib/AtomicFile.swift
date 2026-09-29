@@ -8,22 +8,34 @@
 import Foundation
 
 public enum AtomicFile {
-    /// Write data to a path atomically: temp file in the same directory,
-    /// then `replaceItemAt`. Parent directories are created if missing.
+    /// Write data to a path atomically: a temp file unique to this write in
+    /// the same directory, then rename(2) over the destination. Parent
+    /// directories are created if missing.
+    ///
+    /// The temp name must be per-write: the app and amux-cli can save the
+    /// same file concurrently, and a shared temp path lets one writer rename
+    /// another's half-written bytes into place. rename(2) rather than
+    /// `replaceItemAt`: it atomically replaces or creates in one call (no
+    /// exists-check race), and concurrent `replaceItemAt` swaps onto one
+    /// destination were observed to hang in renamex_np.
     public static func write(_ data: Data, to path: URL) throws {
         let parent = path.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
 
-        let tmpPath = path.deletingPathExtension()
-            .appendingPathExtension("\(path.pathExtension).tmp")
-        try data.write(to: tmpPath)
+        let tmpPath = parent.appendingPathComponent(".\(path.lastPathComponent).\(UUID().uuidString).tmp")
+        do {
+            try data.write(to: tmpPath)
+        } catch {
+            // A partial write (disk full) must not leave debris behind.
+            try? FileManager.default.removeItem(at: tmpPath)
+            throw error
+        }
 
-        if FileManager.default.fileExists(atPath: path.path) {
-            _ = try FileManager.default.replaceItemAt(path, withItemAt: tmpPath)
-        } else {
-            // replaceItemAt requires an existing original on some volumes;
-            // a plain move is already atomic when nothing is there to swap.
-            try FileManager.default.moveItem(at: tmpPath, to: path)
+        guard rename(tmpPath.path, path.path) == 0 else {
+            let code = errno
+            try? FileManager.default.removeItem(at: tmpPath)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code),
+                          userInfo: [NSFilePathErrorKey: path.path])
         }
     }
 }

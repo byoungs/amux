@@ -326,6 +326,21 @@ enum ConfigTests {
                   "expected 100-char X line in capture-pane -J output; got: '\(captured)'")
         }
 
+        // New panes are told the terminal supports OSC 8, so Claude Code
+        // emits real hyperlinks regardless of which terminal started tmux.
+        do {
+            let ts = TestSession(paneCount: 1)
+            ts.useCleanShell()
+            tmux("send-keys", "-t", "\(ts.name):0.0", "echo HL=$FORCE_HYPERLINK", "Enter")
+            var seen = ""
+            for _ in 0..<30 {
+                seen = tmux("capture-pane", "-p", "-t", "\(ts.name):0.0").stdout
+                if seen.contains("HL=1") { break }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            check("forceHyperlink-inNewPanes", seen.contains("HL=1"), "pane shows: \(seen)")
+        }
+
         print("ConfigTests: \(passed) passed, \(failed) failed")
         return (passed, failed)
     }

@@ -29,6 +29,15 @@ setlinebuf(stdout)
 // Isolate tests on a unique tmux socket tied to this test process's PID.
 Tmux.executor = LiveTmux(socket: testTmuxSocket)
 
+// Isolate amux state too. The test server inherits this environment, so the
+// real hooks it runs (update-title → snapshot request, alert state) write to
+// a scratch dir instead of the developer's live ~/.amux. Set before the first
+// tmux call starts the server.
+let testAmuxHome = FileManager.default.temporaryDirectory
+    .appendingPathComponent("amux-itest-\(ProcessInfo.processInfo.processIdentifier)")
+try? FileManager.default.createDirectory(at: testAmuxHome, withIntermediateDirectories: true)
+setenv(AmuxPaths.homeOverrideKey, testAmuxHome.path, 1)
+
 // Clean up the isolated tmux server on exit, no matter what.
 atexit {
     _ = try? Process.run(
@@ -40,7 +49,13 @@ atexit {
 var totalPassed = 0
 var totalFailed = 0
 
+// AMUX_ITEST_ONLY=HookLatency,BellRouting runs just those suites — for
+// iterating on one area. `make validate` never sets it.
+let onlySuites = ProcessInfo.processInfo.environment["AMUX_ITEST_ONLY"]
+    .map { Set($0.split(separator: ",").map(String.init)) }
+
 func run(_ name: String, _ block: () -> (passed: Int, failed: Int)) {
+    if let only = onlySuites, !only.contains(name) { return }
     let result = block()
     totalPassed += result.passed
     totalFailed += result.failed
@@ -54,6 +69,9 @@ run("Alert", AlertTests.runAll)
 run("E2EAttention", E2EAttentionTests.runAll)
 run("Send", SendTests.runAll)
 run("HookScoping", HookScopingTests.runAll)
+run("HookLatency", HookLatencyTests.runAll)
+run("BellRouting", BellRoutingTests.runAll)
+run("Clipboard", ClipboardTests.runAll)
 run("SplitVisual", SplitVisualTests.runAll)
 run("SplitMode", SplitModeTests.runAll)
 run("SessionResolution", SessionResolutionTests.runAll)

@@ -1,5 +1,5 @@
 #if DEBUG
-import Foundation
+import AppKit
 import AmuxLib
 
 enum KeyInputTests {
@@ -51,6 +51,20 @@ enum KeyInputTests {
             let expected = "\u{1B}[\(48 + i);5u".data(using: .utf8)!
             check("Cmd-\(i)", KeyInput.ctrlBytes(for: String(i)), expected)
         }
+
+        // Tab / Shift-Tab (keyCode 48). Shift-Tab must be back-tab (CSI Z) —
+        // Claude Code binds it to mode switching; a plain Tab is a different key.
+        func tabEvent(_ flags: NSEvent.ModifierFlags) -> NSEvent? {
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: flags,
+                timestamp: 0, windowNumber: 0, context: nil,
+                characters: "\t", charactersIgnoringModifiers: "\t",
+                isARepeat: false, keyCode: 48)
+        }
+        check("Tab", tabEvent([]).flatMap(KeyInput.ptyBytes(for:)) ?? Data(), Data([0x09]))
+        check("Shift-Tab back-tab",
+              tabEvent(.shift).flatMap(KeyInput.ptyBytes(for:)) ?? Data(),
+              "\u{1B}[Z".data(using: .utf8)!)
 
         // Cmd-Y → .peek (permission peek)
         if KeyCommand.amuxCommand(for: "y") == .peek { passed += 1 }

@@ -12,6 +12,10 @@ public protocol TmuxExecutor {
     @discardableResult
     func execute(_ args: [String]) throws -> String
 
+    /// Execute a tmux command and return stdout exactly as printed. For
+    /// content where whitespace is data (the paste buffer).
+    func executeUntrimmed(_ args: [String]) throws -> String
+
     /// Launch a tmux command without waiting for it to exit.
     /// Used for interactive popups where tmux manages the lifecycle.
     func launch(_ args: [String])
@@ -66,6 +70,10 @@ public class LiveTmux: TmuxExecutor {
     }
 
     public func execute(_ args: [String]) throws -> String {
+        try executeUntrimmed(args).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public func executeUntrimmed(_ args: [String]) throws -> String {
         LiveTmux.processLock.lock()
         defer { LiveTmux.processLock.unlock() }
 
@@ -109,8 +117,7 @@ public class LiveTmux: TmuxExecutor {
             let stderr = String(data: errData, encoding: .utf8) ?? ""
             throw AmuxError.tmux(stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        return String(data: outData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return String(data: outData, encoding: .utf8) ?? ""
     }
 
     public func launch(_ args: [String]) {

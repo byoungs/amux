@@ -30,6 +30,14 @@ back out. You never lose your place. You never miss a prompt.
 
 The app bundles everything — no dependencies, no Homebrew, no tmux install.
 
+amux isn't notarized yet, so the first launch is blocked with "amux can't be
+opened". Allow it once in **System Settings → Privacy & Security → Open
+Anyway**, or clear the download flag from a terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/amux.app
+```
+
 ### Build from Source
 
 ```bash
@@ -140,8 +148,8 @@ neighbor expands to fill the gap. No shuffling.
 
 ## Key Bindings
 
-All bindings use `Cmd` in the amux app. If running in a terminal with
-tmux directly, these are `Ctrl` keys.
+All bindings use `Cmd` and are handled by the amux app itself (tmux's
+prefix key is disabled). `Cmd-/` shows them all in-app.
 
 ### Navigate
 
@@ -149,7 +157,7 @@ tmux directly, these are `Ctrl` keys.
 |-----|--------|
 | `Cmd-]` | Next pane (wraps around, works while zoomed) |
 | `Cmd-[` | Previous pane (wraps around, works while zoomed) |
-| `Cmd-1..9` | Jump directly to pane N |
+| `Cmd-1..9` | Jump to pane N; press again to zoom it full screen |
 
 ### Focus
 
@@ -167,16 +175,24 @@ tmux directly, these are `Ctrl` keys.
 | `Cmd-S` | Send current pane to another space |
 | `Cmd-L` | Split view (two panes side by side) |
 
-## Commands
+### Agents and links
 
-```
-amux               Start or attach to a session
-amux start         Start a new session
-amux new [name]    Create a new pane (auto-names from cwd + git branch)
-amux list          List all panes
-amux spaces        Space picker
-amux send          Send pane to another space
-```
+| Key | Action |
+|-----|--------|
+| `Cmd-Y` | Peek at a background pane's permission prompt and answer it in place |
+| `Cmd`-click | Open a link: URLs in your browser, files in their default app |
+| `Cmd-/` | Help — every shortcut |
+
+Claude Code's links (including markdown links) are real hyperlinks in
+amux, so `Cmd`-click opens the exact target. Plain-text file paths are
+clickable when the file exists, relative to the pane you clicked.
+
+### Session restore
+
+amux snapshots your open spaces and panes as you work. If nothing is
+running the next time you launch (after a reboot or a crash), amux offers
+to bring them back: shells reopen in their directories and Claude Code
+panes resume their conversations.
 
 ## How Attention Management Works
 
@@ -197,7 +213,7 @@ amux stores state in `~/.amux/`. The tmux session name defaults to `amux` —
 override with `AMUX_SESSION=myname amux`.
 
 Pane titles are auto-generated from the working directory and git branch:
-`project-name/feature-branch`. Override with `amux new "custom name"`.
+`project-name/feature-branch`.
 
 ## Requirements
 
@@ -217,7 +233,7 @@ Pane titles are auto-generated from the working directory and git branch:
 
 ```bash
 make dev       # Build, kill+relaunch app, re-apply tmux config
-make test      # Lint + fast tests + release build
+make test      # Fast unit tests (no tmux needed)
 make validate  # Full suite including tmux integration tests
 make release   # Validate + build DMG
 make publish   # Tag + push to GitHub releases
@@ -237,5 +253,5 @@ app/Sources/
   AmuxCLI/    CLI binary dispatched from tmux key bindings and hooks
 ```
 
-`make test` runs lint + unit tests (no tmux needed). `make validate`
+`make test` runs the unit tests (no tmux needed). `make validate`
 adds tmux integration tests — use it before claiming work is complete.

@@ -182,10 +182,16 @@ public enum SnapshotCapture {
     /// Ask for a capture without waiting for it: spawns `amux-cli snapshot`,
     /// which does the coalescing and the work in its own process. Safe to call
     /// from a tmux hook or from the app.
+    ///
+    /// Every standard stream is detached, stdin included. From a hook, stdin
+    /// is the `run-shell` job's pipe, and tmux does not finish the job — or
+    /// the command that fired the hook — until every holder closes it. An
+    /// inherited stdin made each select-pane wait out the whole capture.
     public static func requestAsync() {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: Config.findAmuxCLI())
         process.arguments = ["snapshot"]
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()

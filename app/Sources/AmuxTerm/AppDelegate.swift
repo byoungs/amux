@@ -40,6 +40,7 @@ struct AmuxTermApp {
             ScrollAccumulatorTests.runAll()
             PassthroughDecoderTests.runAll()
             VTerminalTests.runAll()
+            PTYTests.runAll()
             SyncOutputTests.runAll()
             LayoutTests.runAll()
             BellTests.runAll()
@@ -59,12 +60,17 @@ struct AmuxTermApp {
             CliDispatchTests.runAll()
             PermissionPromptTests.runAll()
             PromptQueueTests.runAll()
+            OrderedDispatcherTests.runAll()
+            SpaceNameTests.runAll()
+            LinkTargetTests.runAll()
             PermissionWatcherTests.runAll()
             TmuxBackgroundTests.runAll()
             SessionSnapshotTests.runAll()
             ClaudeSessionTests.runAll()
             RestorePlanTests.runAll()
             AmuxPathsTests.runAll()
+            HooksTests.runAll()
+            AtomicFileTests.runAll()
             TmuxSocketTests.runAll()
             ClaudeScanTests.runAll()
             print("All tests passed")
@@ -142,6 +148,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     // Last peek count pushed to the status bar; avoids redundant option-sets
     // and status refreshes when the count is unchanged between polls.
     private var lastPeekCount = -1
+
+    // tmux work that used to block the main thread — key-bound actions and
+    // alert events — runs here, one at a time. Serial so actions never
+    // interleave their tmux commands with each other.
+    private let actionQueue = DispatchQueue(label: "amux.actions", qos: .userInteractive)
+    // Keeps keystrokes in order around off-main actions (see OrderedDispatcher).
+    private var keyDispatcher: OrderedDispatcher<NSEvent>?
 
     // App Nap activity assertion. macOS throttles backgrounded apps —
     // including their main dispatch queue — which delays the
@@ -237,20 +250,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         }
 
         let termView = TerminalView(terminal: terminal, pty: pty)
-        termView.session = session
+        termView.currentSession = { [weak controller] in controller?.session ?? session }
+        termView.lookUpSession = { [weak controller] in controller?.attachedSession() }
         controller.clientTTY = pty.slavePath
         self.termView = termView
 
-        // Wire up split-selected border overlay
+        // Wire up split-selected border overlay. Fired from the action
+        // queue, so hop to main before touching the view.
         controller.onSplitSelectedChanged = { [weak termView] bounds in
-            guard let tv = termView else { return }
-            if let (top, left, width, height) = bounds {
-                tv.splitSelectedPaneBounds = TerminalView.PaneBounds(
-                    top: top, left: left, width: width, height: height)
-            } else {
-                tv.splitSelectedPaneBounds = nil
+            DispatchQueue.main.async {
+                guard let tv = termView else { return }
+                if let (top, left, width, height) = bounds {
+                    tv.splitSelectedPaneBounds = TerminalView.PaneBounds(
+                        top: top, left: left, width: width, height: height)
+                } else {
+                    tv.splitSelectedPaneBounds = nil
+                }
+                tv.needsDisplay = true
             }
-            tv.needsDisplay = true
         }
 
         pty.onExit = {
@@ -316,7 +333,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Intercept keys at the application level.
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self, let controller = self.controller else { return event }
+            guard let self = self, self.controller != nil else { return event }
 
             #if DEBUG
             if let chars = event.charactersIgnoringModifiers,
@@ -369,23 +386,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 }
             }
 
-            let action = KeyInput.action(for: event, mode: controller.mode)
-            switch action {
-            case .amux(.peek):
-                self.termView?.togglePeekPopup(current: self.permissionWatcher?.queue.current?.prompt)
-                return nil
-            case .amux(let command):
-                controller.handleAction(command)
-                return nil
-            case .sendToPTY(let data):
-                self.termView?.pty.write(data)
-                return nil
-            case .ignore:
-                return nil
-            case .system:
+            // Quit goes straight to AppKit. Everything else — Copy and Paste
+            // included — goes through the dispatcher, which runs it now or
+            // holds it until an in-flight action finishes, so a paste right
+            // after Cmd-N lands in the new pane. (Planning also reads
+            // controller.mode, which only the dispatcher may do safely.)
+            if KeyInput.isQuit(event) {
                 return event
             }
+            self.keyDispatcher?.submit(event)
+            return nil
         }
+
+        keyDispatcher = OrderedDispatcher<NSEvent>(
+            plan: { [weak self] event in
+                guard let self = self else { return .inline {} }
+                return self.dispatchStep(for: event, controller: controller)
+            },
+            runOffMain: { [actionQueue] work in actionQueue.async(execute: work) },
+            returnToMain: { DispatchQueue.main.async(execute: $0) })
 
         NSApp.activate(ignoringOtherApps: true)
 
@@ -439,16 +458,71 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         watcher.start()
     }
 
+    /// Map a key event to how the dispatcher should run it. Planned at run
+    /// time on main, so `controller.mode` reflects every earlier action.
+    private func dispatchStep(for event: NSEvent, controller: AppController) -> DispatchStep {
+        switch KeyInput.action(for: event, mode: controller.mode) {
+        case .amux(.peek):
+            return .inline { [weak self] in
+                self?.termView?.togglePeekPopup(current: self?.permissionWatcher?.queue.current?.prompt)
+            }
+        case .amux(let command):
+            return .offMain { controller.handleAction(command) }
+        case .sendToPTY(let data):
+            guard let tv = termView else { return .inline {} }
+            // First keystroke after a wheel scroll: if that left the pane in
+            // copy-mode, Esc must precede the key or copy-mode swallows it.
+            // Finding out is a tmux round-trip, so it runs off main; keys
+            // typed meanwhile are held behind it and stay in order.
+            if tv.mayBeInCopyMode {
+                tv.clearCopyModeFlag()
+                let cached = controller.session
+                let pty = tv.pty
+                return .offMain {
+                    // Ask tmux, not the cache: the spaces picker switches the
+                    // client without an amux action to refresh it.
+                    let session = controller.attachedSession() ?? cached
+                    if let esc = TerminalView.copyModeExitBytes(session: session) { pty.write(esc) }
+                    pty.write(data)
+                }
+            }
+            return .inline { tv.pty.write(data) }
+        case .system:
+            return systemStep(for: event)
+        case .ignore:
+            return .inline {}
+        }
+    }
+
+    /// Copy and Paste (Quit never reaches the dispatcher). Copy reads tmux's
+    /// buffer, a round-trip, so it runs off main; paste is a PTY write.
+    private func systemStep(for event: NSEvent) -> DispatchStep {
+        guard let tv = termView else { return .inline {} }
+        switch event.charactersIgnoringModifiers {
+        case "c":
+            return .offMain {
+                guard let text = Tmux.pasteBuffer(), !text.isEmpty else { return }
+                DispatchQueue.main.async { TerminalView.setPasteboard(text) }
+            }
+        case "v":
+            return .inline { tv.paste(nil) }
+        default:
+            return .inline {}
+        }
+    }
+
     private func startAlertEventServer() {
         let path = defaultAlertSocketPath()
         let server = UnixSocketAlertEventServer(socketPath: path)
         self.alertServer = server
         do {
-            try server.start { [weak self] event in
-                // Server handler runs on a background thread. Hop to
-                // main before touching Tmux.executor / UN APIs, both
-                // of which are main-thread-affine.
-                DispatchQueue.main.async {
+            try server.start { [weak self, actionQueue] event in
+                // Server handler runs on a background thread. Process on the
+                // action queue: several tmux round-trips that must not stall
+                // the main thread, serialized with key actions so their
+                // alert-state reads and writes don't interleave.
+                // UNUserNotificationCenter.add is thread-safe.
+                actionQueue.async {
                     guard let poster = self?.notificationPoster else { return }
                     let now = UInt64(Date().timeIntervalSince1970)
                     try? processAlertTrigger(event, nowSeconds: now, poster: poster)

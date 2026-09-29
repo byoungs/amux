@@ -57,6 +57,9 @@ public struct LayoutAction {
     public var openSpaces: Bool
     public var dismissAlert: Int?
     public var errorMessage: String?
+    /// A brief status-bar note for a key that changed nothing, so it
+    /// doesn't look ignored.
+    public var notice: String?
 
     public init() {
         self.layoutString = nil
@@ -66,6 +69,7 @@ public struct LayoutAction {
         self.openSpaces = false
         self.dismissAlert = nil
         self.errorMessage = nil
+        self.notice = nil
     }
 }
 
@@ -177,7 +181,7 @@ public enum LayoutEngine {
             action.selectPane = targetPane
             action.dismissAlert = targetPane
         case (true, true):
-            break
+            action.notice = "Already on pane \(targetPane + 1)"
         case (true, false):
             action.zoom = false
             action.selectPane = targetPane
@@ -329,6 +333,19 @@ public enum LayoutEngineTests {
             let state = makeState(paneCount: 4, zoomed: false)
             let action = LayoutEngine.computeLayout(state: state, event: .zoomTo(0))
             check("zoom to same pane zooms in", action.zoom == true)
+        }
+
+        // Already full-screen on the pane asked for: nothing to change, but
+        // say so — a silent no-op reads as a dropped keystroke or a mistyped
+        // number.
+        do {
+            var state = makeState(paneCount: 4, zoomed: true)
+            state.activePane = 1
+            let action = LayoutEngine.computeLayout(state: state, event: .zoomTo(1))
+            check("zoom to current zoomed pane changes nothing",
+                  action.zoom == nil && action.selectPane == nil && action.layoutString == nil)
+            check("zoom to current zoomed pane says so",
+                  action.notice == "Already on pane 2", "\(String(describing: action.notice))")
         }
 
         // zoom to different pane at working selects

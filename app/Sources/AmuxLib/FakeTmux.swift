@@ -73,6 +73,11 @@ public class FakeTmux: TmuxExecutor {
         launchedCommands.append(args)
     }
 
+    /// The fake never pads its output, so trimmed and untrimmed agree.
+    public func executeUntrimmed(_ args: [String]) throws -> String {
+        try execute(args)
+    }
+
     public func executeBatch(_ commands: [[String]]) throws -> String {
         var lastResult = ""
         for cmd in commands {
@@ -997,6 +1002,10 @@ public class FakeTmux: TmuxExecutor {
             of: "#{window_height}", with: "\(pane?.height ?? 50)")
         result = result.replacingOccurrences(
             of: "#{window_index}", with: "\(window?.index ?? 0)")
+        result = result.replacingOccurrences(
+            of: "#{window_panes}", with: "\(window?.panes.count ?? 0)")
+        result = result.replacingOccurrences(
+            of: "#{session_windows}", with: "\(sessions[sessionName]?.windows.count ?? 0)")
         result = result.replacingOccurrences(
             of: "#{session_name}", with: sessionName)
 

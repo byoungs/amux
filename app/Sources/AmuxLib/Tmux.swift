@@ -46,8 +46,6 @@ public enum AmuxSessionOption {
     public static let state = "@amux-state"
     public static let parkedAt = "@amux-parked-at"
     public static let parkedFrom = "@amux-parked-from"
-    public static let cap = "@amux-cap"
-    public static let capOverridden = "@amux-cap-overridden"
 }
 
 // MARK: - BackgroundSession
@@ -212,27 +210,6 @@ public enum Tmux {
     public static func getSessionState(_ session: String) throws -> SessionState {
         let raw = runRaw(["show-options", "-t", session, "-v", AmuxSessionOption.state])
         return SessionState(rawValue: raw) ?? .foreground
-    }
-
-    /// Read the @amux-cap (per-session pane cap). Missing option = 4 (default).
-    public static func getSessionCap(_ session: String) throws -> Int {
-        let raw = runRaw(["show-options", "-t", session, "-v", AmuxSessionOption.cap])
-        return Int(raw) ?? 4
-    }
-
-    /// Set the @amux-cap on a session.
-    public static func setSessionCap(_ session: String, cap: Int) {
-        runIgnoring(["set-option", "-t", session, AmuxSessionOption.cap, String(cap)])
-    }
-
-    /// Read the @amux-cap-overridden flag. Missing option = false.
-    public static func isCapOverridden(_ session: String) throws -> Bool {
-        runRaw(["show-options", "-t", session, "-v", AmuxSessionOption.capOverridden]) == "1"
-    }
-
-    /// Set the @amux-cap-overridden flag on a session.
-    public static func setCapOverridden(_ session: String, overridden: Bool) {
-        runIgnoring(["set-option", "-t", session, AmuxSessionOption.capOverridden, overridden ? "1" : "0"])
     }
 
     /// List all tmux sessions.
@@ -475,6 +452,21 @@ public enum Tmux {
         return stdout.split(separator: "\n").filter { !$0.isEmpty }.count
     }
 
+    /// Window count and the current window's pane count in one round-trip.
+    /// Key actions need both before doing anything else; two calls were two
+    /// subprocesses on every Cmd-1..9.
+    public static func windowAndPaneCount(_ session: String) throws -> (windows: Int, panes: Int) {
+        let stdout = try runChecked(
+            ["display-message", "-t", session, "-p", "#{session_windows} #{window_panes}"],
+            context: "failed to count windows and panes"
+        )
+        let parts = stdout.split(separator: " ").compactMap { Int($0) }
+        guard parts.count == 2 else {
+            throw AmuxError.tmux("unexpected window/pane counts: \(stdout)")
+        }
+        return (parts[0], parts[1])
+    }
+
     /// Select (focus) a pane by index, with retries.
     public static func selectPane(_ session: String, paneIndex: Int) throws {
         let target = "\(session):.\(paneIndex)"
@@ -532,6 +524,13 @@ public enum Tmux {
         return runRaw(args)
     }
 
+    /// tmux's paste buffer, byte-for-byte — or nil if there is none.
+    /// Untrimmed: `execute` would strip the first copied line's indentation
+    /// and any trailing newline.
+    public static func pasteBuffer() -> String? {
+        try? executor.executeUntrimmed(["show-buffer"])
+    }
+
     /// Send key tokens to a pane. Each token is a tmux key name ("Enter",
     /// "Escape") or literal text. Used to answer a permission prompt in a
     /// pane the user is not focused on.
@@ -571,34 +570,6 @@ public enum Tmux {
     public static func getTitle(_ session: String, paneIndex: Int) throws -> String {
         let target = "\(session):.\(paneIndex)"
         return try run(["display-message", "-t", target, "-p", "#{@amux-title}"])
-    }
-
-    // MARK: - Focus timestamp
-
-    /// Read @amux-focused-at on a pane (0 if unset).
-    public static func getPaneFocusedAt(_ session: String, paneIndex: Int) throws -> UInt64 {
-        let target = "\(session):.\(paneIndex)"
-        let raw = runRaw(["show-options", "-p", "-t", target, "-v", "@amux-focused-at"])
-        return UInt64(raw) ?? 0
-    }
-
-    /// Return the pane index of the least-recently-focused pane in a session.
-    /// Falls back to lowest pane index if no focus times are set.
-    public static func leastRecentlyFocusedPane(_ session: String) throws -> Int {
-        let panes = try listPanes(session)
-        guard !panes.isEmpty else {
-            throw AmuxError.tmux("leastRecentlyFocusedPane: no panes")
-        }
-        var bestIdx = panes[0].index
-        var bestTime = UInt64.max
-        for p in panes {
-            let t = (try? getPaneFocusedAt(session, paneIndex: p.index)) ?? 0
-            if t < bestTime {
-                bestTime = t
-                bestIdx = p.index
-            }
-        }
-        return bestIdx
     }
 
     // MARK: - Alert management
@@ -743,27 +714,6 @@ public enum Tmux {
 
     // MARK: - Layout
 
-    /// Read current pane positions from tmux as Pane structs.
-    public static func readPanePositions(_ session: String) throws -> [Pane] {
-        let stdout = try runChecked(
-            ["list-panes", "-t", session, "-F",
-             "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}"],
-            context: "failed to read pane positions"
-        )
-        return stdout.split(separator: "\n")
-            .filter { !$0.isEmpty }
-            .compactMap { line in
-                let parts = line.split(separator: "\t").map(String.init)
-                guard parts.count >= 5 else { return nil }
-                let id = Int(parts[0].trimmingCharacters(in: CharacterSet(charactersIn: "%"))) ?? 0
-                let x = Int(parts[1]) ?? 0
-                let y = Int(parts[2]) ?? 0
-                let w = Int(parts[3]) ?? 0
-                let h = Int(parts[4]) ?? 0
-                return Pane(id: id, x: x, y: y, w: w, h: h)
-            }
-    }
-
     /// Get ordered list of tmux pane IDs (numeric, like 5, 268).
     public static func getPaneIds(_ session: String) throws -> [Int] {
         let stdout = try runChecked(
@@ -794,39 +744,49 @@ public enum Tmux {
         return stdout == "top"
     }
 
+    /// Format for `gatherLayoutState`: pane geometry plus the window-level
+    /// fields (repeated on every row), so one list-panes answers everything.
+    static let layoutRowFormat = [
+        "#{pane_id}", "#{pane_left}", "#{pane_top}", "#{pane_width}", "#{pane_height}",
+        "#{window_width}", "#{window_height}", "#{window_zoomed_flag}",
+        "#{pane_active}", "#{pane_index}",
+    ].joined(separator: "\t")
+
+    /// Parse `layoutRowFormat` output. Pure. Window fields come from the first
+    /// row; the active pane from the row flagged active.
+    static func parseLayoutRows(_ stdout: String, borderTop: Int) -> LayoutState {
+        var panes: [Pane] = []
+        var windowW = 80, windowH = 24, zoomed = false, activePane = 0
+        for line in stdout.split(separator: "\n") where !line.isEmpty {
+            let f = line.split(separator: "\t").map(String.init)
+            guard f.count >= 10 else { continue }
+            let id = Int(f[0].trimmingCharacters(in: CharacterSet(charactersIn: "%"))) ?? 0
+            panes.append(Pane(id: id, x: Int(f[1]) ?? 0, y: Int(f[2]) ?? 0,
+                              w: Int(f[3]) ?? 0, h: Int(f[4]) ?? 0))
+            if panes.count == 1 {
+                windowW = Int(f[5]) ?? 80
+                windowH = Int(f[6]) ?? 24
+                zoomed = f[7] == "1"
+            }
+            if f[8] == "1" { activePane = Int(f[9]) ?? 0 }
+        }
+        return LayoutState(panes: panes, windowW: windowW, windowH: windowH,
+                           borderTop: borderTop, zoomed: zoomed,
+                           activePane: activePane, paneCount: panes.count)
+    }
+
     /// Gather all tmux state needed by the layout engine into a single snapshot.
     ///
-    /// Batches tmux queries to minimize subprocess calls:
-    /// - 1 call: list-panes (pane positions)
-    /// - 1 call: display-message (window size, zoom flag, active pane, border status)
-    /// Total: 2 subprocess calls instead of 5.
+    /// Two subprocess calls: list-panes (geometry, window size, zoom, active
+    /// pane) and the border-status option.
     public static func gatherLayoutState(_ session: String) throws -> LayoutState {
-        let panes = try readPanePositions(session)
-
-        // Batch window metadata into a single display-message call
-        let meta = try runChecked(
-            ["display-message", "-t", session, "-p",
-             "#{window_width} #{window_height} #{window_zoomed_flag} #{pane_index}"],
-            context: "failed to get window metadata"
+        let stdout = try runChecked(
+            ["list-panes", "-t", session, "-F", layoutRowFormat],
+            context: "failed to read layout state"
         )
-        let parts = meta.split(separator: " ").map(String.init)
-        let windowW = Int(parts.count > 0 ? parts[0] : "") ?? 80
-        let windowH = Int(parts.count > 1 ? parts[1] : "") ?? 24
-        let zoomed = parts.count > 2 && parts[2] == "1"
-        let activePane = Int(parts.count > 3 ? parts[3] : "") ?? 0
-
         // Border status is a session option, always "top" for amux-managed sessions
         let borderTop = hasPaneBorderStatus(session) ? 1 : 0
-
-        return LayoutState(
-            panes: panes,
-            windowW: windowW,
-            windowH: windowH,
-            borderTop: borderTop,
-            zoomed: zoomed,
-            activePane: activePane,
-            paneCount: panes.count
-        )
+        return parseLayoutRows(stdout, borderTop: borderTop)
     }
 
     /// Execute a LayoutAction by issuing tmux commands.
@@ -889,8 +849,8 @@ public enum Tmux {
             }
         }
 
-        // Step 6: Error message
-        if let msg = action.errorMessage {
+        // Step 6: Error message or notice (status bar, tmux display-time)
+        if let msg = action.errorMessage ?? action.notice {
             displayMessage(session, message: msg)
         }
 
@@ -1062,12 +1022,30 @@ public enum Tmux {
 
     /// Set up pipe-pane on a pane to watch for BEL characters.
     public static func setupBellWatch(_ session: String, paneIndex: Int) throws {
-        let bin = Config.findAmuxCLI()
         let target = "\(session):.\(paneIndex)"
-        runIgnoring([
-            "pipe-pane", "-t", target,
-            "exec \(bin) bell-watch --session \(session) \(paneIndex)"
-        ])
+        runIgnoring(["pipe-pane", "-t", target, bellWatchCommand(bin: Config.findAmuxCLI())])
+    }
+
+    /// The pipe-pane command for a bell watcher. The watcher outlives any
+    /// index or session the pane has today — closing a pane renumbers the
+    /// rest, and panes move between spaces — so it is given the pane's
+    /// permanent id and resolves where the pane is only when a bell rings.
+    ///
+    /// tmux expands the formats when it starts the pipe. `$TMUX` is set
+    /// explicitly because pipe-pane jobs, unlike run-shell, don't get it —
+    /// without it the watcher would look the pane id up on the default
+    /// server, which is the wrong server for anything on a named socket
+    /// (integration tests), where an id like %3 names somebody else's pane.
+    static func bellWatchCommand(bin: String) -> String {
+        "TMUX='#{socket_path},#{pid},0' exec \(bin) bell-watch --pane #{pane_id}"
+    }
+
+    /// Where a pane is right now: its session and index. nil if it is gone.
+    public static func paneLocation(paneId: String) -> (session: String, index: Int)? {
+        let out = runRaw(["display-message", "-t", paneId, "-p", "#{session_name}\t#{pane_index}"])
+        let f = out.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+        guard f.count == 2, !f[0].isEmpty, let index = Int(f[1]) else { return nil }
+        return (f[0], index)
     }
 
     /// Set up bell watchers on all panes in a session.
@@ -1078,12 +1056,9 @@ public enum Tmux {
     public static func setupAllBellWatches(_ session: String) throws {
         let panes = try listPanes(session)
         guard !panes.isEmpty else { return }
-        let bin = Config.findAmuxCLI()
+        let command = bellWatchCommand(bin: Config.findAmuxCLI())
         let commands: [[String]] = panes.map { pane in
-            [
-                "pipe-pane", "-t", "\(session):.\(pane.index)",
-                "exec \(bin) bell-watch --session \(session) \(pane.index)",
-            ]
+            ["pipe-pane", "-t", "\(session):.\(pane.index)", command]
         }
         batchRaw(commands)
     }
@@ -1196,7 +1171,8 @@ public enum Tmux {
         if count > 1 {
             // Split-out case
             let paneId = try paneIdAt(session, index: paneIndex)
-            let newName = try uniqueBackgroundSessionName(suggested: title.isEmpty ? "parked" : title)
+            let newName = try uniqueBackgroundSessionName(
+                suggested: SpaceName.normalize(title) ?? "parked")
             try runChecked(
                 ["new-session", "-d", "-s", newName],
                 context: "parkPane: new-session for backlog failed"
@@ -1355,7 +1331,7 @@ public enum Tmux {
         let bin = Config.findAmuxCLI()
         runIgnoring([
             "set-hook", "-t", session, "client-attached",
-            "run-shell \"\(bin) restore-popup #{session_name}\"",
+            "run-shell \"\(bin) restore-popup #{q:session_name}\"",
         ])
     }
 
@@ -1364,7 +1340,7 @@ public enum Tmux {
         let bin = Config.findAmuxCLI()
         runIgnoring([
             "set-hook", "-t", session, "client-attached",
-            "run-shell \"\(bin) spaces; tmux set-hook -u -t #{session_name} client-attached\""
+            "run-shell \"\(bin) spaces; tmux set-hook -u -t #{q:session_name} client-attached\""
         ])
     }
 

@@ -316,6 +316,24 @@ enum VTerminalTests {
                   "got row0 \(String(describing: term.hyperlinkURI(row: 0, col: 0))), row1 \(String(describing: term.hyperlinkURI(row: 1, col: 0)))")
         }
 
+        // --- Test 20b: a link written AFTER a scroll stays on its row ---
+        // Streaming output (Claude) scrolls, then prints a link on the bottom
+        // row, all before the next flush. libvterm defers the scroll's
+        // moverect to the flush, but the link's stamps were already written
+        // in post-scroll coordinates — replaying the scroll must not move
+        // them a second time.
+        do {
+            let term = VTerminal(rows: 4, cols: 20)
+            term.write(data: "a\r\nb\r\nc\r\nd".data(using: .utf8)!)
+            term.flushDamage()
+            term.write(data: "\r\n\u{1B}]8;;https://late.com\u{1B}\\LATE\u{1B}]8;;\u{1B}\\".data(using: .utf8)!)
+            term.flushDamage()
+            check("osc8-after-scroll-stays-put",
+                  term.hyperlinkURI(row: 3, col: 0) == "https://late.com"
+                      && term.hyperlinkURI(row: 2, col: 0) == nil,
+                  "row3 \(String(describing: term.hyperlinkURI(row: 3, col: 0))), row2 \(String(describing: term.hyperlinkURI(row: 2, col: 0)))")
+        }
+
         // --- Test 21: plain rewrite over a link clears the stamp ---
         do {
             let term = VTerminal(rows: 24, cols: 80)
@@ -326,6 +344,35 @@ enum VTerminalTests {
             check("osc8-rewrite-clears",
                   term.hyperlinkURI(row: 0, col: 2) == nil,
                   "got \(String(describing: term.hyperlinkURI(row: 0, col: 2)))")
+        }
+
+        // --- Test 22: wide-char continuation cell ---
+        // libvterm marks the right half of a double-width glyph with
+        // chars[0] == 0xFFFFFFFF but still reports width 1 for it, so the
+        // renderer must recognise it by the marker, not by width.
+        do {
+            let term = VTerminal(rows: 4, cols: 20)
+            term.write(data: "漢a".data(using: .utf8)!)
+            term.flushDamage()
+            let lead = term.cell(row: 0, col: 0)
+            let cont = term.cell(row: 0, col: 1)
+            let after = term.cell(row: 0, col: 2)
+            check("wide-lead-width-2", lead.width == 2, "got \(lead.width)")
+            check("wide-continuation-marked",
+                  VTerminal.isWideContinuation(cont)
+                      && !VTerminal.isWideContinuation(lead)
+                      && !VTerminal.isWideContinuation(after),
+                  "cont chars.0=\(String(cont.chars.0, radix: 16)) width=\(cont.width)")
+        }
+
+        // --- Test 23: color cache stays bounded under truecolor churn ---
+        do {
+            for i in 0..<(VTerminal.colorCacheLimit * 2) {
+                _ = VTerminal.cachedColor(r: UInt8(i & 0xFF), g: UInt8((i >> 8) & 0xFF), b: 7)
+            }
+            check("color-cache-bounded",
+                  VTerminal.colorCacheCount <= VTerminal.colorCacheLimit,
+                  "count \(VTerminal.colorCacheCount)")
         }
 
         print("VTerminal tests: \(passed) passed, \(failed) failed")

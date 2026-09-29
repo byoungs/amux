@@ -193,53 +193,6 @@ public enum FakeTmuxTests {
             print("FAIL: listFocusSessions — \(error)")
         }
 
-        // getSessionCap defaults to 4 when option missing
-        do {
-            let fake = FakeTmux()
-            Tmux.executor = fake
-            try Tmux.createSession("s")
-            check("default cap is 4", (try? Tmux.getSessionCap("s")) == 4)
-            Tmux.setSessionCap("s", cap: 6)
-            check("set cap reads back", (try? Tmux.getSessionCap("s")) == 6)
-        } catch {
-            failed += 1
-            print("FAIL: getSessionCap — \(error)")
-        }
-
-        // override flag round trip
-        do {
-            let fake = FakeTmux()
-            Tmux.executor = fake
-            try Tmux.createSession("s")
-            check("default override is false", (try? Tmux.isCapOverridden("s")) == false)
-            Tmux.setCapOverridden("s", overridden: true)
-            check("override true after set", (try? Tmux.isCapOverridden("s")) == true)
-        } catch {
-            failed += 1
-            print("FAIL: isCapOverridden — \(error)")
-        }
-
-        // least-recently-focused helper picks the oldest pane
-        do {
-            let fake = FakeTmux()
-            Tmux.executor = fake
-            try Tmux.createSession("s")
-            _ = try Tmux.createPane("s") // 2 panes
-            _ = try Tmux.createPane("s") // 3 panes
-            let panes = try Tmux.listPanes("s")
-            for (i, p) in panes.enumerated() {
-                try fake.execute([
-                    "set-option", "-p", "-t", "s:.\(p.index)",
-                    "@amux-focused-at", String(1000 + i * 10),
-                ])
-            }
-            let lrf = try Tmux.leastRecentlyFocusedPane("s")
-            check("least-recently-focused is pane 0", lrf == panes[0].index)
-        } catch {
-            failed += 1
-            print("FAIL: leastRecentlyFocusedPane — \(error)")
-        }
-
         // listSpacesWithAlerts excludes background sessions
         do {
             let fake = FakeTmux()

@@ -68,9 +68,18 @@ final class TerminalView: NSView {
     // scrolled up.
     private var wheelMayHaveEnteredCopyMode: Bool = false
 
-    /// The tmux session name. Set by AppDelegate after construction.
-    /// Used to update @amux-cmd-held when Cmd is pressed/released.
-    var session: String = ""
+    /// Where the attached client's session comes from. Set by AppDelegate.
+    /// A provider, not a stored name: switching spaces changes the session,
+    /// and a name captured at launch sent Cmd-held, copy-mode checks and
+    /// link cwd lookups to the first space forever after.
+    var currentSession: () -> String = { "" }
+
+    /// The session our client is attached to, as last seen (cheap).
+    var session: String { currentSession() }
+
+    /// Asks tmux for the attached session (fresh, one round-trip). Only
+    /// for work already off the main thread.
+    var lookUpSession: () -> String? = { nil }
 
     // Pane border color overlay.
     // Overrides border cell foreground colors for panes with colored states.
@@ -158,21 +167,7 @@ final class TerminalView: NSView {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
                     self.pendingDraw = false
-                    self.terminal.flushDamage()
-
-                    if self.terminal.fullRedrawNeeded || self.terminal.dirtyRows.count > self.terminal.rows / 2 {
-                        self.terminal.fullRedrawNeeded = false
-                        self.terminal.dirtyRows.removeAll()
-                        self.needsDisplay = true
-                    } else if !self.terminal.dirtyRows.isEmpty {
-                        for row in self.terminal.dirtyRows {
-                            let y = CGFloat(row) * self.cellHeight
-                            self.setNeedsDisplay(NSRect(x: 0, y: y, width: self.bounds.width, height: self.cellHeight))
-                        }
-                        let cursorY = CGFloat(self.terminal.cursorRow) * self.cellHeight
-                        self.setNeedsDisplay(NSRect(x: 0, y: cursorY, width: self.bounds.width, height: self.cellHeight))
-                        self.terminal.dirtyRows.removeAll()
-                    }
+                    self.invalidateDamage()
                     self.displayIfNeeded()
                 }
             }
@@ -248,8 +243,28 @@ final class TerminalView: NSView {
         // again, so the display link is the only thing left to time it out.
         noteSyncState(now: CACurrentMediaTime())
         if syncHoldsFrame(now: CACurrentMediaTime()) { return }
+        invalidateDamage()
+    }
+
+    /// Flush libvterm's pending damage and mark exactly what changed for
+    /// redraw: the damaged rows plus the cursor row, or the whole view when
+    /// most of it changed. Consumes the damage, so a later pass never
+    /// repaints the same rows again.
+    private func invalidateDamage() {
         terminal.flushDamage()
-        needsDisplay = true
+        if terminal.fullRedrawNeeded || terminal.dirtyRows.count > terminal.rows / 2 {
+            terminal.fullRedrawNeeded = false
+            terminal.dirtyRows.removeAll()
+            needsDisplay = true
+        } else if !terminal.dirtyRows.isEmpty {
+            for row in terminal.dirtyRows {
+                let y = CGFloat(row) * cellHeight
+                setNeedsDisplay(NSRect(x: 0, y: y, width: bounds.width, height: cellHeight))
+            }
+            let cursorY = CGFloat(terminal.cursorRow) * cellHeight
+            setNeedsDisplay(NSRect(x: 0, y: cursorY, width: bounds.width, height: cellHeight))
+            terminal.dirtyRows.removeAll()
+        }
     }
 
     // MARK: - Synchronized output gate
@@ -315,10 +330,16 @@ final class TerminalView: NSView {
         ctx.setFillColor(defaultBg)
         ctx.fill(dirtyRect)
 
-        for row in firstRow...lastRow {
+        // A dirty rect confined to the leftover strip below the last full
+        // row (view height isn't a multiple of cellHeight) yields
+        // firstRow > lastRow; a closed range over that would trap, stride
+        // just yields nothing.
+        for row in stride(from: firstRow, through: lastRow, by: 1) {
             for col in 0..<terminal.cols {
                 let cell = terminal.cell(row: row, col: col)
-                if cell.width < 1 { continue }
+                // The lead cell of a wide glyph paints both columns; drawing
+                // the continuation would fill its bg over the glyph's right half.
+                if cell.width < 1 || VTerminal.isWideContinuation(cell) { continue }
                 drawCell(cell, row: row, col: col, ctx: ctx)
             }
         }
@@ -720,7 +741,7 @@ final class TerminalView: NSView {
             // Always scan fresh on click (don't rely on flagsChanged having fired)
             let freshLinks = scanForLinks()
             if let link = freshLinks.first(where: { $0.row == pos.row && pos.col >= $0.startCol && pos.col <= $0.endCol }) {
-                openLink(link.url)
+                openLink(link.url, row: pos.row, col: pos.col)
                 return
             }
         }
@@ -874,41 +895,47 @@ final class TerminalView: NSView {
         detectedLinks.contains(where: { $0.row == row && col >= $0.startCol && col <= $0.endCol })
     }
 
-    /// Open a detected link.
-    private func openLink(_ url: String) {
-        if url.hasPrefix("http://") || url.hasPrefix("https://") {
-            if let nsURL = URL(string: url) {
-                NSWorkspace.shared.open(nsURL)
+    /// Open a clicked link with macOS's default handler (see LinkTarget).
+    /// A detected file path needs the clicked pane's cwd — a tmux round-trip
+    /// — so resolution runs off the main thread.
+    private func openLink(_ link: String, row: Int, col: Int) {
+        let cached = self.session
+        let lookUp = self.lookUpSession
+        DispatchQueue.global(qos: .userInitiated).async {
+            let cwd: String
+            if link.hasPrefix("file:"), !link.hasPrefix("file://") {
+                let session = lookUp() ?? cached
+                // Untrimmed: the cwd is the last field, and a trailing space
+                // in a path (or an empty last cwd) must survive.
+                let listing = (try? Tmux.executor.executeUntrimmed(
+                    ["list-panes", "-t", session, "-F", LinkTarget.paneFormat])) ?? ""
+                let panes = LinkTarget.parsePanes(listing)
+                cwd = LinkTarget.cwd(atRow: row, col: col, panes: panes) ?? ""
+            } else {
+                cwd = ""
             }
-        } else if url.hasPrefix("file://") {
-            // OSC 8 file URI (e.g. `ls --hyperlink`): open the path in the
-            // editor, same as detected filenames.
-            if let fileURL = URL(string: url), fileURL.isFileURL {
-                openInEditor(fileURL.path)
+            guard let url = LinkTarget.resolve(
+                link, cwd: cwd, home: NSHomeDirectory(),
+                exists: { FileManager.default.fileExists(atPath: $0) })
+            else { return }
+            let reveal = url.isFileURL && TerminalView.shouldReveal(url)
+            DispatchQueue.main.async {
+                if reveal {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                } else {
+                    NSWorkspace.shared.open(url)
+                }
             }
-        } else if url.hasPrefix("file:") {
-            // Detected filename ("file:" + path, LinkDetector's convention).
-            let filePath = String(url.dropFirst(5))
-
-            // Resolve relative paths against the active pane's working directory
-            let paneCwd = Tmux.runRaw(["display-message", "-p", "#{pane_current_path}"])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let basePath = paneCwd.isEmpty ? FileManager.default.currentDirectoryPath : paneCwd
-            openInEditor(filePath.hasPrefix("/") ? filePath : basePath + "/" + filePath)
-        } else if let nsURL = URL(string: url), nsURL.scheme != nil {
-            // Any other OSC 8 scheme (mailto:, vscode:, …) — let macOS route it.
-            NSWorkspace.shared.open(nsURL)
         }
     }
 
-    /// Open a file path in VS Code (works for all file types).
-    private func openInEditor(_ path: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["code", path]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
+    /// Filesystem facts for LinkTarget.shouldReveal.
+    private static func shouldReveal(_ url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return false }
+        return LinkTarget.shouldReveal(path: url.path, isDirectory: isDir.boolValue,
+                                       isExecutable: fm.isExecutableFile(atPath: url.path))
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -985,9 +1012,11 @@ final class TerminalView: NSView {
     /// So we query pane_in_mode first; only send Esc if true.
     /// Subprocess query is ~5ms; it only fires on the first keystroke
     /// after a wheel event.
-    private func handleCopyModeExit() {
-        guard wheelMayHaveEnteredCopyMode else { return }
-        wheelMayHaveEnteredCopyMode = false
+    ///
+    /// Keys reach the PTY through AppDelegate's key monitor, not keyDown,
+    /// so the monitor consults `wheelMayHaveEnteredCopyMode` and runs the
+    /// query off the main thread (see AppDelegate.dispatchStep).
+    static func copyModeExitBytes(session: String) -> Data? {
         // Target the session explicitly. An untargeted display-message
         // resolves to whatever tmux considers the "current" pane on the
         // server, which is unreliable when a fresh non-attached client
@@ -996,12 +1025,14 @@ final class TerminalView: NSView {
         let args = session.isEmpty
             ? ["display-message", "-p", "#{pane_in_mode}"]
             : ["display-message", "-t", session, "-p", "#{pane_in_mode}"]
-        let mode = Tmux.runRaw(args)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if mode == "1" {
-            pty.write(Data([0x1B]))
-        }
+        return Tmux.runRaw(args) == "1" ? Data([0x1B]) : nil
     }
+
+    /// A wheel scroll may have left the pane in copy-mode.
+    var mayBeInCopyMode: Bool { wheelMayHaveEnteredCopyMode }
+
+    /// The next keystroke has taken care of any copy-mode exit.
+    func clearCopyModeFlag() { wheelMayHaveEnteredCopyMode = false }
 
     // MARK: - Keyboard
 
@@ -1013,10 +1044,9 @@ final class TerminalView: NSView {
             lastKeyTime = CFAbsoluteTimeGetCurrent()
         }
         #endif
-        // First keystroke after a wheel event: if tmux is in copy-mode,
-        // send Esc via PTY first to exit. Esc and the key bytes share
-        // the PTY channel so tmux processes them in order.
-        handleCopyModeExit()
+        // AppDelegate's key monitor consumes every key before it gets here,
+        // copy-mode exit included (see AppDelegate.dispatchStep); this is
+        // only a fallback if a key ever slips past it.
         if let data = KeyInput.bytes(for: event) {
             pty.write(data)
         }
@@ -1037,25 +1067,22 @@ final class TerminalView: NSView {
     // MARK: - Copy / Paste
 
     @objc func copy(_ sender: Any?) {
-        // Read tmux's paste buffer and put on system clipboard.
-        let tmuxPath = FileManager.default.fileExists(atPath: "/opt/homebrew/bin/tmux")
-            ? "/opt/homebrew/bin/tmux" : "/usr/local/bin/tmux"
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: tmuxPath)
-        process.arguments = ["show-buffer"]
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        // Read data FIRST, then wait — avoids deadlock when pipe buffer fills
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        if let text = String(data: data, encoding: .utf8), !text.isEmpty {
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.setString(text, forType: .string)
+        // Read tmux's paste buffer and put on system clipboard. Goes through
+        // the shared executor so it hits amux's tmux binary and socket; a
+        // missing buffer (or failed launch) comes back nil and is a no-op.
+        // pasteBuffer keeps leading indentation and trailing newlines.
+        // Cmd-C itself takes the off-main path in AppDelegate; this is the
+        // Edit menu's.
+        if let text = Tmux.pasteBuffer(), !text.isEmpty {
+            TerminalView.setPasteboard(text)
         }
+    }
+
+    /// Replace the system clipboard's contents. Main thread.
+    static func setPasteboard(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
     }
 
     @objc func paste(_ sender: Any?) {

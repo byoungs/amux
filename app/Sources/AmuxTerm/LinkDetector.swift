@@ -87,6 +87,16 @@ enum LinkDetector {
         return try? NSRegularExpression(pattern: pattern)
     }()
 
+    /// A known extension at a token boundary, for color-aware expansion.
+    /// Compiled once: the color-aware scan runs per row on every Cmd press.
+    private static let extensionRegex: NSRegularExpression? = {
+        let exts = fileExtensions.joined(separator: "|")
+        return try? NSRegularExpression(
+            pattern: "\\.(?:\(exts))(?=$|[\\s)>\\]\"',;:.!?])",
+            options: [.caseInsensitive]
+        )
+    }()
+
     // MARK: - Single-line scanning
 
     /// Scan a single line of text for links.
@@ -152,14 +162,7 @@ enum LinkDetector {
         var links = scan(line: line, row: row).filter { $0.url.hasPrefix("http") }
 
         // Find file extensions in the line and expand by color.
-        let exts = fileExtensions.joined(separator: "|")
-        // Match the extension as a token boundary inside the line.
-        guard let extRegex = try? NSRegularExpression(
-            pattern: "\\.(?:\(exts))(?=$|[\\s)>\\]\"',;:.!?])",
-            options: [.caseInsensitive]
-        ) else {
-            return links
-        }
+        guard let extRegex = extensionRegex else { return links }
         let nsLine = line as NSString
         let matches = extRegex.matches(in: line, range: NSRange(location: 0, length: nsLine.length))
 

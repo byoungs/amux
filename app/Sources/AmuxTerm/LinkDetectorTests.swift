@@ -69,9 +69,9 @@ enum LinkDetectorTests {
         }
 
         do {
-            let result = urls("/Users/brianyoungs/src/scratch-claude/MASTER-analysis.md")
+            let result = urls("/Users/me/src/notes/MASTER-analysis.md")
             check("file-absolute-path",
-                  result == ["file:/Users/brianyoungs/src/scratch-claude/MASTER-analysis.md"],
+                  result == ["file:/Users/me/src/notes/MASTER-analysis.md"],
                   "got \(result)")
         }
 
@@ -90,9 +90,9 @@ enum LinkDetectorTests {
         // === Trailing punctuation ===
 
         do {
-            let result = urls("/Users/brianyoungs/src/scratch-claude/MASTER-analysis.md.")
+            let result = urls("/Users/me/src/notes/MASTER-analysis.md.")
             check("file-trailing-period",
-                  result == ["file:/Users/brianyoungs/src/scratch-claude/MASTER-analysis.md"],
+                  result == ["file:/Users/me/src/notes/MASTER-analysis.md"],
                   "should strip trailing period, got \(result)")
         }
 

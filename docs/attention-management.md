@@ -142,10 +142,10 @@ When amux creates a pane or refreshes config, it sets up a `pipe-pane` on
 each pane:
 
 ```
-tmux pipe-pane -t SESSION:.N "exec focus bell-watch --session SESSION N"
+tmux pipe-pane -t SESSION:.N "exec amux-cli bell-watch --pane #{pane_id}"
 ```
 
-The `focus bell-watch` process reads the pane's raw output stream and runs a
+The `amux-cli bell-watch` process reads the pane's raw output stream and runs a
 state machine that distinguishes bare BEL characters from BEL used as
 terminators in escape sequences (OSC, DCS, APC, PM). When a real bell is
 detected, it calls the alert logic.
@@ -165,7 +165,7 @@ escape sequences are handled correctly.
 ### Alert flow
 
 1. Application in pane N sends a BEL character
-2. tmux pipes the output to `focus bell-watch --session S N`
+2. tmux pipes the output to `amux-cli bell-watch --pane %ID`, which looks up the pane's current session and index when a bell rings (both change as panes close and move)
 3. The scanner detects a bare BEL
 4. `trigger_alert` runs: skip if pane is active or already alerted
 5. Sets `@focus-alert=1` on pane N

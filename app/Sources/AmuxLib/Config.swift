@@ -126,7 +126,7 @@ public enum Config {
             // directly and let tmux own the per-event line count.
             //
             // Typing while still scrolled up (in copy-mode) is handled by
-            // handleCopyModeExit in TerminalView.
+            // AppDelegate.dispatchStep (TerminalView.copyModeExitBytes).
             ["bind-key", "-T", "root", "WheelUpPane",
              "if-shell -Ft= '#{?pane_in_mode,1,#{alternate_on}}' " +
              "{ send-keys -M } { select-pane -t= ; copy-mode -e ; send-keys -X -N 1 scroll-up }"],
@@ -178,28 +178,40 @@ public enum Config {
                 // Initialize so no stale peek indicator shows before the first
                 // watcher poll on launch (the app pushes the real count).
                 ["set", "-t", session, "@amux-peek-count", "0"],
+                // amux renders OSC 8 hyperlinks (and attaches with
+                // `-T hyperlinks` so tmux forwards them), but inside tmux
+                // Claude Code and other supports-hyperlinks tools can't tell:
+                // panes see TERM_PROGRAM=tmux, and with no terminal hint they
+                // print no links at all (verified 2026-09-28). With real
+                // links, Cmd-click opens the exact target — including
+                // markdown links whose URL never appears on screen.
+                // Session-scoped, not -g: amux shares the default tmux
+                // server, and FORCE_HYPERLINK also puts link escapes into
+                // redirected output, so non-amux sessions stay untouched.
+                ["set-environment", "-t", session, "FORCE_HYPERLINK", "1"],
                 ["set", "-t", session, "status-right", statusRightFormat],
                 ["set", "-t", session, "status-left-length", "20"],
                 ["set", "-t", session, "status-right-length", "120"],
                 // Only set defaults if unset (preserve background tag on refresh).
                 ["if-shell", "-F", "-t", session, "#{!=:#{@amux-state},background}",
                  "set -t \(session) @amux-state foreground"],
-                ["if-shell", "-F", "-t", session, "#{==:#{@amux-cap},}",
-                 "set -t \(session) @amux-cap 4"],
-                ["if-shell", "-F", "-t", session, "#{==:#{@amux-cap-overridden},}",
-                 "set -t \(session) @amux-cap-overridden 0"],
                 // Hooks. Re-apply layout when a pane exits or window resizes;
                 // update the selected pane's title from its cwd on focus
                 // change (after-select-pane).
                 // pane-exited also records a session snapshot (layout-changed);
                 // client-resized deliberately does not, since it fires
                 // continuously while a window is being dragged.
+                // after-select-pane runs in the background (-b): a
+                // foreground run-shell holds the select-pane that fired it
+                // until the hook exits, and every Cmd-1..9 is a select-pane.
+                // Title refresh and alert dismissal don't need to finish
+                // before the keypress returns.
                 ["set-hook", "-t", session, "pane-exited",
-                 "run-shell \"\(bin) layout-changed #{session_name}\""],
+                 "run-shell \"\(bin) layout-changed #{q:session_name}\""],
                 ["set-hook", "-t", session, "client-resized",
-                 "run-shell \"\(bin) layout #{session_name}\""],
+                 "run-shell \"\(bin) layout #{q:session_name}\""],
                 ["set-hook", "-t", session, "after-select-pane",
-                 "run-shell \"AMUX_SESSION=#{session_name} \(bin) update-title #{pane_index} '#{pane_current_path}'\""],
+                 "run-shell -b \"AMUX_SESSION=#{q:session_name} \(bin) update-title #{pane_index} #{q:pane_current_path}\""],
             ])
         } catch {
             throw ConfigError.tmux("applyConfig batch failed: \(error.localizedDescription)")

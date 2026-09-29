@@ -282,63 +282,29 @@ public enum AppControllerTests {
                   "new pane should be active, got index \(active) of \(count) panes")
         }
 
-        // handleNewPane at cap launches the park-prompt popup instead of creating
+        // newPane has no cap: a 5th pane opens in the foreground like any
+        // other, with no popup. Managing spaces is the user's call.
         do {
             let fake = FakeTmux()
             Tmux.executor = fake
-            try Tmux.createSession("scap"); Tmux.markAsManaged("scap")
-            Tmux.setSessionState("scap", state: .foreground)
-            Tmux.setSessionCap("scap", cap: 4)
-            _ = try Tmux.createPane("scap")
-            _ = try Tmux.createPane("scap")
-            _ = try Tmux.createPane("scap") // 4 total
-            let ctrl = AppController(session: "scap")
+            try Tmux.createSession("snocap"); Tmux.markAsManaged("snocap")
+            Tmux.setSessionState("snocap", state: .foreground)
+            _ = try Tmux.createPane("snocap")
+            _ = try Tmux.createPane("snocap")
+            _ = try Tmux.createPane("snocap") // 4 total
+            let ctrl = AppController(session: "snocap")
             ctrl.handleAction(.newPane)
-            check("newPane-atCap-noNewPane", (try? Tmux.paneCount("scap")) == 4,
-                  "expected 4 panes after blocked newPane, got \((try? Tmux.paneCount("scap")) ?? -1)")
-            let launched = fake.launchedCommands.last ?? []
-            check("newPane-atCap-popupLaunched", launched.contains("display-popup"))
-            check("newPane-atCap-promptParkInvoked",
-                  launched.contains(where: { $0.contains("prompt park") }))
+            let count = (try? Tmux.paneCount("snocap")) ?? -1
+            check("newPane-noCap-opens5th", count == 5,
+                  "expected 5 panes, got \(count)")
+            let active = fake.sessions["snocap"]?.windows.first?.activePaneIndex ?? -1
+            check("newPane-noCap-focuses5th", active == 4,
+                  "new pane should be active, got \(active)")
+            check("newPane-noCap-noPopup",
+                  !fake.launchedCommands.contains(where: { $0.contains("display-popup") }))
         } catch {
             failed += 1
-            print("FAIL: newPane-atCap — \(error)")
-        }
-
-        // handleNewPane below cap creates pane normally (cap defaults to 4)
-        do {
-            let fake = FakeTmux()
-            Tmux.executor = fake
-            try Tmux.createSession("sunder"); Tmux.markAsManaged("sunder")
-            Tmux.setSessionState("sunder", state: .foreground)
-            Tmux.setSessionCap("sunder", cap: 4)
-            let ctrl = AppController(session: "sunder")
-            ctrl.handleAction(.newPane)
-            check("newPane-belowCap-creates", (try? Tmux.paneCount("sunder")) == 2,
-                  "expected 2 panes after newPane below cap, got \((try? Tmux.paneCount("sunder")) ?? -1)")
-        } catch {
-            failed += 1
-            print("FAIL: newPane-belowCap — \(error)")
-        }
-
-        // handleNewPane at cap with override skips prompt and creates
-        do {
-            let fake = FakeTmux()
-            Tmux.executor = fake
-            try Tmux.createSession("sover"); Tmux.markAsManaged("sover")
-            Tmux.setSessionState("sover", state: .foreground)
-            Tmux.setSessionCap("sover", cap: 4)
-            Tmux.setCapOverridden("sover", overridden: true)
-            _ = try Tmux.createPane("sover")
-            _ = try Tmux.createPane("sover")
-            _ = try Tmux.createPane("sover") // 4 total
-            let ctrl = AppController(session: "sover")
-            ctrl.handleAction(.newPane)
-            check("newPane-override-allows5th", (try? Tmux.paneCount("sover")) == 5,
-                  "expected 5 panes with override, got \((try? Tmux.paneCount("sover")) ?? -1)")
-        } catch {
-            failed += 1
-            print("FAIL: newPane-override — \(error)")
+            print("FAIL: newPane-noCap — \(error)")
         }
 
         // ============================================================

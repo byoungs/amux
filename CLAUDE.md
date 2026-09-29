@@ -3,11 +3,9 @@
 ## Build & Test
 
 ```
-make dev       # Build release binary, kill+relaunch app, re-apply tmux config
-make test      # Lint + fast tests + release build — runs anywhere, no tmux needed
+make dev       # Build debug dev bundle, kill+relaunch app, re-apply tmux config
+make test      # Fast unit tests — runs anywhere, no tmux needed
 make validate  # Full test suite including tmux integration tests (parallel-safe)
-make fmt       # Auto-format code
-make lint      # swift-format lint + format check
 make clean     # Remove build artifacts
 make setup     # Full environment setup (idempotent)
 ```
@@ -20,11 +18,10 @@ bindings, hooks) to every amux-managed session as part of startup, so
 Config.swift changes go live without a separate refresh step.
 
 ## Dev Flow
-Flow: worktree
-- All code changes happen in worktrees, never on main
-- Use /dev to start work (creates worktree automatically)
-- Use /stage to wrap up (prepares clean commit for wtr landing)
-- Brian reviews and lands via wtr (ff-only merge → validate → push)
+Flow: trunk
+- Work directly on main (switched from worktree flow 2026-09-28)
+- Run `make validate` before committing; commit only when Brian says so
+- Push only when Brian says so; never amend a pushed commit
 
 ## Linear
 - Workspace: penfield-six
@@ -79,7 +76,7 @@ separate binary invoked from tmux key bindings and hooks.
 
 ## Testing
 
-- `make test` — lint + fast tests + release build. Runs anywhere, no tmux needed.
+- `make test` — fast unit tests. Runs anywhere, no tmux needed.
 - `make validate` — full suite including tmux integration tests. Parallel-safe via unique session names.
 - Use `make test` for rapid iteration. Use `make validate` as the final
   verification before claiming work is complete — it catches adapter-layer
@@ -116,6 +113,19 @@ separate binary invoked from tmux key bindings and hooks.
   `LiveTmux.execute` trims trailing whitespace off stdout, so an unset trailing
   option takes its tab separator with it and the row fails the field-count
   guard — silently dropping the session (hit with `@amux-parked-from`).
+- A foreground `run-shell` hook holds the command that fired it until the
+  hook exits AND every process holding its stdin closes it. A child spawned
+  from a hook must get `standardInput = nullDevice`, and per-keypress hooks
+  (`after-select-pane`) use `run-shell -b`. Violating this made every
+  Cmd-1..9 wait ~700ms on a snapshot capture (fixed 2026-09-28; guarded by
+  `HookLatencyTests`).
+- `pipe-pane` jobs do NOT get `$TMUX` (run-shell jobs do). Anything a
+  pipe-pane runs that talks back to tmux must be told the server explicitly
+  (`TMUX='#{socket_path},#{pid},0'`), or it silently hits the
+  default server — which, from a test socket, is the developer's live one.
+- Interpolate tmux formats into hook shell commands with the `q` modifier
+  (`#{q:session_name}`, `#{q:pane_current_path}`), never bare or in single
+  quotes: names and paths can contain spaces, quotes, and `$`.
 - A raw-mode CLI TUI (the restore prompt, the pickers) is testable without a
   human: run it in a real pane, read it back with `capture-pane`, send keys,
   assert the resulting tmux state — see `app/Tests/PromptHarness.swift`. Point

@@ -7,7 +7,7 @@
 ///   amux-cli layout SESSION          Re-apply grid layout
 ///   amux-cli update-title PANE CWD   Update pane title from directory
 ///   amux-cli alert-pane PANE         Mark pane as needing attention
-///   amux-cli bell-watch --session SESSION PANE   Watch stdin for BEL
+///   amux-cli bell-watch --pane %ID              Watch stdin for BEL
 ///   amux-cli hook-install            Install Claude Code notification hook
 ///   amux-cli spaces                  Interactive space picker (runs in popup)
 ///   amux-cli send                    Send current pane to another space
@@ -147,7 +147,8 @@ func sendPaneAndFollow(from source: String, to destination: String) throws {
 ///
 /// Optimized for absolute minimum subprocess calls:
 ///   1. listPanes(target) — gathers alert states + active pane in 1 call (~65ms)
-///   2. One batched call: suppress hook + switch + dismiss alert + select pane + restore hook (~65ms)
+///   2. One batched call: dismiss alert + switch + select pane (~65ms); the
+///      background after-select-pane hook then refreshes the title
 ///
 /// Total: ~130ms before exit (down from ~500ms).
 ///
@@ -174,30 +175,18 @@ func switchToSpace(_ target: String) throws {
         shouldDismissAlert = false
     }
 
-    // 2. Build batched command sequence
-    let bin = Config.findAmuxCLI()
-    let hookCmd = "run-shell \"AMUX_SESSION=#{session_name} \(bin) update-title #{pane_index} '#{pane_current_path}'\""
-
-    var batch: [[String]] = [
-        ["set-hook", "-t", target, "-u", "after-select-pane"],
-        ["switch-client", "-t", target],
-        ["select-pane", "-t", "\(target):.\(landingPane)"],
-    ]
-
+    // 2. Build batched command sequence. The landing pane's alert is
+    // cleared in the same batch, before select-pane, so its border never
+    // renders amber. select-pane then fires the (background) after-select-pane
+    // hook, which refreshes the landing pane's title.
+    var batch: [[String]] = []
     if shouldDismissAlert {
-        // Inline dismiss alert: clear flag, recompute count
         let alertedAfter = panes.filter { $0.alert && $0.index != landingPane }.count
         batch.append(["set-option", "-p", "-t", "\(target):.\(landingPane)", "@amux-alert", "0"])
         batch.append(["set-option", "-t", target, "@amux-alert-count", String(alertedAfter)])
     }
-
-    batch.append(["set-hook", "-t", target, "after-select-pane", hookCmd])
-
-    // Update the landing pane's title — the hook was suppressed during
-    // select-pane, so without this the title stays stale until the user
-    // manually switches panes within the session.
-    batch.append(["run-shell",
-        "AMUX_SESSION=\(target) \(bin) update-title \(landingPane) '#{pane_current_path}'"])
+    batch.append(["switch-client", "-t", target])
+    batch.append(["select-pane", "-t", "\(target):.\(landingPane)"])
 
     Tmux.batchRaw(batch)
 }
@@ -440,16 +429,14 @@ func gatherAlertCounts(_ sessions: [String]) -> [String: Int] {
 func createNewSpace(orig: termios) throws -> String? {
     print("\r\n  \(ansiBoldCyan)New space name:\(ansiReset) ", terminator: "")
     fflush(stdout)
-    guard let name = readInputRaw(), !name.isEmpty else {
+    guard let typed = readInputRaw(), let name = SpaceName.normalize(typed) else {
         return nil
     }
-    let trimmed = name.trimmingCharacters(in: .whitespaces)
-    guard !trimmed.isEmpty else { return nil }
-    try Tmux.createSession(trimmed)
-    Tmux.markAsManaged(trimmed)
-    try Config.applyConfig(session: trimmed)
-    try Tmux.setupAllBellWatches(trimmed)
-    return trimmed
+    try Tmux.createSession(name)
+    Tmux.markAsManaged(name)
+    try Config.applyConfig(session: name)
+    try Tmux.setupAllBellWatches(name)
+    return name
 }
 
 /// Run the spaces picker TUI. Returns when the user makes a selection or cancels.
@@ -607,31 +594,8 @@ func runSendPicker() throws {
 }
 
 /// Re-tile a session after its geometry or pane set changed.
-///
-/// Last-pane-close detection lives here: if the session emptied out and the
-/// backlog isn't empty, fire the close-prompt popup instead of the usual
-/// layout reapply. The popup runs `amux-cli prompt close`.
 func reapplyLayout(session: String) throws {
-    let count = (try? Tmux.paneCount(session)) ?? 0
-    if count == 0 {
-        let backlogCount = (try? Tmux.listBackgroundSessions().count) ?? 0
-        if backlogCount > 0 {
-            let bin = Config.findAmuxCLI()
-            Tmux.launch([
-                "display-popup", "-t", session, "-E", "-w", "70", "-h", "16",
-                "-T", " Last pane closed — pull from backlog? ",
-                "\(bin) prompt close \(session)",
-            ])
-            exit(0)
-        }
-    }
     try Tmux.applyLayout(session, event: .resize)
-    // Cap-override re-arm: if pane count drops back at or under the cap,
-    // clear the override flag so the next newPane re-prompts.
-    let cap = (try? Tmux.getSessionCap(session)) ?? 4
-    if count <= cap {
-        Tmux.setCapOverridden(session, overridden: false)
-    }
 }
 
 func main() throws {
@@ -700,15 +664,6 @@ func main() throws {
         try Tmux.setTitle(session, paneIndex: paneIndex, title: title)
         try? Tmux.dismissAlert(session, paneIndex: paneIndex)
 
-        // Stamp per-pane focus time so we can find least-recently-focused
-        // when prompting at the cap.
-        if !session.isEmpty {
-            let now = String(UInt64(Date().timeIntervalSince1970))
-            let target = "\(session):.\(paneIndex)"
-            _ = try? Tmux.executor.execute(
-                ["set-option", "-p", "-t", target, "@amux-focused-at", now])
-        }
-
         // Focus changed — record it for session restore. Focus is hooked as
         // well as add/close because typing `claude` into an existing shell is
         // not a pane event; moving to another pane is what happens next.
@@ -743,20 +698,15 @@ func main() throws {
         try? client.send(event)
 
     case "bell-watch":
-        // amux-cli bell-watch --session SESSION PANE_INDEX
-        // Long-running: reads stdin for BEL characters
-        var session = "amux"
-        var paneIndex = 0
-        var i = 1
-        while i < args.count {
-            if args[i] == "--session", i + 1 < args.count {
-                session = args[i + 1]
-                i += 2
-            } else {
-                paneIndex = Int(args[i]) ?? 0
-                i += 1
-            }
+        // amux-cli bell-watch --pane %ID
+        // Long-running: reads stdin for BEL characters. The pane is named by
+        // its permanent id; its session and index are looked up per bell,
+        // since both change as panes close and move between spaces.
+        guard args.count >= 3, args[1] == "--pane", args[2].hasPrefix("%") else {
+            fputs("Usage: amux-cli bell-watch --pane %ID\n", stderr)
+            exit(1)
         }
+        let paneId = args[2]
 
         let state = BellScanState()
         let bufSize = 4096
@@ -768,7 +718,7 @@ func main() throws {
             if n <= 0 { break }
             let bytes = Array(UnsafeBufferPointer(start: buf, count: n))
             let bells = scanBytes(state: state, buf: bytes)
-            if bells > 0 {
+            if bells > 0, let (session, paneIndex) = Tmux.paneLocation(paneId: paneId) {
                 // Same pipeline as `alert-pane`: mutate tmux state locally,
                 // then fire a one-shot event to amux-app so it posts the
                 // macOS notification via UNUserNotificationCenter (amux-cli
@@ -1011,8 +961,6 @@ func main() throws {
         exit(0)
 
     case "prompt":
-        // amux-cli prompt park SESSION    — popup to pick pane to park when at cap
-        // amux-cli prompt close SESSION   — popup to pull from backlog after last close
         // amux-cli prompt restore SESSION — popup to restore the last snapshot
         let sub = args.count >= 2 ? args[1] : ""
         switch sub {
@@ -1023,127 +971,14 @@ func main() throws {
             }
             runRestorePrompt(session: args[2])
             exit(0)
-        case "park":
-            guard args.count >= 3 else {
-                fputs("Usage: amux-cli prompt park SESSION\n", stderr)
-                exit(2)
-            }
-            runParkPrompt(session: args[2])
-            exit(0)
-        case "close":
-            guard args.count >= 3 else {
-                fputs("Usage: amux-cli prompt close SESSION\n", stderr)
-                exit(2)
-            }
-            runCloseLastPrompt(session: args[2])
-            exit(0)
         default:
-            fputs("Usage: amux-cli prompt park|close|restore SESSION\n", stderr)
+            fputs("Usage: amux-cli prompt restore SESSION\n", stderr)
             exit(2)
         }
 
     default:
         fputs("Unknown command: \(command)\n", stderr)
         exit(1)
-    }
-}
-
-// MARK: - Park prompt (fires on 5th-pane open at cap)
-
-func drawParkPrompt(panes: [PaneInfo], selected: Int) {
-    var out = ansiClear
-    out += "\r\n  \(ansiBoldCyan)4 panes already open\(ansiReset)  \(ansiGray)pick one to send to backlog\(ansiReset)\r\n\r\n"
-    for (i, p) in panes.enumerated() {
-        let arrow = i == selected ? "\(ansiCyan)\u{2192}\(ansiReset)" : " "
-        let title = p.title.isEmpty ? "(pane \(p.index + 1))" : p.title
-        let styled = i == selected ? "\(ansiBold)\(title)\(ansiReset)" : title
-        out += "  \(arrow) \(ansiYellow)\(p.index + 1)\(ansiReset) \(styled)\r\n"
-    }
-    out += "\r\n  \(ansiGray)Enter: park selected · Esc: open anyway (override cap)\(ansiReset)\r\n"
-    print(out, terminator: "")
-    fflush(stdout)
-}
-
-func runParkPrompt(session: String) {
-    let panes = (try? Tmux.listPanes(session)) ?? []
-    if panes.isEmpty { return }
-    let lrf = (try? Tmux.leastRecentlyFocusedPane(session)) ?? panes[0].index
-    var selected = panes.firstIndex(where: { $0.index == lrf }) ?? 0
-    let orig = enterRawMode()
-    defer { restoreTerminal(orig) }
-    while true {
-        drawParkPrompt(panes: panes, selected: selected)
-        let key = readRawKey()
-        switch key {
-        case .up:
-            if selected > 0 { selected -= 1 }
-        case .down:
-            if selected + 1 < panes.count { selected += 1 }
-        case .enter:
-            let pick = panes[selected]
-            restoreTerminal(orig)
-            _ = try? Tmux.parkPane(session, paneIndex: pick.index)
-            _ = try? Tmux.createPane(session, cwd: nil)
-            return
-        case .escape:
-            restoreTerminal(orig)
-            Tmux.setCapOverridden(session, overridden: true)
-            _ = try? Tmux.createPane(session, cwd: nil)
-            return
-        default:
-            break
-        }
-    }
-}
-
-// MARK: - Close-last prompt (fires on last-pane-close when backlog non-empty)
-
-func drawCloseLastPrompt(sessions: [BackgroundSession], selected: Int) {
-    var out = ansiClear
-    out += "\r\n  \(ansiBoldCyan)Last pane closed\(ansiReset)  \(ansiGray)pull one from backlog?\(ansiReset)\r\n\r\n"
-    for (i, s) in sessions.enumerated() {
-        let arrow = i == selected ? "\(ansiCyan)\u{2192}\(ansiReset)" : " "
-        let title = s.title.isEmpty ? s.name : s.title
-        let styled = i == selected ? "\(ansiBold)\(title)\(ansiReset)" : title
-        let ago = formatAgo(seconds: nowSeconds() - s.parkedAt)
-        out += "  \(arrow) \(styled)  \(ansiDim)(from \(s.parkedFrom), \(ago))\(ansiReset)\r\n"
-    }
-    out += "\r\n  \(ansiGray)Enter: pull here · Esc: leave empty\(ansiReset)\r\n"
-    print(out, terminator: "")
-    fflush(stdout)
-}
-
-func runCloseLastPrompt(session: String) {
-    let backlog = (try? Tmux.listBackgroundSessions()) ?? []
-    if backlog.isEmpty { return }
-    var sorted = backlog
-    sorted.sort { (a, b) in
-        let aFromSelf = a.parkedFrom == session
-        let bFromSelf = b.parkedFrom == session
-        if aFromSelf != bFromSelf { return aFromSelf }
-        return a.parkedAt > b.parkedAt
-    }
-    var selected = 0
-    let orig = enterRawMode()
-    defer { restoreTerminal(orig) }
-    while true {
-        drawCloseLastPrompt(sessions: sorted, selected: selected)
-        let key = readRawKey()
-        switch key {
-        case .up:
-            if selected > 0 { selected -= 1 }
-        case .down:
-            if selected + 1 < sorted.count { selected += 1 }
-        case .enter:
-            let pick = sorted[selected]
-            restoreTerminal(orig)
-            try? Tmux.unparkSession(pick.name, mode: .merge(into: session))
-            return
-        case .escape:
-            return
-        default:
-            break
-        }
     }
 }
 

@@ -52,7 +52,7 @@ amux commands or forwards raw bytes to the PTY. A separate CLI binary
 - Runs interactive TUI popups (spaces picker, send picker, help screen)
 - Commands: `layout`, `layout-changed`, `update-title`, `alert-pane`,
   `bell-watch`, `spaces`, `send`, `help`, `hook-install`, `snapshot`,
-  `restore-popup`, `prompt park|close|restore`
+  `restore-popup`, `prompt restore`
 
 ## Keyboard Handling
 
@@ -60,12 +60,19 @@ All key bindings are handled natively by the Swift app via
 `NSEvent.addLocalMonitorForEvents`. tmux's prefix key is disabled entirely.
 
 ```
-NSEvent → KeyInput.action(for:mode:) → KeyAction
-  ├── .amux(command) → AppController.handleAction()
-  ├── .sendToPTY(data) → pty.write()
-  ├── .system → let macOS handle (⌘Q, ⌘C, ⌘V)
+NSEvent → OrderedDispatcher → KeyInput.action(for:mode:) → KeyAction
+  ├── .amux(command) → AppController.handleAction()   (off main, "amux.actions" queue)
+  ├── .sendToPTY(data) → pty.write()                   (inline)
+  ├── .system → let macOS handle (⌘Q, ⌘C, ⌘V)          (before the dispatcher)
   └── .ignore → drop
 ```
+
+An amux action is several tmux subprocesses, so it never runs on the main
+thread. `OrderedDispatcher` holds any key that arrives while an action is in
+flight and replays it afterwards, so ⌘N followed by typing lands the text in
+the new pane. Alert events from the socket server run on the same serial
+queue. tmux hooks that fire on every keypress (`after-select-pane`) run with
+`run-shell -b` so they never hold the command that triggered them.
 
 ### Shortcuts
 

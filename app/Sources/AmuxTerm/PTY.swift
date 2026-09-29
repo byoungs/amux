@@ -48,17 +48,20 @@ final class PTY {
 
     /// Start reading output asynchronously on the main queue.
     func startReading() {
+        // The cleanup handler only runs once the channel is closed, which
+        // nothing does until deinit — so it can't signal child exit. The read
+        // handler's `done` can: when the child (tmux client) exits the slave
+        // side closes and the stream read ends with EOF or EIO.
         let io = DispatchIO(type: .stream, fileDescriptor: masterFd,
-                            queue: .main, cleanupHandler: { [weak self] _ in
-            self?.onExit?()
-        })
+                            queue: .main, cleanupHandler: { _ in })
         io.setLimit(lowWater: 1)
-        io.read(offset: 0, length: .max, queue: .main) { [weak self] done, data, error in
+        io.read(offset: 0, length: .max, queue: .main) { [weak self] done, data, _ in
             if let data = data, !data.isEmpty {
                 self?.onOutput?(Data(data))
             }
-            // NOTE: onExit is called by the cleanupHandler above, not here.
-            // Calling it in both places would fire it twice.
+            if done {
+                self?.onExit?()
+            }
         }
         self.dispatchIO = io
     }

@@ -54,6 +54,11 @@ final class HyperlinkGrid {
     private var nextID: UInt32 = 1
     /// The currently open link's internal id; 0 when no link is open.
     private(set) var activeID: UInt32 = 0
+    /// How many cells carry a nonzero id. libvterm reports every scrolled
+    /// line (VTERM_DAMAGE_ROW), so `moveRect` runs once per line of output;
+    /// with no links on screen — the common case, e.g. `cat` of a log — it
+    /// must cost nothing.
+    private(set) var stampedCells = 0
 
     /// Accumulator for OSC bodies that libvterm delivers in fragments.
     private var pendingBody: [UInt8] = []
@@ -132,8 +137,17 @@ final class HyperlinkGrid {
         let hi = min(toCol, cols)
         guard lo < hi else { return }
         for col in lo..<hi {
-            cells[fromRow * cols + col] = activeID
+            set(fromRow * cols + col, activeID)
         }
+    }
+
+    /// Write one cell, keeping `stampedCells` in step.
+    private func set(_ index: Int, _ value: UInt32) {
+        let old = cells[index]
+        if old == value { return }
+        if old != 0 { stampedCells -= 1 }
+        if value != 0 { stampedCells += 1 }
+        cells[index] = value
     }
 
     /// Mirror a libvterm moverect (scroll) so stamps follow their rows.
@@ -145,22 +159,25 @@ final class HyperlinkGrid {
         srcStartRow: Int, srcStartCol: Int,
         rowCount: Int, colCount: Int
     ) {
-        let snapshot = cells
-        for r in 0..<rowCount {
+        guard stampedCells > 0, rowCount > 0, colCount > 0 else { return }
+        // Walk rows in the direction that never reads a row already
+        // overwritten (up-scroll top-down, down-scroll bottom-up); each source
+        // row is copied out first, which covers horizontal overlap.
+        let order = destStartRow <= srcStartRow
+            ? Array(0..<rowCount) : Array((0..<rowCount).reversed())
+        for r in order {
             let destRow = destStartRow + r
             let srcRow = srcStartRow + r
             guard destRow >= 0, destRow < rows else { continue }
+            let source: [UInt32] = (0..<colCount).map { c in
+                let srcCol = srcStartCol + c
+                guard srcRow >= 0, srcRow < rows, srcCol >= 0, srcCol < cols else { return 0 }
+                return cells[srcRow * cols + srcCol]
+            }
             for c in 0..<colCount {
                 let destCol = destStartCol + c
-                let srcCol = srcStartCol + c
                 guard destCol >= 0, destCol < cols else { continue }
-                let value: UInt32
-                if srcRow >= 0, srcRow < rows, srcCol >= 0, srcCol < cols {
-                    value = snapshot[srcRow * cols + srcCol]
-                } else {
-                    value = 0
-                }
-                cells[destRow * cols + destCol] = value
+                set(destRow * cols + destCol, source[c])
             }
         }
     }
@@ -171,12 +188,14 @@ final class HyperlinkGrid {
         for i in cells.indices {
             cells[i] = 0
         }
+        stampedCells = 0
     }
 
     func resize(rows: Int, cols: Int) {
         self.rows = rows
         self.cols = cols
         cells = [UInt32](repeating: 0, count: rows * cols)
+        stampedCells = 0
     }
 
     // MARK: - Queries

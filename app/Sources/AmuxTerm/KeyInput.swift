@@ -9,6 +9,13 @@ enum KeyInput {
 
     // MARK: - Action-based API (new)
 
+    /// Cmd-Q. The one key that goes straight to AppKit regardless of mode or
+    /// of anything queued ahead of it — quitting shouldn't wait on tmux.
+    static func isQuit(_ event: NSEvent) -> Bool {
+        event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command)
+            && event.charactersIgnoringModifiers == "q"
+    }
+
     /// Determine the action for a key event given the current mode.
     static func action(for event: NSEvent, mode: InputMode) -> KeyAction {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -100,7 +107,11 @@ enum KeyInput {
                 return "\u{1B}[13;2u".data(using: .utf8)   // Shift-Enter: CSI u
             }
             return Data([0x0D])
-        case 48:  return Data([0x09])                       // Tab
+        case 48:                                            // Tab
+            if hasShift {
+                return "\u{1B}[Z".data(using: .utf8)        // Shift-Tab: back-tab (CBT)
+            }
+            return Data([0x09])
         case 53:  return Data([0x1B])                       // Escape
         case 51:  return Data([0x7F])                       // Backspace
         case 117: return "\u{1B}[3~".data(using: .utf8)     // Forward Delete

@@ -70,7 +70,16 @@ public protocol AlertEventServer {
 /// Default socket path for the current user on macOS.
 /// Uses NSTemporaryDirectory() which is per-UID on Darwin — no collision
 /// between users, no need for /tmp path-length workarounds.
-public func defaultAlertSocketPath() -> String {
+///
+/// With $AMUX_HOME set (integration tests), the socket lives there instead,
+/// so a test's bells and alert-pane calls can't reach the developer's
+/// running amux-app and post real notifications about test sessions.
+public func defaultAlertSocketPath(
+    env: [String: String] = ProcessInfo.processInfo.environment
+) -> String {
+    if let override = env[AmuxPaths.homeOverrideKey], !override.isEmpty {
+        return AmuxPaths.home(env: env).appendingPathComponent("amux-alert.sock").path
+    }
     let base = NSTemporaryDirectory()
     // Trim any trailing slash so we don't produce "//amux-alert.sock".
     let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
@@ -477,6 +486,16 @@ public enum AlertEventTransportTests {
             server.stop()
             server.stop() // must not crash or throw
             check("stopIdempotent-survives", true)
+        }
+
+        // AMUX_HOME moves the socket with the rest of amux's state, so tests
+        // never deliver events to the developer's running app.
+        do {
+            let isolated = defaultAlertSocketPath(env: ["AMUX_HOME": "/tmp/amux-x"])
+            check("socketPath-followsAmuxHome", isolated == "/tmp/amux-x/amux-alert.sock", isolated)
+            let normal = defaultAlertSocketPath(env: [:])
+            check("socketPath-defaultInTmpdir",
+                  normal.hasSuffix("/amux-alert.sock") && !normal.hasPrefix("/tmp/amux-x"), normal)
         }
 
         finish(passed: passed, failed: failed)

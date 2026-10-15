@@ -184,6 +184,11 @@ func paneCount(_ session: String) -> Int {
     (try? Tmux.paneCount(session)) ?? 0
 }
 
+/// The session's current tmux layout string (geometry of every pane).
+func windowLayout(_ session: String) -> String {
+    tmux("display-message", "-p", "-t", session, "#{window_layout}").stdout
+}
+
 // MARK: - Process runner
 
 private func runProcess(

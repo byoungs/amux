@@ -203,6 +203,29 @@ enum ZoomTests {
                   "should be unzoomed after zoom-out")
         }
 
+        // Test: unzoom_after_resize_while_zoomed_retiles
+        // Regression: the resize hook skips re-tiling while zoomed, so tmux
+        // rescales the hidden grid itself and grows only one column (seen
+        // going fullscreen on the laptop, then adding an external display).
+        // Leaving zoom must re-tile to what a resize relayout would give.
+        for (label, leaveZoom) in [("zoomOut", ["zoom-out"]), ("zoomToOther", ["zoom", "1"])] {
+            let ts = TestSession(paneCount: 5)
+            tmux("resize-window", "-t", ts.name, "-x", "252", "-y", "60")
+            amuxCmd(session: ts.name, args: ["layout", ts.name])
+            tmux("select-pane", "-t", "\(ts.name):.0")
+            amuxCmd(session: ts.name, args: ["zoom-in"])
+
+            tmux("resize-window", "-t", ts.name, "-x", "381", "-y", "74")
+            amuxCmd(session: ts.name, args: ["layout", ts.name])
+            amuxCmd(session: ts.name, args: leaveZoom)
+
+            let afterUnzoom = windowLayout(ts.name)
+            amuxCmd(session: ts.name, args: ["layout", ts.name])
+            check("unzoomAfterResize-\(label)-retiles",
+                  !isZoomed(ts.name) && afterUnzoom == windowLayout(ts.name),
+                  "got \(afterUnzoom), want \(windowLayout(ts.name))")
+        }
+
         // Test: add_relayout_while_zoomed_unzooms
         do {
             let ts = TestSession(paneCount: 3)

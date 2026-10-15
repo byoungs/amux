@@ -800,9 +800,16 @@ public enum Tmux {
     /// 6. Error message
     /// 7. Open spaces popup (last, since it blocks)
     public static func executeLayout(_ session: String, action: LayoutAction) throws {
-        // Step 1: Unzoom if needed
+        // Step 1: Unzoom if needed. Resizes skip re-tiling while zoomed
+        // (computeResize), so tmux rescaled the hidden grid itself — it grows
+        // or shrinks one column, not all of them. Re-tile from the now-visible
+        // geometry; it can't be computed before unzoom, since a zoomed pane
+        // reports the whole window as its size.
         if action.zoom == false, (try? isZoomed(session)) == true {
             try toggleZoom(session)
+            if action.layoutString == nil {
+                try applyLayout(session, event: .resize)
+            }
         }
 
         // Step 2: Apply layout

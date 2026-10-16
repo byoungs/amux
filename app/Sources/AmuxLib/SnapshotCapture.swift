@@ -28,9 +28,10 @@ public enum SnapshotCapture {
         public let paneCommand: String
         public let panePID: Int
         public let active: Bool
+        public let namingID: String?
 
         public init(session: String, index: Int, cwd: String, title: String,
-                    paneCommand: String, panePID: Int, active: Bool) {
+                    paneCommand: String, panePID: Int, active: Bool, namingID: String? = nil) {
             self.session = session
             self.index = index
             self.cwd = cwd
@@ -38,6 +39,7 @@ public enum SnapshotCapture {
             self.paneCommand = paneCommand
             self.panePID = panePID
             self.active = active
+            self.namingID = namingID
         }
     }
 
@@ -59,7 +61,7 @@ public enum SnapshotCapture {
                 name: name,
                 panes: panes.map { obs in
                     PaneSnapshot(index: obs.index, cwd: obs.cwd, title: obs.title,
-                                 kind: kind(for: obs, resolutions: resolutions))
+                                 kind: kind(for: obs, resolutions: resolutions), namingID: obs.namingID)
                 },
                 selectedPane: panes.first(where: \.active)?.index ?? 0,
                 parkedFrom: parkedFrom[name] ?? "")
@@ -87,7 +89,7 @@ public enum SnapshotCapture {
     public static func observePanes(managed: Set<String>) -> [PaneObservation] {
         let format = ["#{session_name}", "#{pane_index}", "#{pane_current_path}",
                       "#{@amux-title}", "#{pane_title}", "#{pane_current_command}",
-                      "#{pane_pid}", "#{pane_active}"].joined(separator: "\t")
+                      "#{pane_pid}", "#{pane_active}", "#{@amux-names}", "END"].joined(separator: "\t")
         let stdout = Tmux.runRaw(["list-panes", "-a", "-F", format])
         return stdout.split(separator: "\n").compactMap { line in
             let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
@@ -97,7 +99,8 @@ public enum SnapshotCapture {
                 title: f[3].isEmpty ? f[4] : f[3],
                 paneCommand: f[5],
                 panePID: Int(f[6]) ?? 0,
-                active: f[7] == "1")
+                active: f[7] == "1",
+                namingID: f.count >= 10 && !f[8].isEmpty ? f[8] : nil)
         }
     }
 

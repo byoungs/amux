@@ -117,14 +117,18 @@ private func errnoText(_ prefix: String) -> String {
 
 // MARK: - Live client
 
-public final class UnixSocketAlertEventClient: AlertEventClient {
+// Share the same tested JSON transport with native-window requests.
+public typealias UnixSocketAlertEventClient = UnixSocketMessageClient<AlertEvent>
+extension UnixSocketMessageClient: AlertEventClient where Message == AlertEvent {}
+
+public final class UnixSocketMessageClient<Message: Codable> {
     private let socketPath: String
 
     public init(socketPath: String) {
         self.socketPath = socketPath
     }
 
-    public func send(_ event: AlertEvent) throws {
+    public func send(_ event: Message) throws {
         let data: Data
         do {
             data = try JSONEncoder().encode(event)
@@ -181,7 +185,10 @@ public final class UnixSocketAlertEventClient: AlertEventClient {
 
 // MARK: - Live server
 
-public final class UnixSocketAlertEventServer: AlertEventServer {
+public typealias UnixSocketAlertEventServer = UnixSocketMessageServer<AlertEvent>
+extension UnixSocketMessageServer: AlertEventServer where Message == AlertEvent {}
+
+public final class UnixSocketMessageServer<Message: Codable> {
     private let socketPath: String
     private var listenFD: Int32 = -1
     private var acceptThread: Thread?
@@ -191,11 +198,14 @@ public final class UnixSocketAlertEventServer: AlertEventServer {
     private var stopping: Int32 = 0
     private let lock = NSLock()
 
-    public init(socketPath: String) {
+    private let maxMessageBytes: Int
+
+    public init(socketPath: String, maxMessageBytes: Int = 65_536) {
         self.socketPath = socketPath
+        self.maxMessageBytes = maxMessageBytes
     }
 
-    public func start(handler: @escaping (AlertEvent) -> Void) throws {
+    public func start(handler: @escaping (Message) -> Void) throws {
         lock.lock()
         defer { lock.unlock() }
 
@@ -278,7 +288,7 @@ public final class UnixSocketAlertEventServer: AlertEventServer {
         }
     }
 
-    private func acceptLoop(fd: Int32, handler: @escaping (AlertEvent) -> Void) {
+    private func acceptLoop(fd: Int32, handler: @escaping (Message) -> Void) {
         while stopping == 0 {
             var clientAddr = sockaddr()
             var clientLen = socklen_t(MemoryLayout<sockaddr>.size)
@@ -294,7 +304,7 @@ public final class UnixSocketAlertEventServer: AlertEventServer {
         }
     }
 
-    private func handleConnection(fd: Int32, handler: (AlertEvent) -> Void) {
+    private func handleConnection(fd: Int32, handler: (Message) -> Void) {
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 4096)
         while true {
@@ -307,12 +317,11 @@ public final class UnixSocketAlertEventServer: AlertEventServer {
             }
             if n == 0 { break } // EOF — client closed
             buffer.append(chunk, count: n)
-            // Cap at 64KB to bound memory on a misbehaving client.
-            if buffer.count > 65_536 { return }
+            if buffer.count > maxMessageBytes { return }
         }
         guard !buffer.isEmpty else { return }
         do {
-            let event = try JSONDecoder().decode(AlertEvent.self, from: buffer)
+            let event = try JSONDecoder().decode(Message.self, from: buffer)
             handler(event)
         } catch {
             // Silently drop undecodable payloads. Tests use the recording

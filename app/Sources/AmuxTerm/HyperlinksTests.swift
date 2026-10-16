@@ -43,7 +43,7 @@ enum HyperlinksTests {
         do {
             let grid = HyperlinkGrid(rows: 4, cols: 20)
             grid.feed(";https://a.com")
-            grid.cursorMoved(fromRow: 0, fromCol: 2, toRow: 0, toCol: 7)  // write 5 cells
+            grid.writeCells(row: 0, startCol: 2, endCol: 7)  // write 5 cells
             grid.feed(";")
             check("grid-stamp",
                   grid.uri(row: 0, col: 2) == "https://a.com"
@@ -54,7 +54,7 @@ enum HyperlinksTests {
             check("grid-closed", grid.activeID == 0)
 
             // Plain text written over the label clears the stamps.
-            grid.cursorMoved(fromRow: 0, fromCol: 0, toRow: 0, toCol: 10)
+            grid.writeCells(row: 0, startCol: 0, endCol: 10)
             check("grid-overwrite-clears", grid.uri(row: 0, col: 4) == nil)
         }
 
@@ -63,10 +63,10 @@ enum HyperlinksTests {
             // (split links stay one logical link).
             let grid = HyperlinkGrid(rows: 2, cols: 20)
             grid.feed("id=x;https://a.com")
-            grid.cursorMoved(fromRow: 0, fromCol: 0, toRow: 0, toCol: 3)
+            grid.writeCells(row: 0, startCol: 0, endCol: 3)
             grid.feed(";")
             grid.feed("id=x;https://a.com")
-            grid.cursorMoved(fromRow: 1, fromCol: 0, toRow: 1, toCol: 3)
+            grid.writeCells(row: 1, startCol: 0, endCol: 3)
             grid.feed(";")
             check("grid-id-continuity",
                   grid.id(row: 0, col: 0) != 0 && grid.id(row: 0, col: 0) == grid.id(row: 1, col: 0),
@@ -77,28 +77,13 @@ enum HyperlinksTests {
             // Different URIs get different ids even without id= params.
             let grid = HyperlinkGrid(rows: 1, cols: 20)
             grid.feed(";https://a.com")
-            grid.cursorMoved(fromRow: 0, fromCol: 0, toRow: 0, toCol: 2)
+            grid.writeCells(row: 0, startCol: 0, endCol: 2)
             grid.feed(";https://b.com")
-            grid.cursorMoved(fromRow: 0, fromCol: 2, toRow: 0, toCol: 4)
+            grid.writeCells(row: 0, startCol: 2, endCol: 4)
             grid.feed(";")
             check("grid-distinct-ids",
                   grid.uri(row: 0, col: 0) == "https://a.com" && grid.uri(row: 0, col: 2) == "https://b.com",
                   "got \(String(describing: grid.uri(row: 0, col: 0))) / \(String(describing: grid.uri(row: 0, col: 2)))")
-        }
-
-        // === HyperlinkGrid: moves that must NOT stamp ===
-
-        do {
-            let grid = HyperlinkGrid(rows: 4, cols: 20)
-            grid.feed(";https://a.com")
-            grid.cursorMoved(fromRow: 0, fromCol: 5, toRow: 0, toCol: 2)   // backward (CR)
-            grid.cursorMoved(fromRow: 0, fromCol: 5, toRow: 2, toCol: 8)   // cross-row jump (CUP)
-            grid.feed(";")
-            var stamped = 0
-            for row in 0..<4 {
-                for col in 0..<20 where grid.id(row: row, col: col) != 0 { stamped += 1 }
-            }
-            check("grid-jumps-dont-stamp", stamped == 0, "stamped \(stamped) cells")
         }
 
         // === HyperlinkGrid: streamed fragments ===
@@ -113,7 +98,7 @@ enum HyperlinksTests {
             part2.withUnsafeBufferPointer { p in
                 grid.feed(bytes: p.baseAddress, length: p.count, initial: false, final: true)
             }
-            grid.cursorMoved(fromRow: 0, fromCol: 0, toRow: 0, toCol: 1)
+            grid.writeCells(row: 0, startCol: 0, endCol: 1)
             check("grid-fragmented-body", grid.uri(row: 0, col: 0) == "https://fragment.com",
                   "got \(String(describing: grid.uri(row: 0, col: 0)))")
         }
@@ -128,7 +113,7 @@ enum HyperlinksTests {
             huge.withUnsafeBufferPointer { p in
                 grid.feed(bytes: p.baseAddress, length: p.count, initial: true, final: true)
             }
-            grid.cursorMoved(fromRow: 0, fromCol: 0, toRow: 0, toCol: 1)
+            grid.writeCells(row: 0, startCol: 0, endCol: 1)
             check("grid-overflow-closes", grid.id(row: 0, col: 0) == 0)
         }
 
@@ -137,7 +122,7 @@ enum HyperlinksTests {
         do {
             let grid = HyperlinkGrid(rows: 3, cols: 10)
             grid.feed(";https://a.com")
-            grid.cursorMoved(fromRow: 1, fromCol: 0, toRow: 1, toCol: 4)
+            grid.writeCells(row: 1, startCol: 0, endCol: 4)
             grid.feed(";")
             // Scroll up one row: rows 1..3 move to rows 0..2.
             grid.moveRect(destStartRow: 0, destStartCol: 0,
@@ -153,7 +138,7 @@ enum HyperlinksTests {
         do {
             let grid = HyperlinkGrid(rows: 4, cols: 10)
             grid.feed(";https://a.com")
-            grid.cursorMoved(fromRow: 0, fromCol: 0, toRow: 0, toCol: 3)
+            grid.writeCells(row: 0, startCol: 0, endCol: 3)
             grid.feed(";")
             // Rows 0..2 move to rows 1..3.
             grid.moveRect(destStartRow: 1, destStartCol: 0,
@@ -172,7 +157,7 @@ enum HyperlinksTests {
         do {
             let grid = HyperlinkGrid(rows: 2, cols: 10)
             grid.feed(";https://a.com")
-            grid.cursorMoved(fromRow: 0, fromCol: 0, toRow: 0, toCol: 4)
+            grid.writeCells(row: 0, startCol: 0, endCol: 4)
             grid.feed(";")
             grid.moveRect(destStartRow: 0, destStartCol: 0,
                           srcStartRow: 1, srcStartCol: 0,
@@ -184,20 +169,36 @@ enum HyperlinksTests {
         do {
             let grid = HyperlinkGrid(rows: 2, cols: 10)
             grid.feed(";https://a.com")
-            grid.cursorMoved(fromRow: 0, fromCol: 0, toRow: 0, toCol: 4)
+            grid.writeCells(row: 0, startCol: 0, endCol: 4)
             grid.clearAll()
             check("grid-clear", grid.id(row: 0, col: 0) == 0)
-            grid.cursorMoved(fromRow: 1, fromCol: 0, toRow: 1, toCol: 2)
+            grid.writeCells(row: 1, startCol: 0, endCol: 2)
             check("grid-active-survives-clear", grid.uri(row: 1, col: 0) == "https://a.com")
         }
 
         do {
             let grid = HyperlinkGrid(rows: 2, cols: 10)
             grid.feed(";https://a.com")
-            grid.cursorMoved(fromRow: 0, fromCol: 0, toRow: 0, toCol: 4)
+            grid.writeCells(row: 0, startCol: 0, endCol: 4)
             grid.resize(rows: 4, cols: 20)
             check("grid-resize-clears",
                   grid.rows == 4 && grid.cols == 20 && grid.id(row: 0, col: 0) == 0)
+        }
+
+        // Exercise the actual parser: cursor positioning is not text output.
+        do {
+            let terminal = VTerminal(rows: 4, cols: 20)
+            func write(_ text: String) { terminal.write(data: Data(text.utf8)) }
+            write("\u{1B}]8;;https://example.com\u{1B}\\Read the docs\u{1B}]8;;\u{1B}\\")
+            check("parser-stamps-label", terminal.hyperlinkURI(row: 0, col: 5) == "https://example.com")
+            write("\r\u{1B}[15C")
+            check("cursor-forward-preserves-link", terminal.hyperlinkURI(row: 0, col: 5) == "https://example.com")
+            write("\rplain")
+            check("overwrite-clears-only-written-cells", terminal.hyperlinkURI(row: 0, col: 0) == nil && terminal.hyperlinkURI(row: 0, col: 6) == "https://example.com")
+            write("\u{1B}[2;20H\u{1B}]8;;https://edge.example\u{1B}\\X\u{1B}]8;;\u{1B}\\")
+            check("rightmost-cell-has-link", terminal.hyperlinkURI(row: 1, col: 19) == "https://edge.example")
+            write("\u{1B}[2;20HY")
+            check("rightmost-overwrite-clears-link", terminal.hyperlinkURI(row: 1, col: 19) == nil)
         }
 
         // === tmux client must advertise the hyperlinks feature ===

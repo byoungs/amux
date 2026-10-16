@@ -26,6 +26,6 @@ public enum SpaceName {
                 pendingDash = true
             }
         }
-        return out.isEmpty ? nil : out
+        return out.isEmpty ? nil : String(out.prefix(80))
     }
 }

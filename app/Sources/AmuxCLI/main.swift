@@ -117,6 +117,7 @@ func readInputRaw() -> String? {
 
 /// Get the current tmux session name.
 func currentSession() -> String {
+    if let session = ProcessInfo.processInfo.environment["AMUX_SESSION"], !session.isEmpty { return session }
     let result = Tmux.runRaw(["display-message", "-p", "#{session_name}"])
     let name = result.trimmingCharacters(in: .whitespacesAndNewlines)
     return name.isEmpty ? "amux" : name
@@ -185,7 +186,7 @@ func switchToSpace(_ target: String) throws {
         batch.append(["set-option", "-p", "-t", "\(target):.\(landingPane)", "@amux-alert", "0"])
         batch.append(["set-option", "-t", target, "@amux-alert-count", String(alertedAfter)])
     }
-    batch.append(["switch-client", "-t", target])
+    batch.append(Tmux.switchSessionCommand(target))
     batch.append(["select-pane", "-t", "\(target):.\(landingPane)"])
 
     Tmux.batchRaw(batch)
@@ -226,7 +227,7 @@ func drawSpacesPicker(sessions: [String], cursor: Int, current: String, alertCou
         out += "  \(arrow) \(num) \(name)\(dots)\r\n"
     }
 
-    out += "\r\n  \(ansiGray)\u{2191}\u{2193} select \u{00B7} Enter switch \u{00B7} 1-9 jump \u{00B7} n new \u{00B7} Esc cancel\(ansiReset)\r\n"
+    out += "\r\n  \(ansiGray)\u{2191}\u{2193} select \u{00B7} Enter switch \u{00B7} w new window\r\n  1-9 jump \u{00B7} n new space \u{00B7} Esc cancel\(ansiReset)\r\n"
     print(out, terminator: "")
     fflush(stdout)
 }
@@ -247,7 +248,8 @@ func drawSpacesPickerWithBacklog(rows: [SpaceRow], cursor: Int, current: String,
         let num = "\(ansiYellow)\(i + 1)\(ansiReset)"
         switch row {
         case .session(let session):
-            let name = i == cursor ? "\(ansiBold)\(session)\(ansiReset)" : session
+            let display = Names.spaceTitle(session)
+            let name = i == cursor ? "\(ansiBold)\(display)\(ansiReset)" : display
             var dots = ""
             if session == current {
                 dots += " \(ansiGreen)\u{25CF}\(ansiReset)"
@@ -266,7 +268,10 @@ func drawSpacesPickerWithBacklog(rows: [SpaceRow], cursor: Int, current: String,
         }
     }
 
-    out += "\r\n  \(ansiGray)\u{2191}\u{2193} select \u{00B7} Enter switch \u{00B7} 1-9 jump \u{00B7} n new \u{00B7} Esc cancel\(ansiReset)\r\n"
+    let actionHint: String
+    if case .backlog = rows[cursor] { actionHint = "Enter browse" }
+    else { actionHint = "Enter switch · w new window" }
+    out += "\r\n  \(ansiGray)\u{2191}\u{2193} select \u{00B7} \(actionHint)\r\n  1-9 jump \u{00B7} n new space \u{00B7} Esc cancel\(ansiReset)\r\n"
     print(out, terminator: "")
     fflush(stdout)
 }
@@ -383,7 +388,8 @@ func drawSendPickerWithBacklog(dests: [SendDestination], cursor: Int, alertCount
                 : "\(ansiDim)\(ansiGray)\(label)\(ansiReset)"
             out += "  \(arrow) \(num) \(styled)\r\n"
         case .session(let session):
-            let name = i == cursor ? "\(ansiBold)\(session)\(ansiReset)" : session
+            let display = Names.spaceTitle(session)
+            let name = i == cursor ? "\(ansiBold)\(display)\(ansiReset)" : display
             var dots = ""
             let alerts = alertCounts[session] ?? 0
             if alerts > 0 {
@@ -439,6 +445,20 @@ func createNewSpace(orig: termios) throws -> String? {
     return name
 }
 
+/// Keep the picker usable if the GUI is unavailable (e.g. a standalone CLI).
+func openSpaceInWindow(_ session: String) -> Bool {
+    do {
+        try UnixSocketWindowRequestClient(socketPath: defaultWindowSocketPath())
+            .send(WindowRequest(session: session))
+        return true
+    } catch {
+        print("\r\n  Could not open window. Run the updated amux app and retry.\r\n  Press any key to return.", terminator: "")
+        fflush(stdout)
+        _ = readRawKey()
+        return false
+    }
+}
+
 /// Run the spaces picker TUI. Returns when the user makes a selection or cancels.
 func runSpacesPicker() throws {
     let current = currentSession()
@@ -482,6 +502,9 @@ func runSpacesPicker() throws {
                 }
                 return
             }
+        case .char(let b) where b == 0x77 || b == 0x57: // w or W
+            if openSpaceInWindow(sessions[cursor]) { return }
+            drawSpacesPicker(sessions: sessions, cursor: cursor, current: current, alertCounts: alertCounts)
         case .char(let b) where b == 0x6E: // 'n'
             if let newName = try createNewSpace(orig: orig) {
                 restoreTerminal(orig)
@@ -617,6 +640,51 @@ func main() throws {
     }
 
     switch command {
+    case "copy-to-clipboard":
+        guard args.count == 2 else { exit(1) }
+        do {
+            var data = Data()
+            while let chunk = try FileHandle.standardInput.read(upToCount: 65_536), !chunk.isEmpty {
+                data.append(chunk)
+                guard data.count <= ClipboardRequest.maxTextBytes else {
+                    throw AlertTransportError.io("selection exceeds clipboard size limit")
+                }
+            }
+            if !data.isEmpty {
+                do {
+                    try UnixSocketMessageClient<ClipboardRequest>(socketPath: args[1])
+                        .send(ClipboardRequest(text: String(decoding: data, as: UTF8.self)))
+                } catch AlertTransportError.notListening {
+                    // The tmux server can outlive amux (or be used from another
+                    // terminal). Preserve copying while the native app is shut.
+                    let fallback = Process()
+                    fallback.executableURL = URL(fileURLWithPath: "/usr/bin/pbcopy")
+                    let input = Pipe()
+                    fallback.standardInput = input
+                    try fallback.run()
+                    try input.fileHandleForWriting.write(contentsOf: data)
+                    try input.fileHandleForWriting.close()
+                    fallback.waitUntilExit()
+                    guard fallback.terminationStatus == 0 else {
+                        throw AlertTransportError.io("clipboard fallback failed")
+                    }
+                }
+            }
+        } catch {
+            fputs("amux: clipboard transfer failed: \(error)\n", stderr)
+            exit(1)
+        }
+
+    case "names":
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["python3", Names.scriptPath()] + Array(args.dropFirst())
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        try process.run()
+        process.waitUntilExit()
+        exit(process.terminationStatus)
     case "layout":
         // amux-cli layout SESSION — client-resized hook.
         guard args.count >= 2 else {
@@ -624,6 +692,13 @@ func main() throws {
             exit(1)
         }
         try reapplyLayout(session: args[1])
+
+    case "layout-window-changed":
+        // A window notification has no reliable current-session context.
+        // Ignore unmarked windows and notifications caused by our own layout.
+        if args.count == 2, try Tmux.reconcilePaneCount(window: args[1]) {
+            SnapshotCapture.requestAsync()
+        }
 
     case "layout-changed":
         // amux-cli layout-changed SESSION — pane-exited hook.
@@ -660,8 +735,10 @@ func main() throws {
             exit(1)
         }
         let cwd = args[2]
-        let title = Util.autoTitle(dir: cwd)
-        try Tmux.setTitle(session, paneIndex: paneIndex, title: title)
+        if Names.binding("\(session):.\(paneIndex)").isEmpty {
+            let title = Util.autoTitle(dir: cwd)
+            try Tmux.setTitle(session, paneIndex: paneIndex, title: title)
+        }
         try? Tmux.dismissAlert(session, paneIndex: paneIndex)
 
         // Focus changed — record it for session restore. Focus is hooked as
@@ -798,6 +875,11 @@ func main() throws {
                         runBacklogPicker(currentForegroundSession: current)
                         exit(0)
                     }
+                }
+            case .char(let b) where b == 0x77 || b == 0x57: // w or W
+                if case .session(let target) = displayRows[cursor], openSpaceInWindow(target) {
+                    restoreTerminal(orig)
+                    exit(0)
                 }
             case .char(let b) where b == 0x6E || b == 0x4E: // n or N
                 restoreTerminal(orig)

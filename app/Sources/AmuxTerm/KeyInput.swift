@@ -16,6 +16,14 @@ enum KeyInput {
             && event.charactersIgnoringModifiers == "q"
     }
 
+    /// Window cycling (both directions) and minimization belong to AppKit.
+    /// Keep the monitor and the native view's fallback in agreement: passing
+    /// these through the monitor alone still lets performKeyEquivalent eat them.
+    static func isNativeWindowShortcut(_ event: NSEvent) -> Bool {
+        event.modifierFlags.contains(.command)
+            && ["`", "~", "m"].contains(event.charactersIgnoringModifiers ?? "")
+    }
+
     /// Determine the action for a key event given the current mode.
     static func action(for event: NSEvent, mode: InputMode) -> KeyAction {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -39,7 +47,7 @@ enum KeyInput {
 
             // Cmd+key → amux commands (not PTY bytes)
             if hasCmd {
-                return amuxAction(for: chars)
+                return amuxAction(for: chars, shift: flags.contains(.shift))
             }
 
             // Everything else → PTY bytes
@@ -55,8 +63,8 @@ enum KeyInput {
     /// Delegates to the AppKit-free `KeyCommand.amuxCommand` in AmuxLib for
     /// the character→command mapping, then falls back to PTY bytes for
     /// characters that don't bind to an amux action.
-    private static func amuxAction(for chars: String) -> KeyAction {
-        if let cmd = KeyCommand.amuxCommand(for: chars) {
+    private static func amuxAction(for chars: String, shift: Bool = false) -> KeyAction {
+        if let cmd = KeyCommand.amuxCommand(for: chars, shift: shift) {
             return .amux(cmd)
         }
         // Unknown Cmd-key — send as Ctrl-key to PTY for compatibility
@@ -138,11 +146,12 @@ enum KeyInput {
         return event.characters?.data(using: .utf8)
     }
 
-    // MARK: - Legacy API (kept for existing tests)
+    // MARK: - Native view fallback
 
     /// Convert a keyDown NSEvent to PTY bytes.
     /// Returns nil if the event should not be sent (e.g., Cmd-Q for app quit).
     static func bytes(for event: NSEvent) -> Data? {
+        if isNativeWindowShortcut(event) { return nil }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let hasCmd = flags.contains(.command)
         let hasCtrl = flags.contains(.control)

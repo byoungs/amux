@@ -166,8 +166,8 @@ enum ConfigTests {
                   "Config.swift must use after-select-pane hook")
         }
 
-        // Mouse + wheel bindings: tmux must intercept wheel for copy-mode
-        // entry on main screen and pass-through on alt-screen.
+        // Mouse-aware applications own wheel events; otherwise tmux opens
+        // history. Screen choice alone does not indicate mouse support.
         do {
             let ts = TestSession(paneCount: 1)
             _ = ts  // hold session alive through queries
@@ -187,8 +187,8 @@ enum ConfigTests {
 
             let upBinding = binding(in: "root", key: "WheelUpPane")
             check("wheel-up-binding-exists", !upBinding.isEmpty)
-            check("wheel-up-binding-alternate-on",
-                  upBinding.contains("alternate_on"),
+            check("wheel-up-binding-mouse-support",
+                  upBinding.contains("mouse_any_flag"),
                   "got: \(upBinding)")
             check("wheel-up-binding-copy-mode",
                   upBinding.contains("copy-mode"),

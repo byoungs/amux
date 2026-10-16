@@ -268,6 +268,16 @@ enum AmuxTests {
                   "expected 2 panes, got \(paneCount(ts.name))")
         }
 
+        // A naming/provider binding must never intercept the normal Cmd-N path.
+        do {
+            let ts = TestSession(paneCount: 1)
+            tmux("set-option", "-p", "-t", "\(ts.name):0.0", "@amux-names", "provider-bound")
+            AppController(session: ts.name).handleAction(.newPane)
+            check("cmdNWithSharedNameCreatesOrdinaryPane", paneCount(ts.name) == 2)
+            let command = tmux("display-message", "-p", "-t", "\(ts.name):0.1", "#{pane_start_command}").stdout
+            check("cmdNDoesNotStartNamingWrapper", !command.contains("names.py") && !command.contains("workflow.py"))
+        }
+
         // --- key_bindings_are_installed ---
         //
         // In the Swift port, Cmd-keys are dispatched by the native app via

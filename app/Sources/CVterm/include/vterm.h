@@ -554,6 +554,11 @@ VTermScreen *vterm_obtain_screen(VTerm *vt);
 void  vterm_screen_set_callbacks(VTermScreen *screen, const VTermScreenCallbacks *callbacks, void *user);
 void *vterm_screen_get_cbdata(VTermScreen *screen);
 
+/* amux extension: observe actual glyph writes, independently of cursor motion
+ * and merged repaint damage. Used for OSC 8 cell metadata. */
+void vterm_screen_set_glyph_callback(VTermScreen *screen,
+    void (*callback)(VTermRect rect, void *user), void *user);
+
 void vterm_screen_callbacks_has_pushline4(VTermScreen *screen);
 
 void  vterm_screen_set_unrecognised_fallbacks(VTermScreen *screen, const VTermStateFallbacks *fallbacks, void *user);

@@ -47,6 +47,7 @@ enum SessionRestoreTests {
             Tmux.markAsManaged(ts.name)
             tmux("split-window", "-t", "\(ts.name):0", "-d", "-c", "/usr")
             try? Tmux.setTitle(ts.name, paneIndex: 1, title: "usr-pane")
+            tmux("set-option", "-p", "-t", "\(ts.name):0.1", "@amux-names", "saved-local-name")
 
             let path = scratch.appendingPathComponent("capture.json")
             let snapshot = SnapshotCapture.captureNow(cleanExit: false, to: path, now: 1_000)
@@ -55,6 +56,8 @@ enum SessionRestoreTests {
             check("capture-pane-count", space?.panes.count == 2, "\(space?.panes.count ?? -1)")
             check("capture-cwd", space?.panes.last?.cwd == "/usr", space?.panes.last?.cwd ?? "nil")
             check("capture-title", space?.panes.last?.title == "usr-pane", space?.panes.last?.title ?? "nil")
+            check("capture-naming-identity", space?.panes.last?.namingID == "saved-local-name")
+            check("capture-unnamed-pane", space?.panes.first?.namingID == nil)
             check("capture-clean-exit-false", snapshot?.cleanExit == false)
 
             // The file on disk is what restore will read back.
@@ -79,7 +82,7 @@ enum SessionRestoreTests {
                 // /private/... in pane_current_path and would fail the compare
                 // for reasons that have nothing to do with restore.
                 spaces: [SpaceSnapshot(name: name, panes: [
-                    PaneSnapshot(index: 0, cwd: "/usr", title: "one", kind: .shell),
+                    PaneSnapshot(index: 0, cwd: "/usr", title: "one", kind: .shell, namingID: "restored-local-name"),
                     PaneSnapshot(index: 1, cwd: "/usr/lib", title: "two", kind: .shell),
                     PaneSnapshot(index: 2, cwd: "/usr/share", title: "three", kind: .shell),
                 ], selectedPane: 2)],
@@ -90,6 +93,8 @@ enum SessionRestoreTests {
 
             let panes = (try? Tmux.listPanes(name)) ?? []
             check("restore-pane-count", panes.count == 3, "\(panes.count)")
+            check("restore-naming-identity", Tmux.runRaw([
+                "show-options", "-p", "-v", "-t", "\(name):0.0", "@amux-names"]) == "restored-local-name")
             check("restore-titles", panes.map(\.title) == ["one", "two", "three"],
                   panes.map(\.title).joined(separator: ","))
             let cwds = settledCwds(name, count: panes.count)

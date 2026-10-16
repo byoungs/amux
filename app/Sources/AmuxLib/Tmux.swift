@@ -329,11 +329,16 @@ public enum Tmux {
     }
 
     /// Switch the current client to a different session.
-    public static func switchSession(_ session: String) throws {
+    public static func switchSession(_ session: String, clientTTY: String? = nil) throws {
         try runChecked(
-            ["switch-client", "-t", session],
+            switchSessionCommand(session, clientTTY: clientTTY),
             context: "tmux switch-client failed"
         )
+    }
+
+    public static func switchSessionCommand(_ session: String, clientTTY: String? = nil) -> [String] {
+        let tty = clientTTY ?? ProcessInfo.processInfo.environment["AMUX_CLIENT_TTY"]
+        return ["switch-client"] + (tty.map { ["-c", $0] } ?? []) + ["-t", session]
     }
 
     /// Attach to a tmux session (blocking, takes over terminal).
@@ -867,6 +872,34 @@ public enum Tmux {
         try executeLayout(session, action: action)
     }
 
+    /// Repair pane removals reported by tmux, including explicit kills
+    /// which do not emit pane-exited.
+    public static func reconcilePaneCount(window: String) throws -> Bool {
+        guard window.first == "@", !window.dropFirst().isEmpty,
+              window.dropFirst().allSatisfy({ $0.isNumber }) else { return false }
+        // Serialize notifications for the same window. Re-read after acquiring
+        // the lock so a burst of notifications performs only one repair.
+        let lock = "amux-layout-\(window)"
+        guard (try? run(["wait-for", "-L", lock])) != nil else { return false }
+        defer { runIgnoring(["wait-for", "-U", lock]) }
+        guard let row = try? run(["display-message", "-p", "-t", window,
+            "#{window_index}\t#{window_panes}\t#{@amux-layout-pane-count}\t#{session_name}\t."])
+        else { return false } // The last pane may have destroyed the window.
+        let fields = row.split(separator: "\t", omittingEmptySubsequences: false)
+        guard fields.count == 5, fields[0] == "0",
+              let count = Int(fields[1]), let previous = Int(fields[2]),
+              count != previous else { return false }
+        // Save BEFORE select-layout emits another notification: no feedback loop.
+        _ = try run(["set-option", "-w", "-t", window,
+                     "@amux-layout-pane-count", String(count)])
+        // Additions use createPane's .addPane event, which knows the new ID
+        // and preserves the old panes' slots. A competing .resize here could
+        // move those panes before that pipeline has placed the new pane.
+        guard count < previous else { return false }
+        try applyLayout(String(fields[3]), event: .resize)
+        return true
+    }
+
     /// Swap panes until tree-walk order matches `desiredOrder`.
     ///
     /// `desiredOrder` is the desired sequence of numeric pane IDs (i.e.,
@@ -1319,8 +1352,10 @@ public enum Tmux {
     /// Open the spaces picker as a tmux popup.
     public static func openSpacesPopup() throws {
         let bin = Config.findAmuxCLI()
-        runIgnoring([
-            "display-popup", "-E", "-w", "70", "-h", "20", "-T", " Spaces ", "\(bin) spaces"
+        let tty = ProcessInfo.processInfo.environment["AMUX_CLIENT_TTY"]
+        let command = "env AMUX_CLIENT_TTY=#{q:client_tty} AMUX_SESSION=#{q:session_name} \(SessionRestore.singleQuoted(bin)) spaces"
+        runIgnoring(["display-popup"] + (tty.map { ["-c", $0] } ?? []) + [
+            "-E", "-w", "70", "-h", "20", "-T", " Spaces ", command
         ])
     }
 

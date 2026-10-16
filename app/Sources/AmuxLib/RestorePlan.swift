@@ -143,6 +143,9 @@ public enum SessionRestore {
                                   pane: PaneSnapshot) -> [[String]] {
         var out: [[String]] = []
         let paneTarget = "\(target).\(position)"
+        if let namingID = pane.namingID, !namingID.isEmpty {
+            out.append(["set-option", "-p", "-t", paneTarget, "@amux-names", namingID])
+        }
         if !pane.title.isEmpty {
             out.append(["set-option", "-p", "-t", paneTarget, "@amux-title", pane.title])
         }

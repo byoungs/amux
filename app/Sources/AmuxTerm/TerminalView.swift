@@ -19,8 +19,9 @@ final class TerminalView: NSView {
     private var boldItalicFont: CTFont
     var cellWidth: CGFloat = 0
     var cellHeight: CGFloat = 0
-    private var fontAscent: CGFloat = 0
+    private var glyphBaseline: CGFloat = 0
     private var resizeTimer: Timer?
+    private var pendingSize: (rows: Int, cols: Int)?
     private var pendingDraw: Bool = false
     // When the currently-open DEC 2026 update was first observed, or nil if no
     // update is open. Frames are held while it is set (see syncHoldsFrame).
@@ -30,9 +31,15 @@ final class TerminalView: NSView {
     private var lineCache: [String: CTLine] = [:]
     private var lineCacheGeneration: Int = 0
 
-    private let defaultBg = CGColor(gray: 0, alpha: 1)
+    private let terminalAppearance = TerminalAppearance.load()
+    private lazy var defaultBg: CGColor = {
+        self.terminalAppearance.map { TerminalAppearance.cgColor($0.colors.background) } ?? CGColor(gray: 0, alpha: 1)
+    }()
 
     // Cmd-Click link detection (uses LinkDetector for testable regex scanning)
+    private var consumedLinkClick = false
+    /// Replaceable in interaction tests so clicks do not launch a browser.
+    var openURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
     private var detectedLinks: [DetectedLink] = []
     private var cmdHeld = false
 
@@ -80,6 +87,10 @@ final class TerminalView: NSView {
     /// Asks tmux for the attached session (fresh, one round-trip). Only
     /// for work already off the main thread.
     var lookUpSession: () -> String? = { nil }
+    var onCopyRequested: (() -> Void)?
+    var onPasteRequested: (() -> Void)?
+    // Injectable so interaction tests use a private clipboard.
+    var pasteboard: NSPasteboard = .general
 
     // Pane border color overlay.
     // Overrides border cell foreground colors for panes with colored states.
@@ -116,13 +127,15 @@ final class TerminalView: NSView {
     init(terminal: VTerminal, pty: PTY) {
         self.terminal = terminal
         self.pty = pty
-        let baseFont = CTFontCreateWithName("Menlo" as CFString, 14, nil)
+        let settings = TerminalAppearance.load()
+        let baseFont = CTFontCreateWithName((settings?.fontName ?? "Menlo") as CFString, CGFloat(settings?.fontSize ?? 14), nil)
         self.font = baseFont
         self.boldFont = CTFontCreateCopyWithSymbolicTraits(baseFont, 0, nil, .boldTrait, .boldTrait) ?? baseFont
         self.italicFont = CTFontCreateCopyWithSymbolicTraits(baseFont, 0, nil, .italicTrait, .italicTrait) ?? baseFont
         self.boldItalicFont = CTFontCreateCopyWithSymbolicTraits(baseFont, 0, nil, [.boldTrait, .italicTrait], [.boldTrait, .italicTrait]) ?? baseFont
         super.init(frame: .zero)
         wantsLayer = true
+        terminalAppearance?.apply(to: terminal)
 
         // Right-click context menu with Copy and Paste
         let menu = NSMenu()
@@ -178,17 +191,13 @@ final class TerminalView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func updateFontMetrics() {
-        fontAscent = CTFontGetAscent(font)
-        let descent = CTFontGetDescent(font)
-        let leading = CTFontGetLeading(font)
-        cellHeight = ceil(fontAscent + descent + leading)
-
-        var chars: [UniChar] = [0x4D] // 'M'
-        var glyphs = [CGGlyph](repeating: 0, count: 1)
-        CTFontGetGlyphsForCharacters(font, &chars, &glyphs, 1)
-        var advance = CGSize.zero
-        CTFontGetAdvancesForGlyphs(font, .horizontal, glyphs, &advance, 1)
-        cellWidth = ceil(advance.width)
+        let metrics = TerminalFontMetrics(
+            font: font,
+            horizontalSpacing: CGFloat(terminalAppearance?.horizontalSpacing ?? 1),
+            verticalSpacing: CGFloat(terminalAppearance?.verticalSpacing ?? 1))
+        cellWidth = metrics.width
+        cellHeight = metrics.height
+        glyphBaseline = metrics.baseline
     }
 
     // MARK: - Display Link
@@ -294,17 +303,34 @@ final class TerminalView: NSView {
         guard cellWidth > 0, cellHeight > 0 else { return }
         let newCols = max(1, Int(newSize.width / cellWidth))
         let newRows = max(1, Int(newSize.height / cellHeight))
-        if newRows != terminal.rows || newCols != terminal.cols {
-            // Debounce resize: only notify tmux after the window stops being dragged.
-            // This prevents flooding tmux with SIGWINCH during live resize.
-            terminal.resize(rows: newRows, cols: newCols)  // sets fullRedrawNeeded internally
-            resizeTimer?.invalidate()
-            resizeTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
-                guard let self = self else { return }
-                self.pty.resize(rows: UInt16(self.terminal.rows), cols: UInt16(self.terminal.cols))
-            }
-            needsDisplay = true
+        resizeTimer?.invalidate()
+        pendingSize = nil
+        guard newRows != terminal.rows || newCols != terminal.cols else { return }
+        // Commit the emulator and PTY sizes together. Resizing only the grid
+        // first parses in-flight output using the wrong geometry and can erase
+        // content without a corresponding SIGWINCH to make the app redraw.
+        pendingSize = (newRows, newCols)
+        let timer = Timer(timeInterval: 0.05, repeats: false) { [weak self] _ in
+            self?.commitResize()
         }
+        resizeTimer = timer
+        // Native resizing/fullscreen transitions run in tracking mode too.
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func commitResize() {
+        resizeTimer?.invalidate()
+        resizeTimer = nil
+        guard let size = pendingSize else { return }
+        pendingSize = nil
+        terminal.resize(rows: size.rows, cols: size.cols)
+        pty.resize(rows: UInt16(size.rows), cols: UInt16(size.cols))
+        needsDisplay = true
+    }
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        commitResize()
     }
 
     // MARK: - Rendering
@@ -317,6 +343,8 @@ final class TerminalView: NSView {
         #if DEBUG
         let drawStart = CFAbsoluteTimeGetCurrent()
         #endif
+
+        ctx.setShouldAntialias(terminalAppearance?.antialias ?? true)
 
         // Fix CoreText in flipped coordinates
         ctx.textMatrix = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: 0)
@@ -680,11 +708,11 @@ final class TerminalView: NSView {
         }
 
         let line = cachedLine(for: str, font: drawFont, color: fgColor, r: fgNSR, g: fgNSG, b: fgNSB, bold: isBold, italic: isItalic)
-        ctx.textPosition = CGPoint(x: x, y: y + fontAscent)
+        ctx.textPosition = CGPoint(x: x, y: y + glyphBaseline)
         CTLineDraw(line, ctx)
 
         if cell.attrs.underline != 0 {
-            let underY = y + fontAscent + 2
+            let underY = y + glyphBaseline + 2
             ctx.setStrokeColor(fgColor.cgColor)
             ctx.setLineWidth(1)
             ctx.move(to: CGPoint(x: x, y: underY))
@@ -703,7 +731,7 @@ final class TerminalView: NSView {
 
         // Cmd-held link underline (blue, like iTerm2)
         if cmdHeld && isLinkCell(row: row, col: col) {
-            let underY = y + fontAscent + 2
+            let underY = y + glyphBaseline + 2
             let linkBlue = CGColor(red: 0.2, green: 0.5, blue: 1.0, alpha: 1.0)
             ctx.setStrokeColor(linkBlue)
             ctx.setLineWidth(1)
@@ -716,7 +744,8 @@ final class TerminalView: NSView {
     private func drawCursor(row: Int, col: Int, ctx: CGContext) {
         let x = CGFloat(col) * cellWidth
         let y = CGFloat(row) * cellHeight
-        ctx.setFillColor(CGColor(red: 0.7, green: 0.7, blue: 0.7, alpha: 0.5))
+        ctx.setFillColor(terminalAppearance.map { TerminalAppearance.cgColor($0.colors.cursor, alpha: 0.5) }
+                         ?? CGColor(red: 0.7, green: 0.7, blue: 0.7, alpha: 0.5))
         ctx.fill(CGRect(x: x, y: y, width: cellWidth, height: cellHeight))
     }
 
@@ -735,12 +764,14 @@ final class TerminalView: NSView {
     // and integrates with tmux's copy mode.
 
     override func mouseDown(with event: NSEvent) {
+        consumedLinkClick = false
         // Cmd-Click: open link at cursor position
         if event.modifierFlags.contains(.command) {
             let pos = cellPosition(for: event)
             // Always scan fresh on click (don't rely on flagsChanged having fired)
             let freshLinks = scanForLinks()
             if let link = freshLinks.first(where: { $0.row == pos.row && pos.col >= $0.startCol && pos.col <= $0.endCol }) {
+                consumedLinkClick = true
                 openLink(link.url, row: pos.row, col: pos.col)
                 return
             }
@@ -756,6 +787,7 @@ final class TerminalView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if consumedLinkClick { return }
         let pos = cellPosition(for: event)
         let col = pos.col + 1
         let row = pos.row + 1
@@ -767,6 +799,7 @@ final class TerminalView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if consumedLinkClick { consumedLinkClick = false; return }
         let pos = cellPosition(for: event)
         let col = pos.col + 1
         let row = pos.row + 1
@@ -777,6 +810,31 @@ final class TerminalView: NSView {
     }
 
     // MARK: - Cmd-Click link detection
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let result = NSMenu()
+        let pos = cellPosition(for: event)
+        if let link = scanForLinks().first(where: { $0.row == pos.row && pos.col >= $0.startCol && pos.col <= $0.endCol }) {
+            let open = result.addItem(withTitle: "Open Link", action: #selector(openContextLink(_:)), keyEquivalent: "")
+            open.target = self; open.representedObject = link
+            let copy = result.addItem(withTitle: "Copy Link Address", action: #selector(copyContextLink(_:)), keyEquivalent: "")
+            copy.target = self; copy.representedObject = link
+            result.addItem(.separator())
+        }
+        result.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "").target = self
+        result.addItem(withTitle: "Paste", action: #selector(paste(_:)), keyEquivalent: "").target = self
+        return result
+    }
+
+    @objc private func openContextLink(_ sender: NSMenuItem) {
+        guard let link = sender.representedObject as? DetectedLink else { return }
+        openLink(link.url, row: link.row, col: link.startCol)
+    }
+
+    @objc private func copyContextLink(_ sender: NSMenuItem) {
+        guard let link = sender.representedObject as? DetectedLink else { return }
+        TerminalView.setPasteboard(link.url)
+    }
 
     override func flagsChanged(with event: NSEvent) {
         let cmdNow = event.modifierFlags.contains(.command)
@@ -813,14 +871,7 @@ final class TerminalView: NSView {
     /// URLs — joining ones Claude Code wrapped across rows — and colored
     /// filenames (e.g., from Claude or `make`) with spaces in them.
     private func scanForLinks() -> [DetectedLink] {
-        var rows: [String] = []
-        var colors: [[LinkDetector.CellColor]] = []
-        for row in 0..<terminal.rows {
-            let (text, rowColors) = extractRow(row)
-            rows.append(text)
-            colors.append(rowColors)
-        }
-        let detected = LinkDetector.scanScreen(rows: rows, colors: colors, cols: terminal.cols)
+        let detected = TerminalLinkScanner.scan(terminal)
         return LinkDetector.merging(explicit: hyperlinkSpans(), detected: detected)
     }
 
@@ -917,16 +968,30 @@ final class TerminalView: NSView {
             guard let url = LinkTarget.resolve(
                 link, cwd: cwd, home: NSHomeDirectory(),
                 exists: { FileManager.default.fileExists(atPath: $0) })
-            else { return }
+            else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.showLinkError("The file could not be found on this Mac. If it is on a remote machine, its path cannot be opened as a local file.\n\n\(link)")
+                }
+                return
+            }
             let reveal = url.isFileURL && TerminalView.shouldReveal(url)
             DispatchQueue.main.async {
                 if reveal {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 } else {
-                    NSWorkspace.shared.open(url)
+                    if !self.openURL(url) { self.showLinkError("macOS could not open this link:\n\n\(url.absoluteString)") }
                 }
             }
         }
+    }
+
+    private func showLinkError(_ message: String) {
+        guard let window, window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Couldn’t open link"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window)
     }
 
     /// Filesystem facts for LinkTarget.shouldReveal.
@@ -969,10 +1034,10 @@ final class TerminalView: NSView {
             return
         }
 
-        // Wheel events on the main screen may trigger tmux copy-mode entry.
-        if !terminal.isAltScreen {
-            wheelMayHaveEnteredCopyMode = true
-        }
+        // This is tmux's outer screen, not the pane application's screen.
+        // Tmux uses the alternate screen even while a shell enters copy-mode.
+        // Check the pane before the next key regardless of the outer mode.
+        wheelMayHaveEnteredCopyMode = true
 
         let pos = cellPosition(for: event)
         let sequences = KeyInput.scrollBytes(
@@ -995,37 +1060,16 @@ final class TerminalView: NSView {
         }
     }
 
-    /// If a wheel event may have entered tmux copy-mode, query tmux's
-    /// pane_in_mode state and send an Esc byte via PTY to trigger
-    /// copy-mode's default cancel binding. Esc + key bytes go through
-    /// the same PTY channel so tmux processes them in order.
-    ///
-    /// Why not `tmux send-keys -X cancel`? That command goes via the
-    /// tmux socket while key bytes go via PTY. Tmux processes them on
-    /// independent paths and the key can hit copy-mode before the
-    /// socket command runs. Default emacs copy-mode silently swallows
-    /// most keys, so the typed character is lost.
-    ///
-    /// Why not always send Esc unconditionally? Esc bytes outside
-    /// copy-mode flow to the pane app. For the shell, `Esc f` is
-    /// `Alt-f` in readline (move forward by word) — corrupts input.
-    /// So we query pane_in_mode first; only send Esc if true.
-    /// Subprocess query is ~5ms; it only fires on the first keystroke
-    /// after a wheel event.
-    ///
-    /// Keys reach the PTY through AppDelegate's key monitor, not keyDown,
-    /// so the monitor consults `wheelMayHaveEnteredCopyMode` and runs the
-    /// query off the main thread (see AppDelegate.dispatchStep).
-    static func copyModeExitBytes(session: String) -> Data? {
-        // Target the session explicitly. An untargeted display-message
-        // resolves to whatever tmux considers the "current" pane on the
-        // server, which is unreliable when a fresh non-attached client
-        // (this subprocess) issues the query — it can return the wrong
-        // pane's state and skip the needed Esc.
-        let args = session.isEmpty
-            ? ["display-message", "-p", "#{pane_in_mode}"]
-            : ["display-message", "-t", session, "-p", "#{pane_in_mode}"]
-        return Tmux.runRaw(args) == "1" ? Data([0x1B]) : nil
+    /// Wait for tmux to cancel copy-mode before releasing queued input.
+    /// Sending a literal Escape followed by a character can become a Meta-key
+    /// (for example Escape + p is M-p), leaving copy-mode open and losing input.
+    /// This synchronous command completes on the action queue before the PTY
+    /// write, so cancellation and the following key/paste cannot overtake it.
+    static func exitCopyMode(session: String) {
+        guard !session.isEmpty else { return }
+        // -X only addresses a mode; it never sends "cancel" to the application.
+        // It is harmless when the pane has already left copy-mode.
+        Tmux.runRaw(["send-keys", "-t", session, "-X", "cancel"])
     }
 
     /// A wheel scroll may have left the pane in copy-mode.
@@ -1067,14 +1111,21 @@ final class TerminalView: NSView {
     // MARK: - Copy / Paste
 
     @objc func copy(_ sender: Any?) {
-        // Read tmux's paste buffer and put on system clipboard. Goes through
-        // the shared executor so it hits amux's tmux binary and socket; a
-        // missing buffer (or failed launch) comes back nil and is a no-op.
-        // pasteBuffer keeps leading indentation and trailing newlines.
-        // Cmd-C itself takes the off-main path in AppDelegate; this is the
-        // Edit menu's.
-        if let text = Tmux.pasteBuffer(), !text.isEmpty {
-            TerminalView.setPasteboard(text)
+        if let request = onCopyRequested { request(); return }
+        if case .offMain(let work) = copyStep() { DispatchQueue.global(qos: .userInitiated).async(execute: work) }
+    }
+
+    func copyStep() -> DispatchStep {
+        let cached = session
+        let lookup = lookUpSession
+        return .offMain {
+            let target = lookup() ?? cached
+            // Mouse release already copies through the native clipboard bridge.
+            // Only an unfinished selection needs a command; never overwrite
+            // the clipboard with an unrelated old local tmux buffer.
+            guard !target.isEmpty,
+                  Tmux.runRaw(["display-message", "-p", "-t", target, "#{selection_present}"]) == "1" else { return }
+            Tmux.runRaw(["send-keys", "-t", target, "-X", "copy-pipe-and-cancel", "-C"])
         }
     }
 
@@ -1086,7 +1137,12 @@ final class TerminalView: NSView {
     }
 
     @objc func paste(_ sender: Any?) {
-        guard let str = NSPasteboard.general.string(forType: .string) else { return }
+        if let request = onPasteRequested { request(); return }
+        if case .offMain(let work) = pasteStep() { DispatchQueue.global(qos: .userInitiated).async(execute: work) }
+    }
+
+    func pasteStep() -> DispatchStep {
+        guard let str = pasteboard.string(forType: .string) else { return .inline {} }
         // Strip any embedded bracket paste end sequences (ESC[201~) from the
         // clipboard data to prevent injection of terminal escape sequences.
         let endMarker = Data([0x1B, 0x5B, 0x32, 0x30, 0x31, 0x7E]) // ESC[201~
@@ -1100,6 +1156,15 @@ final class TerminalView: NSView {
         var combined = Data([0x1B, 0x5B, 0x32, 0x30, 0x30, 0x7E]) // ESC[200~
         combined.append(pasteData)
         combined.append(endMarker)
-        pty.write(combined)
+        let payload = combined
+        let cached = session
+        let lookup = lookUpSession
+        let output = pty
+        clearCopyModeFlag()
+        return .offMain {
+            let target = lookup() ?? cached
+            TerminalView.exitCopyMode(session: target)
+            output.write(payload)
+        }
     }
 }

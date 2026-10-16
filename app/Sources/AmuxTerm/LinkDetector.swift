@@ -28,21 +28,18 @@ enum LinkDetector {
 
     // MARK: - URL detection
 
-    /// Characters that may appear in a plain-text URL (RFC 3986-ish).
-    /// Deliberately excludes quotes, parens, and angle/square brackets
-    /// (common wrappers around URLs in prose) and everything non-ASCII —
-    /// tmux pane borders (│) and Claude Code's truncation ellipsis (…)
-    /// must terminate a match, never join it.
-    /// Keep in sync with the character class in `urlPattern`.
-    private static let urlCharacters =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~:/?#@!$&*+,;=%-"
+    // Keep Unicode paths, IPv6 hosts and balanced parentheses intact. Terminal
+    // borders, truncation ellipses and prose quoting are not part of a URL.
+    private static let urlPattern = #"https?://[^\s<>"'`\x{2500}-\x{257f}\x{2026}]+"#
+    private static let urlRegex = try? NSRegularExpression(pattern: urlPattern, options: [.caseInsensitive])
+    private static let excludedURLUnits = CharacterSet.whitespacesAndNewlines
+        .union(.controlCharacters).union(CharacterSet(charactersIn: "<>\"'`…"))
 
-    /// `urlCharacters` as a regex character class ('-' last so it is literal).
-    private static let urlPattern = "https?://[A-Za-z0-9._~:/?#@!$&*+,;=%-]+"
-
-    private static let urlRegex = try? NSRegularExpression(pattern: urlPattern)
-
-    private static let urlCharacterUnits: Set<unichar> = Set(urlCharacters.utf16)
+    private static func isURLUnit(_ unit: unichar) -> Bool {
+        if (0x2500...0x257f).contains(unit) { return false }
+        guard let scalar = Unicode.Scalar(unit) else { return true } // UTF-16 surrogate
+        return !excludedURLUnits.contains(scalar)
+    }
 
     /// Sentence punctuation that trails a URL in prose ("see https://x.com.")
     /// but is almost never the final character of the URL itself.
@@ -72,11 +69,22 @@ enum LinkDetector {
     private static func strippingTrailingPunctuation(_ url: String) -> (url: String, dropped: Int) {
         var trimmed = url
         var dropped = 0
-        while let last = trimmed.last, trailingPunctuation.contains(last) {
-            trimmed.removeLast()
-            dropped += 1
+        while let last = trimmed.last {
+            let opener: Character? = [")": "(", "]": "[", "}": "{"][last]
+            let unmatchedCloser = opener.map { open in
+                trimmed.filter { $0 == last }.count > trimmed.filter { $0 == open }.count
+            } ?? false
+            guard trailingPunctuation.contains(last) || unmatchedCloser else { break }
+            dropped += String(trimmed.removeLast()).utf16.count
         }
         return (trimmed, dropped)
+    }
+
+    /// A closing Markdown/prose delimiter ends the link even at the pane edge.
+    /// Balanced parentheses inside a URL still allow wrapping onto the next row.
+    private static func hasClosingDelimiter(_ url: String) -> Bool {
+        let cleaned = strippingTrailingPunctuation(url).url
+        return url.dropFirst(cleaned.count).contains { ")]}".contains($0) }
     }
 
     // MARK: - File detection
@@ -252,7 +260,20 @@ enum LinkDetector {
     /// `rows` are the visible rows with trailing spaces trimmed; `cols` is
     /// the terminal width (used to decide whether a fragment reaches the
     /// right screen edge).
-    static func scanScreen(rows: [String], colors: [[CellColor]], cols: Int) -> [DetectedLink] {
+    static func scanScreen(rows: [String], colors: [[CellColor]], cols: Int,
+                           cellStarts: [[Int]]? = nil, cellEnds: [[Int]]? = nil) -> [DetectedLink] {
+        // Regex offsets are UTF-16 positions, not terminal columns. A wide
+        // character occupies two cells; combining marks occupy none.
+        func startColumn(_ row: Int, _ offset: Int) -> Int {
+            cellStarts?[row][offset] ?? offset
+        }
+        func endColumn(_ row: Int, _ offset: Int) -> Int {
+            cellEnds?[row][offset] ?? offset
+        }
+        func continuationOffset(_ previousRow: Int, _ offset: Int) -> Int {
+            let column = startColumn(previousRow, offset)
+            return cellStarts?[previousRow + 1].firstIndex(where: { $0 >= column }) ?? column
+        }
         let fragmentsByRow = rows.map { urlFragments(in: $0) }
         var consumed: Set<Int> = []  // row * 10_000 + startCol
         var links: [DetectedLink] = []
@@ -265,10 +286,12 @@ enum LinkDetector {
                 var spans = [(row: row, startCol: fragment.startCol, endCol: fragment.endCol)]
                 var cur = spans[0]
                 while cur.row + 1 < rows.count,
-                    endsFlush(rows[cur.row], endCol: cur.endCol, cols: cols),
+                    !hasClosingDelimiter(url),
+                    endsFlush(rows[cur.row], endCol: cur.endCol,
+                              displayEndCol: endColumn(cur.row, cur.endCol), cols: cols),
                     let cont = continuationRun(
                         in: rows[cur.row + 1],
-                        from: segmentStart(rows[cur.row], before: cur.startCol)
+                        from: continuationOffset(cur.row, segmentStart(rows[cur.row], before: cur.startCol))
                     )
                 {
                     url += cont.text
@@ -308,7 +331,10 @@ enum LinkDetector {
                 if !overlapsURL { links.append(file) }
             }
         }
-        return links
+        return links.map { link in
+            DetectedLink(row: link.row, startCol: startColumn(link.row, link.startCol),
+                         endCol: endColumn(link.row, link.endCol), url: link.url)
+        }
     }
 
     /// Overlay explicit OSC 8 hyperlink spans on text-detected ones.
@@ -332,13 +358,13 @@ enum LinkDetector {
     /// True when the character after `endCol` is a pane border, or `endCol`
     /// is the last character of a row that reaches the right screen edge —
     /// i.e. the fragment fills its pane segment and may be wrapped.
-    private static func endsFlush(_ line: String, endCol: Int, cols: Int) -> Bool {
+    private static func endsFlush(_ line: String, endCol: Int, displayEndCol: Int, cols: Int) -> Bool {
         let nsLine = line as NSString
         let next = endCol + 1
         if next < nsLine.length {
             return isVerticalBorder(nsLine.character(at: next))
         }
-        return nsLine.length == cols
+        return next == nsLine.length && displayEndCol == cols - 1
     }
 
     /// Column where the pane segment containing `col` starts: just after the
@@ -364,7 +390,7 @@ enum LinkDetector {
         while start < nsLine.length, nsLine.character(at: start) == 0x20 { start += 1 }
         guard start < nsLine.length else { return nil }
         var end = start
-        while end < nsLine.length, urlCharacterUnits.contains(nsLine.character(at: end)) { end += 1 }
+        while end < nsLine.length, isURLUnit(nsLine.character(at: end)) { end += 1 }
         guard end > start else { return nil }
         let text = nsLine.substring(with: NSRange(location: start, length: end - start))
         return (text, start, end - 1)

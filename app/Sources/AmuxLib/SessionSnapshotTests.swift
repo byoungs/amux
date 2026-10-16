@@ -52,6 +52,22 @@ public enum SessionSnapshotTests {
             check("save", false, "\(error)")
         }
 
+        // Naming identity must survive a snapshot and restore; pane IDs are
+        // reassigned when the tmux server restarts.
+        do {
+            let json = #"{"index":0,"cwd":"/tmp","title":"Build logs","kind":{"type":"shell"},"naming_id":"local-name-id"}"#
+            let pane = try JSONDecoder().decode(PaneSnapshot.self, from: Data(json.utf8))
+            let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(pane)) as? [String: Any]
+            check("naming-identity-round-trip", encoded?["naming_id"] as? String == "local-name-id")
+            let named = SessionSnapshot(capturedAt: 1, cleanExit: true,
+                spaces: [SpaceSnapshot(name: "test", panes: [pane], selectedPane: 0)], backlog: [])
+            let plan = SessionRestore.planRestore(snapshot: named, existing: [:], now: 1)
+            check("restore-naming-identity", plan.commands.contains(
+                ["set-option", "-p", "-t", "test:0.0", "@amux-names", "local-name-id"]))
+        } catch {
+            check("naming-identity", false, "\(error)")
+        }
+
         // Corrupt and missing files must return nil, not crash startup.
         let corrupt = dir.appendingPathComponent("corrupt.json")
         try? Data("{ not json".utf8).write(to: corrupt)

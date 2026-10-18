@@ -854,9 +854,9 @@ public enum Tmux {
             displayMessage(session, message: msg)
         }
 
-        // Step 7: Open spaces popup (last, since it blocks)
+        // Step 7: Open spaces popup (last; launched, never waited on)
         if action.openSpaces {
-            try openSpacesPopup()
+            openSpacesPopup()
         }
     }
 
@@ -1316,10 +1316,12 @@ public enum Tmux {
 
     // MARK: - Spaces popup
 
-    /// Open the spaces picker as a tmux popup.
-    public static func openSpacesPopup() throws {
+    /// Open the spaces picker as a tmux popup. Fire-and-forget: `display-popup -E`
+    /// exits only when the user closes the popup, so waiting on it would hold
+    /// the tmux process lock until then and freeze every other tmux call.
+    public static func openSpacesPopup() {
         let bin = Config.findAmuxCLI()
-        runIgnoring([
+        launch([
             "display-popup", "-E", "-w", "70", "-h", "20", "-T", " Spaces ", "\(bin) spaces"
         ])
     }

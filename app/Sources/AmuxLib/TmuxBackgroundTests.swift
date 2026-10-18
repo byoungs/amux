@@ -162,6 +162,31 @@ public enum TmuxBackgroundTests {
                   "got \(cmdHeldValues)")
         }
 
+        // === Spaces popup from a layout action never blocks on the popup ===
+        // Regression: zoom-out from the working layout opens the Spaces popup
+        // through Tmux.openSpacesPopup, which used `execute` (waits for the
+        // subprocess). `display-popup -E` only exits when the user closes the
+        // popup, so the action queue sat in the blocking read while holding
+        // LiveTmux.processLock, and every other tmux call (including quit's
+        // snapshot) deadlocked the app.
+        do {
+            let fake = FakeTmux()
+            let counting = InstrumentedExecutor(inner: fake)
+            Tmux.executor = counting
+            try? Tmux.createSession("s")
+            var action = LayoutAction()
+            action.openSpaces = true
+
+            try? Tmux.executeLayout("s", action: action)
+
+            check("spaces-popup-not-waited-on",
+                  !counting.executeCalls.contains(where: { $0.contains("display-popup") }),
+                  "display-popup must be launched, not executed: \(counting.executeCalls)")
+            check("spaces-popup-launched",
+                  fake.launchedCommands.contains(where: { $0.first == "display-popup" }),
+                  "launched: \(fake.launchedCommands)")
+        }
+
         print("TmuxBackground tests: \(passed) passed, \(failed) failed")
         if failed > 0 { fatalError("TmuxBackground tests failed") }
     }

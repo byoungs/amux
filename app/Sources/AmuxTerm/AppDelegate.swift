@@ -36,6 +36,12 @@ struct AmuxTermApp {
         // --run-tests: run unit tests and exit without launching GUI
         if CommandLine.arguments.contains("--run-tests") {
             #if DEBUG
+            // Keep everything the suites write (DebugLog lines from the
+            // layout pipeline, snapshot markers) out of the real ~/.amux.
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("amux-unit-\(ProcessInfo.processInfo.processIdentifier)")
+            try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+            setenv(AmuxPaths.homeOverrideKey, scratch.path, 1)
             KeyInputTests.runAll()
             ScrollAccumulatorTests.runAll()
             PassthroughDecoderTests.runAll()
@@ -63,6 +69,8 @@ struct AmuxTermApp {
             OrderedDispatcherTests.runAll()
             SpaceNameTests.runAll()
             LinkTargetTests.runAll()
+            DebugLogTests.runAll()
+            TerminalGeometryTests.runAll()
             PermissionWatcherTests.runAll()
             TmuxBackgroundTests.runAll()
             SessionSnapshotTests.runAll()
@@ -237,8 +245,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             fputs("amux: startup failed: \(error)\n", stderr)
         }
 
-        let rows: UInt16 = 40
-        let cols: UInt16 = 120
+        // Window geometry first, so the PTY attaches at the grid the window
+        // will actually show. The saved size is the window's *frame* (it is
+        // recorded from w.frame); the view gets the content rect inside it.
+        let defaults = UserDefaults.standard
+        var frameWidth = defaults.double(forKey: "amux-window-width")
+        var frameHeight = defaults.double(forKey: "amux-window-height")
+        if frameWidth < 400 || frameHeight < 300 {
+            frameWidth = 960
+            frameHeight = 640
+        }
+        let styleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .miniaturizable]
+        let contentRect = NSWindow.contentRect(
+            forFrameRect: NSRect(x: 0, y: 0, width: frameWidth, height: frameHeight),
+            styleMask: styleMask)
+        let grid = TerminalGeometry.grid(
+            viewSize: contentRect.size,
+            cell: TerminalGeometry.cellSize(for: TerminalGeometry.baseFont()))
+        let rows = UInt16(clamping: grid.rows)
+        let cols = UInt16(clamping: grid.cols)
+        DebugLog.log("launch: attaching at \(cols)x\(rows) cells for \(Int(contentRect.width))x\(Int(contentRect.height))pt content")
         let terminal = VTerminal(rows: Int(rows), cols: Int(cols))
 
         // Attach to the tmux session via PTY (NOT launching amux binary)
@@ -276,18 +302,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             }
         }
 
-        // Window setup
-        let defaults = UserDefaults.standard
-        var width = defaults.double(forKey: "amux-window-width")
-        var height = defaults.double(forKey: "amux-window-height")
-        if width < 400 || height < 300 {
-            width = 960
-            height = 640
-        }
-
+        // Window setup — same content rect the PTY was sized for above.
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            contentRect: contentRect,
+            styleMask: styleMask,
             backing: .buffered,
             defer: false
         )

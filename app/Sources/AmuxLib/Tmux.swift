@@ -800,9 +800,16 @@ public enum Tmux {
     /// 6. Error message
     /// 7. Open spaces popup (last, since it blocks)
     public static func executeLayout(_ session: String, action: LayoutAction) throws {
-        // Step 1: Unzoom if needed
+        // Step 1: Unzoom if needed — and re-tile the grid that comes back.
+        // While zoomed, window resizes skip amux's re-tile and tmux scales
+        // the hidden grid proportionally; a shrink-and-grow (every app launch
+        // attaches at a placeholder size first) leaves it lopsided. Unless
+        // this action brings its own layout, restore amux's grid now.
         if action.zoom == false, (try? isZoomed(session)) == true {
             try toggleZoom(session)
+            if action.layoutString == nil {
+                try retile(session)
+            }
         }
 
         // Step 2: Apply layout
@@ -861,10 +868,60 @@ public enum Tmux {
     }
 
     /// The unified layout pipeline: gather → compute → execute.
+    ///
+    /// Every run is written to DebugLog: the state it saw, what it decided,
+    /// and — for events that change geometry — whether the panes fill the
+    /// window afterwards, so a layout that didn't re-tile can be traced.
     public static func applyLayout(_ session: String, event: LayoutEvent) throws {
-        let state = try gatherLayoutState(session)
+        let state: LayoutState
+        do {
+            state = try gatherLayoutState(session)
+        } catch {
+            DebugLog.log("layout \(event) session=\(session) gather FAILED: \(error)")
+            throw error
+        }
         let action = LayoutEngine.computeLayout(state: state, event: event)
-        try executeLayout(session, action: action)
+        DebugLog.log("layout \(event) session=\(session) before \(state.debugSummary) -> \(action.debugSummary)")
+        do {
+            try executeLayout(session, action: action)
+        } catch {
+            DebugLog.log("layout \(event) session=\(session) execute FAILED: \(error)")
+            throw error
+        }
+        if changesGeometry(event) {
+            logResultingGeometry(session, event: event)
+        }
+    }
+
+    /// Re-apply amux's grid to the current (unzoomed) panes, keeping each
+    /// pane in its slot.
+    private static func retile(_ session: String) throws {
+        let state = try gatherLayoutState(session)
+        let action = LayoutEngine.computeLayout(state: state, event: .resize)
+        DebugLog.log("retile after unzoom session=\(session) before \(state.debugSummary) -> \(action.debugSummary)")
+        if let ls = action.layoutString {
+            try runChecked(["select-layout", "-t", session, ls], context: "select-layout failed")
+        }
+        if let order = action.paneOrder {
+            try reorderPanes(session, desiredOrder: order)
+        }
+    }
+
+    /// Events after which the panes must tile the whole window.
+    private static func changesGeometry(_ event: LayoutEvent) -> Bool {
+        switch event {
+        case .resize, .zoomOut, .addPane, .removePane: return true
+        case .zoomIn, .zoomTo, .paneNext, .panePrev: return false
+        }
+    }
+
+    private static func logResultingGeometry(_ session: String, event: LayoutEvent) {
+        guard let after = try? gatherLayoutState(session) else {
+            DebugLog.log("layout \(event) session=\(session) after: gather failed")
+            return
+        }
+        let verdict = after.panesFillWindow ? "fills" : "MISMATCH panes do not fill window"
+        DebugLog.log("layout \(event) session=\(session) after \(after.debugSummary) \(verdict)")
     }
 
     /// Swap panes until tree-walk order matches `desiredOrder`.

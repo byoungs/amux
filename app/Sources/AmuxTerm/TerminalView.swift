@@ -116,7 +116,7 @@ final class TerminalView: NSView {
     init(terminal: VTerminal, pty: PTY) {
         self.terminal = terminal
         self.pty = pty
-        let baseFont = CTFontCreateWithName("Menlo" as CFString, 14, nil)
+        let baseFont = TerminalGeometry.baseFont()
         self.font = baseFont
         self.boldFont = CTFontCreateCopyWithSymbolicTraits(baseFont, 0, nil, .boldTrait, .boldTrait) ?? baseFont
         self.italicFont = CTFontCreateCopyWithSymbolicTraits(baseFont, 0, nil, .italicTrait, .italicTrait) ?? baseFont
@@ -179,16 +179,9 @@ final class TerminalView: NSView {
 
     private func updateFontMetrics() {
         fontAscent = CTFontGetAscent(font)
-        let descent = CTFontGetDescent(font)
-        let leading = CTFontGetLeading(font)
-        cellHeight = ceil(fontAscent + descent + leading)
-
-        var chars: [UniChar] = [0x4D] // 'M'
-        var glyphs = [CGGlyph](repeating: 0, count: 1)
-        CTFontGetGlyphsForCharacters(font, &chars, &glyphs, 1)
-        var advance = CGSize.zero
-        CTFontGetAdvancesForGlyphs(font, .horizontal, glyphs, &advance, 1)
-        cellWidth = ceil(advance.width)
+        let cell = TerminalGeometry.cellSize(for: font)
+        cellWidth = cell.width
+        cellHeight = cell.height
     }
 
     // MARK: - Display Link
@@ -292,15 +285,18 @@ final class TerminalView: NSView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         guard cellWidth > 0, cellHeight > 0 else { return }
-        let newCols = max(1, Int(newSize.width / cellWidth))
-        let newRows = max(1, Int(newSize.height / cellHeight))
+        let (newCols, newRows) = TerminalGeometry.grid(
+            viewSize: newSize, cell: CGSize(width: cellWidth, height: cellHeight))
         if newRows != terminal.rows || newCols != terminal.cols {
             // Debounce resize: only notify tmux after the window stops being dragged.
             // This prevents flooding tmux with SIGWINCH during live resize.
+            DebugLog.log("view resize \(Int(newSize.width))x\(Int(newSize.height))pt -> "
+                         + "\(newCols)x\(newRows) cells (was \(terminal.cols)x\(terminal.rows))")
             terminal.resize(rows: newRows, cols: newCols)  // sets fullRedrawNeeded internally
             resizeTimer?.invalidate()
             resizeTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in
                 guard let self = self else { return }
+                DebugLog.log("pty resize -> \(self.terminal.cols)x\(self.terminal.rows) (tmux client-resized should follow)")
                 self.pty.resize(rows: UInt16(self.terminal.rows), cols: UInt16(self.terminal.cols))
             }
             needsDisplay = true

@@ -66,7 +66,31 @@ enum KeyInputTests {
               tabEvent(.shift).flatMap(KeyInput.ptyBytes(for:)) ?? Data(),
               "\u{1B}[Z".data(using: .utf8)!)
 
+        // Native window shortcuts must survive BOTH the application monitor
+        // and the terminal view's fallback key handling, without PTY bytes.
+        for (chars, flags) in [("`", NSEvent.ModifierFlags.command),
+                               ("~", [.command, .shift]), ("m", .command)] {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                                         timestamp: 0, windowNumber: 0, context: nil,
+                                         characters: chars, charactersIgnoringModifiers: chars,
+                                         isARepeat: false, keyCode: chars == "m" ? 46 : 50)!
+            if KeyInput.bytes(for: event) == nil { passed += 1 }
+            else { failed += 1; print("FAIL: native Cmd-\(chars) leaked into terminal fallback") }
+        }
+        for chars in ["`", "~"] {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero,
+                                         modifierFlags: chars == "~" ? .shift : [],
+                                         timestamp: 0, windowNumber: 0, context: nil,
+                                         characters: chars, charactersIgnoringModifiers: chars,
+                                         isARepeat: false, keyCode: 50)!
+            check("literal \(chars) still types", KeyInput.bytes(for: event) ?? Data(), Data(chars.utf8))
+        }
+
         // Cmd-Y → .peek (permission peek)
+        for (chars, shift, expected) in [("r", false, AmuxCommand.rename), ("r", true, .renameSpace), ("R", true, .renameSpace)] {
+            if KeyCommand.amuxCommand(for: chars, shift: shift) == expected { passed += 1 }
+            else { failed += 1; print("FAIL: rename shortcut scope") }
+        }
         if KeyCommand.amuxCommand(for: "y") == .peek { passed += 1 }
         else { failed += 1; print("FAIL: Cmd-Y → .peek") }
 
@@ -126,6 +150,7 @@ enum KeyInputTests {
               "\u{1B}[<64;1;1M".data(using: .utf8)!)
 
         print("KeyInput tests: \(passed) passed, \(failed) failed")
+        fflush(stdout)
         if failed > 0 { fatalError("KeyInput tests failed") }
     }
 }

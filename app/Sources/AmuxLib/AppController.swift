@@ -51,6 +51,8 @@ public class AppController {
             case .zoomTo(let p): try handleZoomTo(p)
             case .paneNext:     try handlePaneNav(.paneNext)
             case .panePrev:     try handlePaneNav(.panePrev)
+            case .rename: Names.popup(session: session, clientTTY: clientTTY)
+            case .renameSpace: Names.popup(session: session, mode: "rename-space", clientTTY: clientTTY)
             case .newPane:      try handleNewPane()
             case .spaces:       handleSpaces()
             case .send:         handleSend()
@@ -130,19 +132,27 @@ public class AppController {
 
     // MARK: - Spaces / Send (fire-and-forget popup — tmux manages lifecycle)
 
+    /// tmux otherwise picks the most recently active client for commands run
+    /// by the popup, which can be a different native window.
+    private func popupCommand(_ command: String) -> String {
+        let env = "env AMUX_SESSION=\(SessionRestore.singleQuoted(session))"
+        guard let tty = clientTTY else { return "\(env) \(command)" }
+        return "\(env) AMUX_CLIENT_TTY=\(SessionRestore.singleQuoted(tty)) \(command)"
+    }
+
     private func handleSpaces() {
         let bin = Config.findAmuxCLI()
-        Tmux.launch([
-            "display-popup", "-t", session, "-E", "-w", "70", "-h", "20",
-            "-T", " Spaces ", "\(bin) spaces"
+        Tmux.launch(["display-popup", "-t", session] + (clientTTY.map { ["-c", $0] } ?? []) + [
+            "-E", "-w", "70", "-h", "20",
+            "-T", " Spaces ", popupCommand("\(bin) spaces")
         ])
     }
 
     private func handleSend() {
         let bin = Config.findAmuxCLI()
-        Tmux.launch([
-            "display-popup", "-t", session, "-E", "-w", "70", "-h", "20",
-            "-T", " Send to Space ", "\(bin) send"
+        Tmux.launch(["display-popup", "-t", session] + (clientTTY.map { ["-c", $0] } ?? []) + [
+            "-E", "-w", "70", "-h", "20",
+            "-T", " Send to Space ", popupCommand("\(bin) send")
         ])
     }
 
@@ -150,8 +160,8 @@ public class AppController {
 
     private func handleHelp() {
         let bin = Config.findAmuxCLI()
-        Tmux.launch([
-            "display-popup", "-t", session, "-E", "-w", "84", "-h", "34",
+        Tmux.launch(["display-popup", "-t", session] + (clientTTY.map { ["-c", $0] } ?? []) + [
+            "-E", "-w", "84", "-h", "34",
             "-T", " Help ", "\(bin) help"
         ])
     }
@@ -299,7 +309,7 @@ public class AppController {
         // Set titles on all panes
         for pane in panes {
             let cwd = try Tmux.paneCwd(session, paneIndex: pane.index)
-            if !cwd.isEmpty {
+            if !cwd.isEmpty && Names.binding("\(session):.\(pane.index)").isEmpty {
                 let title = Util.autoTitle(dir: cwd)
                 try Tmux.setTitle(session, paneIndex: pane.index, title: title)
             }
@@ -367,8 +377,10 @@ public class AppController {
                     return found.isEmpty ? nil : found
                 }
             }
+            // A closed window must never fall back to another window's client.
+            return nil
         }
-        // Fallback (no tty, or client not found)
+        // Fallback for CLI/test controllers without a native client.
         let current = Tmux.runRaw(["display-message", "-p", "#{session_name}"])
         return current.isEmpty ? nil : current
     }
@@ -387,4 +399,3 @@ public class AppController {
         return String(trimmed[trimmed.index(after: eqIdx)...])
     }
 }
-

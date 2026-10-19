@@ -72,6 +72,12 @@ public enum Config {
     /// roughly in half.
     public static func applyConfig(session: String) throws {
         let bin = findAmuxCLI()
+        // Window notifications have no session context. Inspect the exact
+        // hook_window across sessions in tmux itself, so routine resizes and
+        // our own select-layout calls do not spawn a helper process.
+        let changedPaneCount = "#{S:#{W:#{?#{&&:#{==:#{window_id},#{hook_window}}," +
+            "#{&&:#{!=:#{@amux-layout-pane-count},}," +
+            "#{!=:#{window_panes},#{@amux-layout-pane-count}}}},1,}}}"
 
         // Cleanup batch — best-effort. Removing stale -g hooks, unbinding
         // legacy keys, and clearing window-scoped overrides may "fail"
@@ -99,6 +105,25 @@ public enum Config {
              "xterm*:clipboard:ccolour:cstyle:focus:title:sync:extkeys"],
             // True-color support for compatible terminals
             ["set", "-sa", "terminal-overrides", ",xterm-256color:RGB"],
+            // Accept clipboard writes from nested terminals/SSH applications
+            // and forward them as OSC 52 to the native pasteboard.
+            ["set-option", "-s", "set-clipboard", "on"],
+            // The native app owns the clipboard. Carry selection bytes over
+            // its socket, independently of OSC 52 and terminal redraws.
+            ["set-option", "-s", "copy-command", clipboardCommand(binary: bin)],
+            // Drag selects visible text even when a TUI/nested tmux requests
+            // mouse events. Clicks and scrolling still reach the application.
+            ["bind-key", "-T", "root", "MouseDrag1Pane", "copy-mode -M"],
+            // A TUI's mouse reporting must not swallow word/line selection.
+            // Keep tmux's short delay so a third click can extend the word.
+            ["bind-key", "-T", "root", "DoubleClick1Pane",
+             "select-pane -t= ; copy-mode -H ; send-keys -X select-word ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel -C"],
+            ["bind-key", "-T", "root", "TripleClick1Pane",
+             "select-pane -t= ; copy-mode -H ; send-keys -X select-line ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel -C"],
+            // Send local selections once through the native bridge; a second
+            // OSC 52 delivery could overwrite a newer clipboard value.
+            ["bind-key", "-T", "copy-mode", "MouseDragEnd1Pane", "send-keys -X copy-pipe-and-cancel -C"],
+            ["bind-key", "-T", "copy-mode-vi", "MouseDragEnd1Pane", "send-keys -X copy-pipe-and-cancel -C"],
             // Disable interactive border drag — without this, every accidental
             // drag on a pane border resizes the pane and captures pane history
             // at a new width, causing mixed-width scrollback ("christmas tree").
@@ -106,9 +131,9 @@ public enum Config {
             // mouse-driven pane resizing.
             ["unbind-key", "-T", "root", "MouseDrag1Border"],
             ["unbind-key", "-T", "root", "M-MouseDrag1Border"],
-            // Scroll wheel: tmux intercepts and routes based on alt-screen state.
-            //   Main screen → enter copy-mode and scroll pane history.
-            //   Alt screen → pass wheel through to the pane app.
+            // Route by the pane's requested mouse support, not its screen.
+            // Mouse-aware applications (including nested tmux) own scrolling
+            // on either screen. Other applications use tmux history.
             //
             // copy-mode entry uses `-e` (auto-exit when scrolled back to the
             // live tail so typing "just works" without a forced Esc). We do
@@ -126,9 +151,9 @@ public enum Config {
             // directly and let tmux own the per-event line count.
             //
             // Typing while still scrolled up (in copy-mode) is handled by
-            // AppDelegate.dispatchStep (TerminalView.copyModeExitBytes).
+            // TerminalWindow.dispatchStep (TerminalView.exitCopyMode).
             ["bind-key", "-T", "root", "WheelUpPane",
-             "if-shell -Ft= '#{?pane_in_mode,1,#{alternate_on}}' " +
+             "if-shell -Ft= '#{?pane_in_mode,1,#{mouse_any_flag}}' " +
              "{ send-keys -M } { select-pane -t= ; copy-mode -e ; send-keys -X -N 1 scroll-up }"],
             ["bind-key", "-T", "root", "WheelDownPane", "send-keys -M"],
             ["bind-key", "-T", "copy-mode", "WheelUpPane",
@@ -208,6 +233,16 @@ public enum Config {
                 // before the keypress returns.
                 ["set-hook", "-t", session, "pane-exited",
                  "run-shell \"\(bin) layout-changed #{q:session_name}\""],
+                // kill-pane does not emit pane-exited, and its after-command
+                // hook can resolve to another session once the target is gone.
+                // This notification is global: tmux supplies hook_window but
+                // no session context. The handler resolves that exact window
+                // and only acts on marked amux grids whose pane count changed.
+                // Use our own array slot to preserve unrelated global hooks.
+                ["set-option", "-w", "-F", "-t", "\(session):0",
+                 "@amux-layout-pane-count", "#{window_panes}"],
+                ["set-hook", "-g", "window-layout-changed[90]",
+                 "if-shell -F '\(changedPaneCount)' 'run-shell -b \"\(bin) layout-window-changed #{hook_window}\"'"],
                 ["set-hook", "-t", session, "client-resized",
                  "run-shell \"\(bin) layout #{q:session_name}\""],
                 ["set-hook", "-t", session, "after-select-pane",

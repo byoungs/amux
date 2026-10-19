@@ -34,6 +34,19 @@ struct AmuxTermApp {
         }
 
         // --run-tests: run unit tests and exit without launching GUI
+        #if DEBUG
+        if CommandLine.arguments.contains("--test-windows") {
+            TerminalWindowTests.runAll()
+            exit(0)
+        }
+        if CommandLine.arguments.contains("--test-terminal-io") {
+            TerminalIOInteractionTests.runAll()
+            exit(0)
+        }
+        if CommandLine.arguments.contains("--test-codex-resize") {
+            exit(TerminalCodexResizeProbe.run() ? 0 : 1)
+        }
+        #endif
         if CommandLine.arguments.contains("--run-tests") {
             #if DEBUG
             // Keep everything the suites write (DebugLog lines from the
@@ -44,6 +57,7 @@ struct AmuxTermApp {
             setenv(AmuxPaths.homeOverrideKey, scratch.path, 1)
             KeyInputTests.runAll()
             ScrollAccumulatorTests.runAll()
+            TerminalFontMetricsTests.runAll()
             PassthroughDecoderTests.runAll()
             VTerminalTests.runAll()
             PTYTests.runAll()
@@ -61,6 +75,9 @@ struct AmuxTermApp {
             PaneStyleTests.runAll()
             LinkDetectorTests.runAll()
             HyperlinksTests.runAll()
+            TerminalLinkInteractionTests.runAll()
+            TerminalIOInteractionTests.runAll()
+            TerminalWindowTests.runAll()
             AlertEventTransportTests.runAll()
             ClickDispatchTests.runAll()
             CliDispatchTests.runAll()
@@ -70,6 +87,7 @@ struct AmuxTermApp {
             SpaceNameTests.runAll()
             LinkTargetTests.runAll()
             DebugLogTests.runAll()
+            LayoutStateParseTests.runAll()
             TerminalGeometryTests.runAll()
             PermissionWatcherTests.runAll()
             TmuxBackgroundTests.runAll()
@@ -137,9 +155,29 @@ private final class NSAppActivator: AppActivator {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
-    var window: NSWindow?
-    var termView: TerminalView?
-    var controller: AppController?
+    private(set) var terminalWindows: [TerminalWindow] = []
+    private var focusedWindow: TerminalWindow? {
+        terminalWindows.first { $0.window === NSApp.keyWindow }
+            ?? terminalWindows.first { $0.window === NSApp.mainWindow }
+            ?? terminalWindows.last
+    }
+    private let focusLock = NSLock()
+    private var focusedController: AppController?
+    private var tmuxPath = ""
+    private var enhancedPath = ""
+    private var windowServer: UnixSocketWindowRequestServer?
+    private var clipboardServer: UnixSocketMessageServer<ClipboardRequest>?
+    var clipboardPasteboard: NSPasteboard = .general
+    private var titleTimer: Timer?
+    private let presentsWindows: Bool
+
+    init(tmuxPath: String = "", enhancedPath: String = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
+         presentsWindows: Bool = true) {
+        self.presentsWindows = presentsWindows
+        self.tmuxPath = tmuxPath
+        self.enhancedPath = enhancedPath
+        super.init()
+    }
 
     // Alert-notification plumbing. The poster owns the
     // UNUserNotificationCenter side (bug 1 fix: clicks route to this
@@ -161,8 +199,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     // alert events — runs here, one at a time. Serial so actions never
     // interleave their tmux commands with each other.
     private let actionQueue = DispatchQueue(label: "amux.actions", qos: .userInteractive)
-    // Keeps keystrokes in order around off-main actions (see OrderedDispatcher).
-    private var keyDispatcher: OrderedDispatcher<NSEvent>?
 
     // App Nap activity assertion. macOS throttles backgrounded apps —
     // including their main dispatch queue — which delays the
@@ -180,8 +216,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// xterm-256color terminfo the PTY presents does not. Without it, tmux
     /// draws link labels and silently drops the URIs.
     static func tmuxAttachArgs(session: String) -> [String] {
-        ["tmux", "-T", "hyperlinks", "attach-session", "-t", session]
+        TmuxSocket.resolve().tmuxArgv(["-T", "hyperlinks", "attach-session", "-t", "=\(session)"])
     }
+
+    @objc func renameTerminal() { focusedWindow?.submit(.rename) }
+    @objc func renameSpace() { focusedWindow?.submit(.renameSpace) }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -197,7 +236,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             ?? ProcessInfo.processInfo.arguments[0]
                 .split(separator: "/").dropLast().joined(separator: "/")
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let tmuxPath = findBinary("tmux", searchDirs: [
+        tmuxPath = findBinary("tmux", searchDirs: [
             execDir,                         // bundled tmux (inside .app)
             "/opt/homebrew/bin",              // Homebrew ARM
             "/usr/local/bin",                 // Homebrew Intel
@@ -229,102 +268,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Ensure PATH includes bundle dir and ~/.local/bin
         let currentPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
-        let enhancedPath = "\(execDir):\(home)/.local/bin:\(currentPath)"
+        enhancedPath = "\(execDir):\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:\(currentPath)"
         setenv("PATH", enhancedPath, 1)
 
         // Resolve session name
         let session = ProcessInfo.processInfo.environment["AMUX_SESSION"]
             .flatMap { $0.isEmpty ? nil : $0 } ?? "amux"
 
+        Tmux.executor = LiveTmux(socket: TmuxSocket.resolve())
+
         // Create AppController and run startup (creates session, applies config, hooks)
         let controller = AppController(session: session)
-        self.controller = controller
         do {
             try controller.startup()
         } catch {
             fputs("amux: startup failed: \(error)\n", stderr)
         }
 
-        // Window geometry first, so the PTY attaches at the grid the window
-        // will actually show. The saved size is the window's *frame* (it is
-        // recorded from w.frame); the view gets the content rect inside it.
-        let defaults = UserDefaults.standard
-        var frameWidth = defaults.double(forKey: "amux-window-width")
-        var frameHeight = defaults.double(forKey: "amux-window-height")
-        if frameWidth < 400 || frameHeight < 300 {
-            frameWidth = 960
-            frameHeight = 640
+        startWindowRequestServer()
+        startClipboardServer()
+        openTerminalWindow(controller: controller)
+        titleTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.refreshWindowTitles()
         }
-        let styleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .miniaturizable]
-        let contentRect = NSWindow.contentRect(
-            forFrameRect: NSRect(x: 0, y: 0, width: frameWidth, height: frameHeight),
-            styleMask: styleMask)
-        let grid = TerminalGeometry.grid(
-            viewSize: contentRect.size,
-            cell: TerminalGeometry.cellSize(for: TerminalGeometry.baseFont()))
-        let rows = UInt16(clamping: grid.rows)
-        let cols = UInt16(clamping: grid.cols)
-        DebugLog.log("launch: attaching at \(cols)x\(rows) cells for \(Int(contentRect.width))x\(Int(contentRect.height))pt content")
-        let terminal = VTerminal(rows: Int(rows), cols: Int(cols))
-
-        // Attach to the tmux session via PTY (NOT launching amux binary)
-        guard let pty = PTY(executable: tmuxPath,
-                            args: AppDelegate.tmuxAttachArgs(session: session),
-                            rows: rows, cols: cols,
-                            env: ["PATH": enhancedPath]) else {
-            fatalError("Failed to create PTY for tmux attach")
-        }
-
-        let termView = TerminalView(terminal: terminal, pty: pty)
-        termView.currentSession = { [weak controller] in controller?.session ?? session }
-        termView.lookUpSession = { [weak controller] in controller?.attachedSession() }
-        controller.clientTTY = pty.slavePath
-        self.termView = termView
-
-        // Wire up split-selected border overlay. Fired from the action
-        // queue, so hop to main before touching the view.
-        controller.onSplitSelectedChanged = { [weak termView] bounds in
-            DispatchQueue.main.async {
-                guard let tv = termView else { return }
-                if let (top, left, width, height) = bounds {
-                    tv.splitSelectedPaneBounds = TerminalView.PaneBounds(
-                        top: top, left: left, width: width, height: height)
-                } else {
-                    tv.splitSelectedPaneBounds = nil
-                }
-                tv.needsDisplay = true
-            }
-        }
-
-        pty.onExit = {
-            DispatchQueue.main.async {
-                NSApplication.shared.terminate(nil)
-            }
-        }
-
-        // Window setup — same content rect the PTY was sized for above.
-        let window = NSWindow(
-            contentRect: contentRect,
-            styleMask: styleMask,
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "amux"
-        window.contentView = termView
-        window.center()
-
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didResizeNotification,
-            object: window, queue: .main
-        ) { notification in
-            guard let w = notification.object as? NSWindow else { return }
-            defaults.set(w.frame.width, forKey: "amux-window-width")
-            defaults.set(w.frame.height, forKey: "amux-window-height")
-        }
-
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(termView)
-        self.window = window
 
         // Menu bar
         let menuBar = NSMenu()
@@ -345,84 +311,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         editMenu.addItem(withTitle: "Paste",
                          action: #selector(TerminalView.paste(_:)),
                          keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Rename Pane / Session…", action: #selector(renameTerminal), keyEquivalent: "r")
+        let renameSpaceItem = editMenu.addItem(withTitle: "Rename Space…", action: #selector(renameSpace), keyEquivalent: "r")
+        renameSpaceItem.keyEquivalentModifierMask = [.command, .shift]
         editMenuItem.submenu = editMenu
 
+        let windowMenuItem = NSMenuItem()
+        menuBar.addItem(windowMenuItem)
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        windowMenuItem.submenu = windowMenu
+        NSApp.windowsMenu = windowMenu
         NSApp.mainMenu = menuBar
+        Names.background(["sync"])
+        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in Names.background(["sync"]) }
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in Names.background(["sync", "--refresh"]) }
 
         // Intercept keys at the application level.
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self, self.controller != nil else { return event }
-
-            #if DEBUG
-            if let chars = event.charactersIgnoringModifiers,
-               chars == "d" && event.modifierFlags.contains(.command) && event.modifierFlags.contains(.shift) {
-                if let tv = self.termView {
-                    tv.profilingEnabled.toggle()
-                    fputs("=== Latency profiling \(tv.profilingEnabled ? "ON" : "OFF") ===\n", stderr)
-                    fputs("Type to see: PTY roundtrip + draw time + total key→pixel\n", stderr)
-                }
-                return nil
-            }
-            #endif
-
-            // Permission-peek popup: while open it owns the keyboard.
-            if let tv = self.termView, tv.peekPopupOpen,
-               let watcher = self.permissionWatcher,
-               let prompt = watcher.queue.current?.prompt {
-                // Resolve a chosen option: the reject option (the "No" option,
-                // identified by label not position) engages (full-screen + send
-                // key); all others answer in place.
-                let resolve: (Int) -> Void = { num in
-                    if num == prompt.rejectOption?.number {
-                        watcher.engageReject(optionNumber: num)
-                        tv.closePeekPopup()
-                    } else {
-                        watcher.answerCurrent(optionNumber: num)
-                        tv.updatePeekState(watcher.queue)
-                        if watcher.queue.current == nil { tv.closePeekPopup() }
-                    }
-                }
-                switch event.keyCode {
-                case 53: // Escape → dismiss whole queue to background
-                    watcher.dismissAll(); tv.closePeekPopup(); return nil
-                case 126: tv.movePeekHighlight(-1); return nil   // Up
-                case 125: tv.movePeekHighlight(+1); return nil   // Down
-                case 36:                                          // Enter → highlighted
-                    if let num = tv.highlightedOptionNumber(in: prompt) { resolve(num) }
-                    return nil
-                default:
-                    let chars = event.charactersIgnoringModifiers ?? ""
-                    // Cmd-Y toggles the popup closed but KEEPS the queue (unlike
-                    // Esc, which dismisses the whole queue); Cmd-Y reopens it.
-                    if event.modifierFlags.contains(.command), chars == "y" {
-                        tv.closePeekPopup(); return nil
-                    }
-                    if let d = Int(chars), prompt.options.contains(where: { $0.number == d }) {
-                        resolve(d)
-                    }
-                    return nil // swallow all other keys while popup is open
-                }
-            }
-
-            // Quit goes straight to AppKit. Everything else — Copy and Paste
-            // included — goes through the dispatcher, which runs it now or
-            // holds it until an in-flight action finishes, so a paste right
-            // after Cmd-N lands in the new pane. (Planning also reads
-            // controller.mode, which only the dispatcher may do safely.)
-            if KeyInput.isQuit(event) {
-                return event
-            }
-            self.keyDispatcher?.submit(event)
-            return nil
+            guard let self else { return event }
+            return self.handleKey(event)
         }
-
-        keyDispatcher = OrderedDispatcher<NSEvent>(
-            plan: { [weak self] event in
-                guard let self = self else { return .inline {} }
-                return self.dispatchStep(for: event, controller: controller)
-            },
-            runOffMain: { [actionQueue] work in actionQueue.async(execute: work) },
-            returnToMain: { DispatchQueue.main.async(execute: $0) })
 
         NSApp.activate(ignoringOtherApps: true)
 
@@ -449,9 +360,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Permission-peek watcher: polls background panes every 4s for Claude
         // permission prompts; never touches the focused pane the user sees.
         let watcher = PermissionWatcher(attachedSession: { [weak self] in
-            guard let self = self, let controller = self.controller else { return nil }
-            let active = (try? Tmux.activePaneIndex(controller.session)) ?? -1
-            return (controller.session, active)
+            guard let self = self else { return nil }
+            self.focusLock.lock()
+            let controller = self.focusedController
+            self.focusLock.unlock()
+            guard let controller, let session = controller.attachedSession() else { return nil }
+            let active = (try? Tmux.activePaneIndex(session)) ?? -1
+            return (session, active)
         })
         watcher.onChange = { [weak self] in
             // onChange already hops to main inside the watcher's poll; the
@@ -469,63 +384,110 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                     Tmux.publishPeekCountAsync(count)
                 }
                 // Keep the popup in sync if it's open.
-                self.termView?.updatePeekState(queue)
+                for owner in self.terminalWindows { owner.termView?.updatePeekState(queue) }
             }
         }
         self.permissionWatcher = watcher
+        for owner in terminalWindows { owner.permissionWatcher = watcher }
         watcher.start()
     }
 
-    /// Map a key event to how the dispatcher should run it. Planned at run
-    /// time on main, so `controller.mode` reflects every earlier action.
-    private func dispatchStep(for event: NSEvent, controller: AppController) -> DispatchStep {
-        switch KeyInput.action(for: event, mode: controller.mode) {
-        case .amux(.peek):
-            return .inline { [weak self] in
-                self?.termView?.togglePeekPopup(current: self?.permissionWatcher?.queue.current?.prompt)
-            }
-        case .amux(let command):
-            return .offMain { controller.handleAction(command) }
-        case .sendToPTY(let data):
-            guard let tv = termView else { return .inline {} }
-            // First keystroke after a wheel scroll: if that left the pane in
-            // copy-mode, Esc must precede the key or copy-mode swallows it.
-            // Finding out is a tmux round-trip, so it runs off main; keys
-            // typed meanwhile are held behind it and stay in order.
-            if tv.mayBeInCopyMode {
-                tv.clearCopyModeFlag()
-                let cached = controller.session
-                let pty = tv.pty
-                return .offMain {
-                    // Ask tmux, not the cache: the spaces picker switches the
-                    // client without an amux action to refresh it.
-                    let session = controller.attachedSession() ?? cached
-                    if let esc = TerminalView.copyModeExitBytes(session: session) { pty.write(esc) }
-                    pty.write(data)
+    func handleKey(_ event: NSEvent) -> NSEvent? {
+        guard let owner = terminalWindows.first(where: { $0.window === event.window }) else { return event }
+        return owner.handleKey(event)
+    }
+
+    @discardableResult
+    func openTerminalWindow(controller: AppController, tmuxPath overridePath: String? = nil,
+                            attachArgs: [String]? = nil, show: Bool = true) -> TerminalWindow {
+        let owner = TerminalWindow(controller: controller, tmuxPath: overridePath ?? tmuxPath,
+                                   enhancedPath: enhancedPath, actionQueue: actionQueue, attachArgs: attachArgs)
+        owner.permissionWatcher = permissionWatcher
+        owner.onClose = { [weak self, weak owner] in
+            guard let self, let owner else { return }
+            self.terminalWindows.removeAll { $0 === owner }
+            self.focusLock.lock()
+            self.focusedController = self.focusedWindow?.controller
+            self.focusLock.unlock()
+        }
+        owner.onFocus = { [weak self, weak owner] in
+            guard let self else { return }
+            self.focusLock.lock()
+            self.focusedController = owner?.controller
+            self.focusLock.unlock()
+        }
+        if let previous = focusedWindow {
+            owner.window.cascadeTopLeft(from: NSPoint(x: previous.window.frame.minX + 24,
+                                                       y: previous.window.frame.maxY - 24))
+        }
+        terminalWindows.append(owner)
+        if show && presentsWindows { owner.show() }
+        return owner
+    }
+
+    func startWindowRequestServer() {
+        let server = UnixSocketWindowRequestServer(socketPath: defaultWindowSocketPath())
+        windowServer = server
+        do {
+            try server.start { [weak self] request in
+                self?.actionQueue.async {
+                    // Resolve to an exact session before creating a client. Never
+                    // create sessions here or run app-wide startup a second time.
+                    guard ((try? Tmux.listFocusSessions()) ?? []).contains(request.session) else { return }
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        self.openTerminalWindow(controller: AppController(session: request.session))
+                        if self.presentsWindows { NSApp.activate(ignoringOtherApps: true) }
+                    }
                 }
             }
-            return .inline { tv.pty.write(data) }
-        case .system:
-            return systemStep(for: event)
-        case .ignore:
-            return .inline {}
+        } catch {
+            fputs("amux: failed to start window-request server: \(error)\n", stderr)
         }
     }
 
-    /// Copy and Paste (Quit never reaches the dispatcher). Copy reads tmux's
-    /// buffer, a round-trip, so it runs off main; paste is a PTY write.
-    private func systemStep(for event: NSEvent) -> DispatchStep {
-        guard let tv = termView else { return .inline {} }
-        switch event.charactersIgnoringModifiers {
-        case "c":
-            return .offMain {
-                guard let text = Tmux.pasteBuffer(), !text.isEmpty else { return }
-                DispatchQueue.main.async { TerminalView.setPasteboard(text) }
+    func stopWindowRequestServer() { windowServer?.stop(); windowServer = nil }
+
+    func startClipboardServer() {
+        let server = UnixSocketMessageServer<ClipboardRequest>(socketPath: defaultClipboardSocketPath(),
+                                                              maxMessageBytes: ClipboardRequest.maxMessageBytes)
+        clipboardServer = server
+        do {
+            try server.start { [weak self] request in
+                guard !request.text.isEmpty, request.text.utf8.count <= ClipboardRequest.maxTextBytes else { return }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.clipboardPasteboard.clearContents()
+                    if !self.clipboardPasteboard.setString(request.text, forType: .string) {
+                        fputs("amux: macOS rejected clipboard write\n", stderr)
+                    }
+                }
             }
-        case "v":
-            return .inline { tv.paste(nil) }
-        default:
-            return .inline {}
+        } catch {
+            fputs("amux: failed to start clipboard server: \(error)\n", stderr)
+        }
+    }
+
+    func stopClipboardServer() { clipboardServer?.stop(); clipboardServer = nil }
+
+    /// One background query covers all native windows, including spaces renamed
+    /// or switched by a popup without passing through the native controller.
+    func refreshWindowTitles() {
+        actionQueue.async { [weak self] in
+            let output = Tmux.runRaw(["list-clients", "-F", "#{client_tty}\t#{client_session}\t#{@amux-space-title}\t."])
+            var titles: [String: String] = [:]
+            for line in output.split(separator: "\n") {
+                let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
+                if parts.count == 4 { titles[String(parts[0])] = String(parts[2].isEmpty ? parts[1] : parts[2]) }
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                for owner in self.terminalWindows {
+                    if let tty = owner.controller.clientTTY, let title = titles[tty] {
+                        owner.window.title = "amux — \(title)"
+                    }
+                }
+            }
         }
     }
 
@@ -556,6 +518,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        titleTimer?.invalidate()
+        stopWindowRequestServer()
+        stopClipboardServer()
         alertServer?.stop()
         permissionWatcher?.stop()
         // Final snapshot, marked as a tidy shutdown. Anything else on disk
@@ -596,7 +561,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         let managed = (try? Tmux.listSpacesWithAlerts().sessions) ?? []
         let action = routeNotificationClick(userInfo: userInfo, managedSessions: managed)
-        try? performClickAction(action, activator: clickActivator)
+        DispatchQueue.main.async { [weak self] in self?.focusNotification(action) }
+    }
+
+    /// Prefer the window already showing the notification's space; otherwise
+    /// switch the focused window explicitly, never tmux's arbitrary last client.
+    func focusNotification(_ action: ClickAction) {
+        let target: String
+        switch action {
+        case .switchToSessionPane(let session, _), .switchToManaged(let session): target = session
+        case .bringAppForeground:
+            if presentsWindows { focusedWindow?.show(); clickActivator.activateApp() }
+            return
+        case .noop: return
+        }
+        let owners = terminalWindows
+        let fallback = focusedWindow
+        actionQueue.async { [weak self] in
+            let owner = owners.first { $0.controller.attachedSession() == target } ?? fallback
+            guard let owner, let tty = owner.controller.clientTTY else { return }
+            try? Tmux.switchSession(target, clientTTY: tty)
+            if case .switchToSessionPane(_, let pane) = action { try? Tmux.selectPane(target, paneIndex: pane) }
+            DispatchQueue.main.async {
+                guard let self, self.terminalWindows.contains(where: { $0 === owner }) else { return }
+                if self.presentsWindows {
+                    owner.show()
+                    self.clickActivator.activateApp()
+                }
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

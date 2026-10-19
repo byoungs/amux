@@ -10,6 +10,8 @@ final class PTY {
     /// The slave TTY device path (e.g., /dev/ttys005). Used to identify
     /// our tmux client when resolving the current session.
     private(set) var slavePath: String?
+    private var didExit = false
+    private var stopped = false
     private var dispatchIO: DispatchIO?
     var onOutput: ((Data) -> Void)?
     var onExit: (() -> Void)?
@@ -60,6 +62,7 @@ final class PTY {
                 self?.onOutput?(Data(data))
             }
             if done {
+                self?.didExit = true
                 self?.onExit?()
             }
         }
@@ -85,7 +88,21 @@ final class PTY {
         _ = ioctl(masterFd, TIOCSWINSZ, &ws)
     }
 
+    /// End this terminal client only; tmux keeps its sessions and shells alive.
+    /// Idempotent because window close and PTY EOF can arrive together.
+    func stop() {
+        guard !stopped else { return }
+        stopped = true
+        if !didExit { kill(childPid, SIGHUP) }
+        let pid = childPid
+        DispatchQueue.global(qos: .utility).async {
+            var status: Int32 = 0
+            while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+        }
+    }
+
     deinit {
+        stop()
         dispatchIO?.close()
         close(masterFd)
     }

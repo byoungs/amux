@@ -12,6 +12,7 @@ public enum SpaceNameTests {
         }
 
         check("plain name unchanged", SpaceName.normalize("backend"), "backend")
+        check("long name truncates", SpaceName.normalize(String(repeating: "a", count: 100)), String(repeating: "a", count: 80))
         check("dash and underscore kept", SpaceName.normalize("api_v2-fix"), "api_v2-fix")
         check("spaces become one dash", SpaceName.normalize("my   space"), "my-space")
         check("shell metacharacters removed",

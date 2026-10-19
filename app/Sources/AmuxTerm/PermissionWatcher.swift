@@ -100,10 +100,10 @@ final class PermissionWatcher {
     /// `isZoomed` check then re-zooms the now-selected target pane; selecting
     /// the same (already-zoomed) pane leaves it zoomed. Either way we land
     /// full-screen on the target.
-    func engageReject(optionNumber: Int) {
+    func engageReject(optionNumber: Int, clientTTY: String? = nil) {
         guard let head = queue.current,
               let opt = head.prompt.options.first(where: { $0.number == optionNumber }) else { return }
-        try? Tmux.switchSession(head.session)
+        try? Tmux.switchSession(head.session, clientTTY: clientTTY)
         try? Tmux.selectPane(head.session, paneIndex: head.pane)
         if (try? Tmux.isZoomed(head.session)) != true { try? Tmux.toggleZoom(head.session) }
         try? Tmux.sendKeys(head.session, paneIndex: head.pane, keys: answerKeys(for: opt))

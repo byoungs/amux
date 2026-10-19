@@ -20,6 +20,7 @@ test: app-test
 
 # validate: full test suite including tmux integration tests
 validate: app-test
+	python3 -m unittest discover -s scripts/names/tests -v
 	cd app && swift run amux-integration-tests
 	@echo "✓ Validation passed (unit + integration tests)"
 
@@ -98,6 +99,9 @@ build-dev-bundle:
 	@# every tmux hook silently breaks.
 	@rm -f $(DEV_APP)/Contents/MacOS/amux-cli
 	@cp $(CURDIR)/$(SWIFT_BUILD_DIR)/amux-cli $(DEV_APP)/Contents/MacOS/amux-cli
+	@rm -rf $(DEV_APP)/Contents/MacOS/workflow
+	@mkdir -p $(DEV_APP)/Contents/Resources/names
+	@cp scripts/names/*.py $(DEV_APP)/Contents/Resources/names/
 	@codesign --force --sign - --identifier com.byoungs.amux.dev $(DEV_APP) >/dev/null 2>&1
 
 app-dev: build-dev-bundle
@@ -134,6 +138,8 @@ dmg: app tmux-bundle
 	cp app/Resources/Info.plist build/amux.app/Contents/
 	cp app/.build/release/amux-app build/amux.app/Contents/MacOS/
 	cp app/.build/release/amux-cli build/amux.app/Contents/MacOS/
+	mkdir -p build/amux.app/Contents/Resources/names
+	cp scripts/names/*.py build/amux.app/Contents/Resources/names/
 	cp build/tmux-bundle/tmux build/amux.app/Contents/MacOS/
 	cp build/tmux-bundle/LICENSE-tmux.txt build/amux.app/Contents/Resources/
 	cp app/Resources/amux.icns build/amux.app/Contents/Resources/

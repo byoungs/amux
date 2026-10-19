@@ -22,6 +22,8 @@ import Foundation
 /// Canonical set of subcommands handled by `amux-cli`. Must match the
 /// `case "..."` arms in AmuxCLI/main.swift.
 public let amuxCliSubcommands: Set<String> = [
+    "copy-to-clipboard",
+    "names",
     "layout",
     "update-title",
     "alert-pane",

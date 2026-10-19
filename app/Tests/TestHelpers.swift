@@ -281,7 +281,9 @@ class TestSession {
     let name: String
     private let slot: Int
 
-    init(paneCount count: Int) {
+    /// `size` is for tests that need more room than tmux's 80x24 detached
+    /// default: splits that don't fit are silently dropped by the batch below.
+    init(paneCount count: Int, size: (width: Int, height: Int)? = nil) {
         cleanupStaleSessions()
         slot = acquireSessionSlot()
 
@@ -289,7 +291,13 @@ class TestSession {
         let id = nextSessionID()
         name = "amux-test-\(pid)-\(id)"
 
-        try! Tmux.createSession(name)
+        if let size {
+            let created = tmux("new-session", "-d", "-s", name,
+                               "-x", "\(size.width)", "-y", "\(size.height)")
+            precondition(created.success, created.stderr)
+        } else {
+            try! Tmux.createSession(name)
+        }
 
         if count > 0 {
             // Bulk-create panes via one batched `split-window` invocation.

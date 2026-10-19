@@ -33,11 +33,13 @@ public enum HelpContent {
         ]),
         Section(title: "Pane Management", entries: [
             Entry(key: "⌘n", description: "New pane — create a new shell pane"),
+            Entry(key: "⌘r", description: "Rename pane — shared with a connected session's provider"),
             Entry(key: "⌘l", description: "Split — enter split-pick mode to view two panes side by side"),
             Entry(key: "⌘s", description: "Send — move the active pane to another space"),
         ]),
         Section(title: "Spaces", entries: [
-            Entry(key: "⌘p", description: "Spaces — open the space picker to switch workspaces"),
+            Entry(key: "⌘p", description: "Spaces — Enter switches here; w opens the selection in a new window"),
+            Entry(key: "⌘⇧r", description: "Rename space — independent of its panes and sessions"),
         ]),
         Section(title: "Permission Peek", entries: [
             Entry(key: "⌘y", description: "Peek — open the oldest pending permission prompt (amber ● count in the status bar)"),
@@ -48,6 +50,7 @@ public enum HelpContent {
         ]),
         Section(title: "General", entries: [
             Entry(key: "⌘? ⌘/", description: "Help — show this screen"),
+            Entry(key: "⌘w", description: "Close window — its space keeps running"),
             Entry(key: "⌘q", description: "Quit — close the application"),
             Entry(key: "⌘c", description: "Copy — copy selected text to clipboard"),
             Entry(key: "⌘v", description: "Paste — paste from clipboard"),

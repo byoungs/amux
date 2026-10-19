@@ -22,9 +22,10 @@ enum TerminalGeometryTests {
         let z = TerminalGeometry.grid(viewSize: .zero, cell: cell)
         check("zero size clamps to 1x1", z.cols == 1 && z.rows == 1, "\(z)")
 
-        let real = TerminalGeometry.cellSize(for: TerminalGeometry.baseFont())
+        let real = TerminalGeometry.metrics(settings: nil)
         check("menlo cell is a sane size",
-              real.width >= 6 && real.width <= 12 && real.height >= 12 && real.height <= 24, "\(real)")
+              real.width >= 6 && real.width <= 12 && real.height >= 12 && real.height <= 24,
+              "\(real.width)x\(real.height)")
 
         print("TerminalGeometry tests: \(passed) passed, \(failed) failed")
         if failed > 0 { fatalError("TerminalGeometry tests failed") }

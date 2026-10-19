@@ -329,11 +329,16 @@ public enum Tmux {
     }
 
     /// Switch the current client to a different session.
-    public static func switchSession(_ session: String) throws {
+    public static func switchSession(_ session: String, clientTTY: String? = nil) throws {
         try runChecked(
-            ["switch-client", "-t", session],
+            switchSessionCommand(session, clientTTY: clientTTY),
             context: "tmux switch-client failed"
         )
+    }
+
+    public static func switchSessionCommand(_ session: String, clientTTY: String? = nil) -> [String] {
+        let tty = clientTTY ?? ProcessInfo.processInfo.environment["AMUX_CLIENT_TTY"]
+        return ["switch-client"] + (tty.map { ["-c", $0] } ?? []) + ["-t", session]
     }
 
     /// Attach to a tmux session (blocking, takes over terminal).
@@ -754,21 +759,37 @@ public enum Tmux {
 
     /// Parse `layoutRowFormat` output. Pure. Window fields come from the first
     /// row; the active pane from the row flagged active.
-    static func parseLayoutRows(_ stdout: String, borderTop: Int) -> LayoutState {
+    ///
+    /// Throws on empty output or any malformed row. A tmux window always has
+    /// at least one pane, so an unreadable reply must not turn into an empty
+    /// layout: the engine would read that as "not zoomed, no panes" and open
+    /// the Spaces popup on zoom-out.
+    static func parseLayoutRows(_ stdout: String, borderTop: Int) throws -> LayoutState {
         var panes: [Pane] = []
-        var windowW = 80, windowH = 24, zoomed = false, activePane = 0
+        var windowW = 0, windowH = 0, zoomed = false, activePane = 0
         for line in stdout.split(separator: "\n") where !line.isEmpty {
-            let f = line.split(separator: "\t").map(String.init)
-            guard f.count >= 10 else { continue }
-            let id = Int(f[0].trimmingCharacters(in: CharacterSet(charactersIn: "%"))) ?? 0
-            panes.append(Pane(id: id, x: Int(f[1]) ?? 0, y: Int(f[2]) ?? 0,
-                              w: Int(f[3]) ?? 0, h: Int(f[4]) ?? 0))
+            let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard f.count == 10,
+                  let id = Int(f[0].trimmingCharacters(in: CharacterSet(charactersIn: "%"))),
+                  let x = Int(f[1]), let y = Int(f[2]),
+                  let w = Int(f[3]), let h = Int(f[4]),
+                  let rowW = Int(f[5]), let rowH = Int(f[6]),
+                  f[7] == "0" || f[7] == "1",
+                  f[8] == "0" || f[8] == "1",
+                  let index = Int(f[9])
+            else {
+                throw AmuxError.tmux("malformed layout row: \(line)")
+            }
+            panes.append(Pane(id: id, x: x, y: y, w: w, h: h))
             if panes.count == 1 {
-                windowW = Int(f[5]) ?? 80
-                windowH = Int(f[6]) ?? 24
+                windowW = rowW
+                windowH = rowH
                 zoomed = f[7] == "1"
             }
-            if f[8] == "1" { activePane = Int(f[9]) ?? 0 }
+            if f[8] == "1" { activePane = index }
+        }
+        guard !panes.isEmpty else {
+            throw AmuxError.tmux("layout state: list-panes returned no panes")
         }
         return LayoutState(panes: panes, windowW: windowW, windowH: windowH,
                            borderTop: borderTop, zoomed: zoomed,
@@ -786,7 +807,7 @@ public enum Tmux {
         )
         // Border status is a session option, always "top" for amux-managed sessions
         let borderTop = hasPaneBorderStatus(session) ? 1 : 0
-        return parseLayoutRows(stdout, borderTop: borderTop)
+        return try parseLayoutRows(stdout, borderTop: borderTop)
     }
 
     /// Execute a LayoutAction by issuing tmux commands.
@@ -922,6 +943,34 @@ public enum Tmux {
         }
         let verdict = after.panesFillWindow ? "fills" : "MISMATCH panes do not fill window"
         DebugLog.log("layout \(event) session=\(session) after \(after.debugSummary) \(verdict)")
+    }
+
+    /// Repair pane removals reported by tmux, including explicit kills
+    /// which do not emit pane-exited.
+    public static func reconcilePaneCount(window: String) throws -> Bool {
+        guard window.first == "@", !window.dropFirst().isEmpty,
+              window.dropFirst().allSatisfy({ $0.isNumber }) else { return false }
+        // Serialize notifications for the same window. Re-read after acquiring
+        // the lock so a burst of notifications performs only one repair.
+        let lock = "amux-layout-\(window)"
+        guard (try? run(["wait-for", "-L", lock])) != nil else { return false }
+        defer { runIgnoring(["wait-for", "-U", lock]) }
+        guard let row = try? run(["display-message", "-p", "-t", window,
+            "#{window_index}\t#{window_panes}\t#{@amux-layout-pane-count}\t#{session_name}\t."])
+        else { return false } // The last pane may have destroyed the window.
+        let fields = row.split(separator: "\t", omittingEmptySubsequences: false)
+        guard fields.count == 5, fields[0] == "0",
+              let count = Int(fields[1]), let previous = Int(fields[2]),
+              count != previous else { return false }
+        // Save BEFORE select-layout emits another notification: no feedback loop.
+        _ = try run(["set-option", "-w", "-t", window,
+                     "@amux-layout-pane-count", String(count)])
+        // Additions use createPane's .addPane event, which knows the new ID
+        // and preserves the old panes' slots. A competing .resize here could
+        // move those panes before that pipeline has placed the new pane.
+        guard count < previous else { return false }
+        try applyLayout(String(fields[3]), event: .resize)
+        return true
     }
 
     /// Swap panes until tree-walk order matches `desiredOrder`.
@@ -1378,8 +1427,12 @@ public enum Tmux {
     /// the tmux process lock until then and freeze every other tmux call.
     public static func openSpacesPopup() {
         let bin = Config.findAmuxCLI()
-        launch([
-            "display-popup", "-E", "-w", "70", "-h", "20", "-T", " Spaces ", "\(bin) spaces"
+        // Launched, not run: the popup lives until the user closes it, and
+        // waiting on it holds the tmux process lock (see the freeze fix).
+        let tty = ProcessInfo.processInfo.environment["AMUX_CLIENT_TTY"]
+        let command = "env AMUX_CLIENT_TTY=#{q:client_tty} AMUX_SESSION=#{q:session_name} \(SessionRestore.singleQuoted(bin)) spaces"
+        launch(["display-popup"] + (tty.map { ["-c", $0] } ?? []) + [
+            "-E", "-w", "70", "-h", "20", "-T", " Spaces ", command
         ])
     }
 

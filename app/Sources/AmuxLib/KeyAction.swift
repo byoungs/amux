@@ -30,6 +30,8 @@ public enum AmuxCommand: Equatable {
     case paneNext
     case panePrev
     case newPane
+    case rename
+    case renameSpace
     case spaces
     case send
     case help
@@ -65,7 +67,8 @@ public enum InputMode: Equatable {
 public enum KeyCommand {
     /// Returns the amux action for a Cmd-key character, or nil if the
     /// character doesn't bind to an amux command.
-    public static func amuxCommand(for chars: String) -> AmuxCommand? {
+    public static func amuxCommand(for chars: String, shift: Bool = false) -> AmuxCommand? {
+        if chars.lowercased() == "r" { return shift || chars == "R" ? .renameSpace : .rename }
         switch chars {
         case "=":  return .zoomIn          // Cmd-+ (zoom in)
         case "-":  return .zoomOut         // Cmd-- (zoom out / spaces)

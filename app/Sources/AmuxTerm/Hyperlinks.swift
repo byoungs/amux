@@ -34,10 +34,8 @@ struct OSC8Payload: Equatable {
 /// hyperlink is open. VTerminal feeds it from three libvterm callbacks:
 ///
 /// - the unrecognised-OSC fallback delivers OSC 8 bodies (open/close),
-/// - cursor moves stamp or clear cells: a same-row forward move is a text
-///   write (tmux positions each row explicitly, so client-side autowrap does
-///   not occur in practice) — it stamps the traversed cells with the active
-///   link, or clears them when no link is open,
+/// - actual glyph writes stamp or clear the cells they replace, including
+///   the final column and wide characters (cursor moves never alter links),
 /// - moverect mirrors scrolls so stamps follow their rows.
 ///
 /// Erased cells keep a stale stamp but lose their text; span building in
@@ -128,17 +126,12 @@ final class HyperlinkGrid {
 
     // MARK: - Cell stamping
 
-    /// Track a cursor move. Same-row forward moves are text writes: they
-    /// stamp the traversed cells with the active link id (0 clears). All
-    /// other moves are repositioning and leave the grid untouched.
-    func cursorMoved(fromRow: Int, fromCol: Int, toRow: Int, toCol: Int) {
-        guard fromRow == toRow, toCol > fromCol, fromRow >= 0, fromRow < rows else { return }
-        let lo = max(0, fromCol)
-        let hi = min(toCol, cols)
+    /// Stamp exactly the cells written by libvterm's glyph callback.
+    func writeCells(row: Int, startCol: Int, endCol: Int) {
+        guard row >= 0, row < rows else { return }
+        let lo = max(0, startCol), hi = min(endCol, cols)
         guard lo < hi else { return }
-        for col in lo..<hi {
-            set(fromRow * cols + col, activeID)
-        }
+        for col in lo..<hi { set(row * cols + col, activeID) }
     }
 
     /// Write one cell, keeping `stampedCells` in step.

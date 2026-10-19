@@ -17,6 +17,35 @@ enum LinkDetectorTests {
 
         // === URLs ===
 
+        check("url-balanced-parentheses", urls("See (https://en.wikipedia.org/wiki/Swift_(programming_language)).") == ["https://en.wikipedia.org/wiki/Swift_(programming_language)"])
+        check("url-ipv6", urls("http://[::1]:3000/path") == ["http://[::1]:3000/path"])
+        check("url-unicode", urls("https://example.com/café/日本語") == ["https://example.com/café/日本語"])
+
+        for ending in [")", "):", "].", "}"] {
+            let line = "See https://example.com/review/1211" + ending
+            let links = LinkDetector.scanScreen(rows: [line, "  and matches the reviewed commit."],
+                                                colors: [], cols: line.count)
+            check("closed-link-at-right-edge-\(ending)",
+                  links.filter { $0.url.hasPrefix("https:") }.map(\.url) == ["https://example.com/review/1211"],
+                  "got \(links)")
+        }
+
+        do {
+            let terminal = VTerminal(rows: 3, cols: 80)
+            terminal.write(data: Data("e\u{301} 😊 漢 https://example.com/日本語".utf8))
+            let link = TerminalLinkScanner.scan(terminal).first
+            let start = (0..<80).first { VTerminal.cellString(terminal.cell(row: 0, col: $0)) == "h" }
+            check("unicode-prefix-click-position", link?.startCol == start, "got \(String(describing: link))")
+            check("unicode-path-complete", link?.url == "https://example.com/日本語")
+            check("unicode-path-click-width", link?.endCol == (start ?? 0) + "https://example.com/".count + 6 - 1)
+        }
+        do {
+            let terminal = VTerminal(rows: 3, cols: 26)
+            terminal.write(data: Data("漢 https://example.com/abc\r\n  /more".utf8))
+            let links = TerminalLinkScanner.scan(terminal)
+            check("unicode-wrapped-url", links.count == 2 && links.allSatisfy { $0.url == "https://example.com/abc/more" }, "got \(links)")
+        }
+
         do {
             let result = urls("Visit https://example.com/path?q=1 for info")
             check("url-https", result == ["https://example.com/path?q=1"], "got \(result)")

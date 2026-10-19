@@ -1,5 +1,14 @@
 # amux Development Guide
 
+## Background-only work while Brian is using the Mac
+
+Brian explicitly requested on September 30, 2026 that development/testing stop
+bringing windows to the foreground or capturing his keystrokes. Run background
+checks only. Do not run `make dev`, activate test windows, change focus, or use
+foreground GUI tests until he explicitly says he is ready. The window-focus
+suite is opt-in via `AMUX_FOREGROUND_TESTS=1`; do not set it without that go-ahead.
+Offscreen terminal/PTY tests and builds are fine. Report skipped GUI checks.
+
 ## Build & Test
 
 ```

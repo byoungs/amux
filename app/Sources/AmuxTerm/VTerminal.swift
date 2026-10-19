@@ -19,11 +19,6 @@ private func onMoveCursor(_ pos: VTermPos, _ oldpos: VTermPos, _ visible: Int32,
     terminal.cursorRow = Int(pos.row)
     terminal.cursorCol = Int(pos.col)
     terminal.cursorVisible = visible != 0
-    // Hyperlink stamping: libvterm fires movecursor synchronously after each
-    // text chunk, so a same-row forward move is the cells just written.
-    terminal.hyperlinks.cursorMoved(
-        fromRow: Int(oldpos.row), fromCol: Int(oldpos.col),
-        toRow: Int(pos.row), toCol: Int(pos.col))
     // A cursor move repaints two rows: the one it left (to erase the old
     // cursor block) and the one it entered (to draw the new one). libvterm
     // reports cursor motion separately from cell damage, so a pure
@@ -34,6 +29,12 @@ private func onMoveCursor(_ pos: VTermPos, _ oldpos: VTermPos, _ visible: Int32,
     terminal.dirtyRows.insert(Int(oldpos.row))
     terminal.dirtyRows.insert(Int(pos.row))
     return 1
+}
+
+private func onGlyph(_ rect: VTermRect, _ user: UnsafeMutableRawPointer?) {
+    let terminal = Unmanaged<VTerminal>.fromOpaque(user!).takeUnretainedValue()
+    terminal.hyperlinks.writeCells(row: Int(rect.start_row),
+                                   startCol: Int(rect.start_col), endCol: Int(rect.end_col))
 }
 
 private func onSetTermProp(_ prop: VTermProp, _ val: UnsafeMutablePointer<VTermValue>?, _ user: UnsafeMutableRawPointer?) -> Int32 {
@@ -189,6 +190,7 @@ final class VTerminal {
         // deinit, which runs only after all C callbacks have been unregistered.
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         vterm_screen_set_callbacks(screen, &callbacks, selfPtr)
+        vterm_screen_set_glyph_callback(screen, onGlyph, selfPtr)
 
         selectionCallbacks.set = onSelectionSet
         // query intentionally left nil — OSC 52 read is the security-sensitive

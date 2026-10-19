@@ -38,12 +38,15 @@ public struct PaneSnapshot: Equatable {
     public var cwd: String
     public var title: String
     public var kind: PaneKind
+    /// Links the restored pane to its durable local naming record.
+    public var namingID: String?
 
-    public init(index: Int, cwd: String, title: String, kind: PaneKind) {
+    public init(index: Int, cwd: String, title: String, kind: PaneKind, namingID: String? = nil) {
         self.index = index
         self.cwd = cwd
         self.title = title
         self.kind = kind
+        self.namingID = namingID
     }
 }
 
@@ -197,6 +200,7 @@ extension PaneKind: Codable {
 extension PaneSnapshot: Codable {
     enum CodingKeys: String, CodingKey {
         case index, cwd, title, kind
+        case namingID = "naming_id"
     }
 }
 

@@ -49,6 +49,8 @@ struct VTermScreen
   const VTermScreenCallbacks *callbacks;
   void *cbdata;
   bool callbacks_has_pushline4;
+  void (*glyph_callback)(VTermRect rect, void *user);
+  void *glyph_cbdata;
 
   VTermDamageSize damage_merge;
   /* start_row == -1 => no damage */
@@ -200,6 +202,9 @@ static int putglyph(VTermGlyphInfo *info, VTermPos pos, void *user)
   cell->pen.protected_cell = info->protected_cell;
   cell->pen.dwl            = info->dwl;
   cell->pen.dhl            = info->dhl;
+
+  if(screen->glyph_callback)
+    screen->glyph_callback(rect, screen->glyph_cbdata);
 
   damagerect(screen, rect);
 
@@ -893,6 +898,8 @@ static VTermScreen *screen_new(VTerm *vt)
   screen->callbacks = NULL;
   screen->cbdata    = NULL;
   screen->callbacks_has_pushline4 = false;
+  screen->glyph_callback = NULL;
+  screen->glyph_cbdata = NULL;
 
   screen->buffers[BUFIDX_PRIMARY] = alloc_buffer(screen, rows, cols);
 
@@ -1066,6 +1073,13 @@ void vterm_screen_enable_altscreen(VTermScreen *screen, int altscreen)
 
     screen->buffers[BUFIDX_ALTSCREEN] = alloc_buffer(screen, rows, cols);
   }
+}
+
+void vterm_screen_set_glyph_callback(VTermScreen *screen,
+    void (*callback)(VTermRect rect, void *user), void *user)
+{
+  screen->glyph_callback = callback;
+  screen->glyph_cbdata = user;
 }
 
 void vterm_screen_set_callbacks(VTermScreen *screen, const VTermScreenCallbacks *callbacks, void *user)

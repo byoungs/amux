@@ -66,6 +66,11 @@ Launch amux. You start with one pane. Open a terminal in it and start working.
 That's enough to get started. Create a few panes, start Claude Code in
 each one, and use `Cmd-]` / `Cmd-[` to bounce between them.
 
+Drag to select and copy text, or press `Cmd-C` to copy an active selection.
+Use `Cmd-V` to paste into the current window's active pane. Scrolling goes to
+programs that support mouse input; otherwise it opens the pane's history.
+After scrolling, typing or pasting returns from history to the live terminal.
+
 ### Attention Management
 
 This is the thing that makes amux different.
@@ -114,10 +119,16 @@ a third for CI/deployment.
 | To do this | Press |
 |------------|-------|
 | **Open space picker** | `Cmd-P` (or `Cmd--` from grid) |
+| **Switch space in this window** | `Enter` in the space picker |
+| **Open selected space in another window** | `w` in the space picker |
+| **Cycle windows forward / backward** | `` Cmd-` `` / `` Cmd-Shift-` `` |
+| **Close a window (keep its space running)** | `Cmd-W` |
 | **Send pane to another space** | `Cmd-S` |
 
 The space picker shows which spaces have agents waiting for you, so you
-know where to go next.
+know where to go next. Open different spaces in separate windows to work across
+them side by side. Different spaces have independent input and navigation;
+closing a window detaches it while its shells keep running.
 
 ### Split View
 

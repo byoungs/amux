@@ -319,80 +319,36 @@ enum AmuxTests {
         // === STICKY PANE INTEGRATION TESTS ===
         // End-to-end repro of sticky-pane bugs: real tmux, real Tmux.createPane,
         // real applyLayout pipeline. Independent of any user session.
+        // Rule: panes keep their number order; a new pane goes last.
 
-        // --- sticky_3_to_4_active_full_left ---
-        // 3-pane left-full + Cmd-N from full-left. Spec: TL=A, TR=B, BL=NEW, BR=C.
-        do {
+        // --- sticky_3_to_4_active_each ---
+        // tmux inserts the split right after the active pane; it must still
+        // land last so panes 1-3 keep their numbers.
+        for activeIdx in 0..<3 {
             let ts = TestSession(paneCount: 3)
-            // 3-pane state: index 0=full-left, 1=top-right, 2=bot-right.
             let idsBefore = getPaneIds(ts.name)
-            let aId = idsBefore[0]
-            let bId = idsBefore[1]
-            let cId = idsBefore[2]
-            try? Tmux.selectPane(ts.name, paneIndex: 0)  // active = full-left
+            try? Tmux.selectPane(ts.name, paneIndex: activeIdx)
             _ = try? Tmux.createPane(ts.name)
             let idsAfter = getPaneIds(ts.name)
-            check("sticky_3_to_4_full_left count", idsAfter.count == 4,
-                  "expected 4 panes, got \(idsAfter.count): \(idsAfter)")
-            if idsAfter.count == 4 {
-                let newId = idsAfter.first { ![aId, bId, cId].contains($0) } ?? "?"
-                check("sticky_3_to_4_full_left TL=A", idsAfter[0] == aId,
-                      "TL should be A (\(aId)), got \(idsAfter[0]). full=\(idsAfter)")
-                check("sticky_3_to_4_full_left TR=B", idsAfter[1] == bId,
-                      "TR should be B (\(bId)), got \(idsAfter[1]). full=\(idsAfter)")
-                check("sticky_3_to_4_full_left BL=NEW", idsAfter[2] == newId,
-                      "BL should be NEW (\(newId)), got \(idsAfter[2]). full=\(idsAfter)")
-                check("sticky_3_to_4_full_left BR=C", idsAfter[3] == cId,
-                      "BR should be C (\(cId)), got \(idsAfter[3]). full=\(idsAfter)")
-            }
+            check("sticky_3_to_4_active_\(activeIdx) order",
+                  idsAfter.count == 4 && Array(idsAfter.prefix(3)) == idsBefore
+                    && !idsBefore.contains(idsAfter[3]),
+                  "want \(idsBefore) + NEW, got \(idsAfter)")
         }
 
-        // --- sticky_3_to_4_active_top_right ---
+        // --- sticky_close_keeps_order ---
+        // Closing pane 1 of 9 twice (the 2026-10-26 report): every later
+        // pane moves down one number, so the last pane goes 9 → 8 → 7.
         do {
-            let ts = TestSession(paneCount: 3)
+            let ts = TestSession(paneCount: 9, size: (width: 216, height: 60))
             let idsBefore = getPaneIds(ts.name)
-            let aId = idsBefore[0]
-            let bId = idsBefore[1]
-            let cId = idsBefore[2]
-            try? Tmux.selectPane(ts.name, paneIndex: 1)  // active = top-right
-            _ = try? Tmux.createPane(ts.name)
-            let idsAfter = getPaneIds(ts.name)
-            check("sticky_3_to_4_top_right count", idsAfter.count == 4)
-            if idsAfter.count == 4 {
-                let newId = idsAfter.first { ![aId, bId, cId].contains($0) } ?? "?"
-                check("sticky_3_to_4_top_right TL=A", idsAfter[0] == aId,
-                      "got \(idsAfter), expected TL=A=\(aId)")
-                check("sticky_3_to_4_top_right TR=B", idsAfter[1] == bId,
-                      "got \(idsAfter), expected TR=B=\(bId)")
-                check("sticky_3_to_4_top_right BL=NEW", idsAfter[2] == newId,
-                      "got \(idsAfter), expected BL=NEW=\(newId)")
-                check("sticky_3_to_4_top_right BR=C", idsAfter[3] == cId,
-                      "got \(idsAfter), expected BR=C=\(cId)")
+            for _ in 0..<2 {
+                tmux("kill-pane", "-t", "\(ts.name):0.0")
+                try? Tmux.applyLayout(ts.name, event: .resize)  // what pane-exited runs
             }
-        }
-
-        // --- sticky_3_to_4_active_bot_right ---
-        do {
-            let ts = TestSession(paneCount: 3)
-            let idsBefore = getPaneIds(ts.name)
-            let aId = idsBefore[0]
-            let bId = idsBefore[1]
-            let cId = idsBefore[2]
-            try? Tmux.selectPane(ts.name, paneIndex: 2)  // active = bot-right
-            _ = try? Tmux.createPane(ts.name)
             let idsAfter = getPaneIds(ts.name)
-            check("sticky_3_to_4_bot_right count", idsAfter.count == 4)
-            if idsAfter.count == 4 {
-                let newId = idsAfter.first { ![aId, bId, cId].contains($0) } ?? "?"
-                check("sticky_3_to_4_bot_right TL=A", idsAfter[0] == aId,
-                      "got \(idsAfter), expected TL=A=\(aId)")
-                check("sticky_3_to_4_bot_right TR=B", idsAfter[1] == bId,
-                      "got \(idsAfter), expected TR=B=\(bId)")
-                check("sticky_3_to_4_bot_right BL=NEW", idsAfter[2] == newId,
-                      "got \(idsAfter), expected BL=NEW=\(newId)")
-                check("sticky_3_to_4_bot_right BR=C", idsAfter[3] == cId,
-                      "got \(idsAfter), expected BR=C=\(cId)")
-            }
+            check("sticky_close_keeps_order", idsAfter == Array(idsBefore.dropFirst(2)),
+                  "want \(Array(idsBefore.dropFirst(2))), got \(idsAfter)")
         }
 
         // --- sticky_4_to_5_active_each ---

@@ -966,8 +966,7 @@ public class FakeTmux: TmuxExecutor {
     ) -> String {
         var result = format
         // Derive per-pane geometry from the window's grid layout so tests
-        // that consume pane_left/pane_top/pane_width/pane_height (and
-        // sticky-pane matching, which keys off pane centers) see realistic
+        // that consume pane_left/pane_top/pane_width/pane_height see realistic
         // positions instead of every pane reporting (0, 0). The fake's
         // default window is 200x50; gridPositions matches the production
         // layout algorithm for that size and the current pane count.

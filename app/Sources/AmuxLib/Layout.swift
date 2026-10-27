@@ -80,93 +80,6 @@ public func gridPositions(count: Int, width: Int, height: Int) -> [Rect] {
     }
 }
 
-/// 3-pane layout with full-height RIGHT column (mirrored variant).
-/// Slot order: left-top, left-bottom, full-right.
-/// Used when removing from the right column of a 2x2.
-public func gridPositions3Right(width: Int, height: Int) -> [Rect] {
-    return layoutBalancedPlusColumn(balancedCols: 1, width: width, height: height)
-}
-
-// MARK: - Layout shape
-
-/// The shape of a pane arrangement. Every pane count has one canonical
-/// shape — except 3 panes, which has two: standard (full-height LEFT
-/// column + right split) and right-full (left split + full-height RIGHT
-/// column). See docs/sticky-panes.md.
-///
-/// The variant is established by `.remove` based on which column the
-/// closure happened in (so neighbouring panes don't shuffle), preserved
-/// across window resizes by `.resize`, and collapsed back to the standard
-/// 4-pane balanced grid by `.add`.
-///
-/// This is the only place in the state machine where the variant is
-/// represented. Every event that picks a slot template (computeResize,
-/// computeRemove, computeAdd, buildLayoutString) routes through
-/// `currentShape` → `slotsFor` so the rule lives in exactly one spot.
-public enum LayoutShape: Equatable {
-    case standard(count: Int)
-    case rightFull3
-
-    public var count: Int {
-        switch self {
-        case .standard(let n): return n
-        case .rightFull3:      return 3
-        }
-    }
-}
-
-/// Detect the layout shape from current pane geometry. Single source of
-/// truth — every event that needs a target slot template asks this.
-///
-/// A 3-pane arrangement is `.rightFull3` iff the one pane that has no
-/// column-mate (no other pane shares its column) sits to the right of
-/// the centroid. This rule works in both contexts the state machine
-/// cares about:
-///   - Resolved right-full geometry (lone pane = the actual full-height
-///     pane on the right).
-///   - Survivors of a 4→3 removal still sitting in 4-pane geometry
-///     (lone pane = the column-mate that will become full-height).
-///
-/// Everything else returns `.standard(count: panes.count)`, which
-/// `slotsFor` maps to the canonical `gridPositions` template.
-public func currentShape(panes: [Pane]) -> LayoutShape {
-    if panes.count == 3 {
-        let centers = panes.map { $0.x + $0.w / 2 }
-        if let lone = loneColumnIndex(centers: centers) {
-            let avgCx = centers.map { Int64($0) }.reduce(0, +) / 3
-            if Int64(centers[lone]) > avgCx {
-                return .rightFull3
-            }
-        }
-    }
-    return .standard(count: panes.count)
-}
-
-/// Index of the pane whose cx has no column-mate (no other pane within
-/// 10px). Returns nil if no such pane exists (i.e., every pane shares a
-/// column with another).
-private func loneColumnIndex(centers: [Int]) -> Int? {
-    for (i, cx) in centers.enumerated() {
-        let hasPartner = centers.enumerated().contains { (j, other) in
-            j != i && abs(cx - other) < 10
-        }
-        if !hasPartner { return i }
-    }
-    return nil
-}
-
-/// Slot rects for a given shape at given dimensions. Sole dispatcher
-/// between `gridPositions` (standard layouts) and `gridPositions3Right`
-/// (the mirror variant).
-public func slotsFor(shape: LayoutShape, width: Int, height: Int) -> [Rect] {
-    switch shape {
-    case .standard(let n):
-        return gridPositions(count: n, width: width, height: height)
-    case .rightFull3:
-        return gridPositions3Right(width: width, height: height)
-    }
-}
-
 /// Layout a balanced grid (cols x 2) plus a full-height right column.
 /// Slot order: top row L->R, bottom row L->R, then right column.
 private func layoutBalancedPlusColumn(balancedCols: Int, width: Int, height: Int) -> [Rect] {
@@ -343,76 +256,6 @@ public func buildLayoutStringDirect(
     return String(format: "%04x,%@", csum, body)
 }
 
-/// Build tmux layout string for 3-pane right-full variant.
-/// Slot order: left-top, left-bottom, full-right.
-public func buildLayoutString3Right(
-    width: Int,
-    height: Int,
-    paneIds: [Int],
-    borderTop: Int
-) -> String? {
-    if paneIds.count != 3 {
-        return nil
-    }
-
-    // Same geometry as odd >= 5 path but with balancedCols = 1
-    let totalCols = 2
-    let available = width - (totalCols - 1)
-    let colW = available / totalCols
-
-    let leftW = colW
-    let rightX = leftW + 1
-    let rightW = width - rightX
-
-    let (th, bh) = splitTwoRows(height: height, borderTop: borderTop)
-    let by = th + 1
-
-    // left-top, left-bottom, full-right
-    let body = "\(width)x\(height),0,0{\(leftW)x\(height),0,0[\(leftW)x\(th),0,0,\(paneIds[0]),\(leftW)x\(bh),0,\(by),\(paneIds[1])],\(rightW)x\(height),\(rightX),0,\(paneIds[2])}"
-
-    let csum = layoutChecksum(body)
-    return String(format: "%04x,%@", csum, body)
-}
-
-/// Build a tmux layout string from positioned panes.
-///
-/// Takes the output of `computeLayout` — panes with their exact positions —
-/// and generates the tmux layout string. Delegates shape detection to
-/// `currentShape`, then routes through `buildLayoutString(shape:...)`.
-///
-/// `borderTop` compensates for pane-border-status. `windowW` and `windowH`
-/// are the raw window dimensions (before border subtraction).
-public func buildLayoutString(
-    panes: [Pane],
-    windowW: Int,
-    windowH: Int,
-    borderTop: Int
-) -> String? {
-    if panes.isEmpty {
-        return nil
-    }
-    let shape = currentShape(panes: panes)
-    return buildLayoutString(
-        shape: shape, paneIds: panes.map { $0.id },
-        width: windowW, height: windowH, borderTop: borderTop
-    )
-}
-
-/// tmux layout string for a given shape and pane order. Sole dispatcher
-/// between `buildLayoutStringDirect` (standard layouts) and
-/// `buildLayoutString3Right` (the mirror variant).
-public func buildLayoutString(
-    shape: LayoutShape, paneIds: [Int],
-    width: Int, height: Int, borderTop: Int
-) -> String? {
-    switch shape {
-    case .standard:
-        return buildLayoutStringDirect(width: width, height: height, paneIds: paneIds, borderTop: borderTop)
-    case .rightFull3:
-        return buildLayoutString3Right(width: width, height: height, paneIds: paneIds, borderTop: borderTop)
-    }
-}
-
 /// Split height into two rows, compensating for borderTop.
 ///
 /// With pane-border-status top, the first row of panes loses `borderTop`
@@ -514,24 +357,6 @@ public enum LayoutTests {
             check("three_panes bottom-right x", rects[2].x > 0)
             check("three_panes bottom-right y", rects[2].y > 0)
             check("three_panes right panes share x", rects[1].x == rects[2].x)
-        }
-
-        // three_panes_right_full_left_split
-        do {
-            let rects = gridPositions3Right(width: 280, height: 80)
-            check("three_right count", rects.count == 3)
-            check("three_right top-left x", rects[0].x == 0)
-            check("three_right top-left y", rects[0].y == 0)
-            check("three_right top-left partial height", rects[0].h < 80)
-            check("three_right bottom-left x", rects[1].x == 0)
-            check("three_right bottom-left y", rects[1].y > 0)
-            check("three_right bottom-left partial height", rects[1].h < 80)
-            check("three_right full-right x", rects[2].x > 0)
-            check("three_right full-right y", rects[2].y == 0)
-            check("three_right full-right full height", rects[2].h == 80)
-            check("three_right left panes share x", rects[0].x == rects[1].x)
-            check("three_right no overlap", rects[2].x > rects[0].w)
-            check("three_right left covers height", rects[0].h + 1 + rects[1].h == 80)
         }
 
         // four_panes_2x2
@@ -706,37 +531,6 @@ public enum LayoutTests {
             check("four_border has 4", s.contains(",4"))
             check("four_border top row 12", s.contains("80x12,0,0"), "top row should be 12 high: \(s)")
             check("four_border bot row 11", s.contains("80x11,0,13"), "bottom row should be 11 high at y=13: \(s)")
-        }
-
-        // build_layout_string_from_panes_4
-        do {
-            let rects = gridPositions(count: 4, width: 280, height: 80)
-            let panes: [Pane] = rects.enumerated().map { (i, r) in
-                Pane(id: 100 + i, x: r.x, y: r.y, w: r.w, h: r.h)
-            }
-            let s = buildLayoutString(panes: panes, windowW: 280, windowH: 80, borderTop: 0)!
-            check("from_panes_4 has 100", s.contains(",100"), "missing pane 100: \(s)")
-            check("from_panes_4 has 101", s.contains(",101"), "missing pane 101: \(s)")
-            check("from_panes_4 has 102", s.contains(",102"), "missing pane 102: \(s)")
-            check("from_panes_4 has 103", s.contains(",103"), "missing pane 103: \(s)")
-            check("from_panes_4 checksum prefix", s.count > 5)
-            let idx = s.index(s.startIndex, offsetBy: 4)
-            check("from_panes_4 comma at 4", String(s[idx]) == ",")
-        }
-
-        // build_layout_string_from_panes_matches_direct
-        do {
-            for count in 1...8 {
-                let ids: [Int] = Array(100..<(100 + count))
-                let rects = gridPositions(count: count, width: 280, height: 80)
-                let panes: [Pane] = zip(rects, ids).map { (r, id) in
-                    Pane(id: id, x: r.x, y: r.y, w: r.w, h: r.h)
-                }
-                let fromPanes = buildLayoutString(panes: panes, windowW: 280, windowH: 80, borderTop: 0)
-                let fromDirect = buildLayoutStringDirect(width: 280, height: 80, paneIds: ids, borderTop: 0)
-                check("panes_matches_direct \(count)", fromPanes == fromDirect,
-                      "panes: \(fromPanes ?? "nil"), direct: \(fromDirect ?? "nil")")
-            }
         }
 
         print("Layout tests: \(passed) passed, \(failed) failed")

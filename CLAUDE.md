@@ -69,7 +69,7 @@ separate binary invoked from tmux key bindings and hooks.
 - `FakeTmux.swift` — in-memory tmux for tests
 - `Config.swift` — tmux configuration (borders, status bar, key bindings)
 - `LayoutEngine.swift` — pure layout state machine
-- `Layout.swift` / `Sticky.swift` — grid geometry + spatial matching
+- `Layout.swift` / `Sticky.swift` — grid geometry + pane order (docs/sticky-panes.md)
 - `Alert.swift` / `AlertNotification.swift` / `AlertEventTransport.swift` — attention alerts
 - `Bell.swift` — BEL character scanner
 - `Notify.swift` — macOS notification wrappers

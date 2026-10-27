@@ -99,16 +99,12 @@ public enum LayoutEngine {
     }
 
     private static func buildGridLayout(state: LayoutState, stickyEvent: StickyLayoutEvent) -> (String?, [Int]?) {
-        let effectiveH = max(state.windowH - state.borderTop, 0)
-        let newPanes = AmuxLib.computeLayout(
-            current: state.panes, event: stickyEvent,
-            windowW: state.windowW, windowH: effectiveH
+        let order = paneOrder(current: state.panes.map { $0.id }, event: stickyEvent)
+        let s = buildLayoutStringDirect(
+            width: state.windowW, height: state.windowH,
+            paneIds: order, borderTop: state.borderTop
         )
-        let s = buildLayoutString(
-            panes: newPanes, windowW: state.windowW,
-            windowH: state.windowH, borderTop: state.borderTop
-        )
-        return (s, newPanes.map { $0.id })
+        return (s, order)
     }
 
     private static func computeAdd(state: LayoutState, newId: Int) -> LayoutAction {
@@ -253,6 +249,24 @@ public enum LayoutEngineTests {
             let action = LayoutEngine.computeLayout(state: state, event: .resize)
             check("resize produces layout string", action.layoutString != nil)
             check("resize does not change zoom", action.zoom == nil)
+        }
+
+        // Closing a pane keeps every pane's number order. Replays the
+        // 2026-10-26 debug.log state after the 8→7 close (pane-exited fires
+        // .resize once tmux has merged the dead pane): geometric matching
+        // tied %8 and %11 for the right column and sent %11 (pane 7) to 2.
+        do {
+            let panes = [
+                Pane(id: 7, x: 0, y: 1, w: 107, h: 29), Pane(id: 6, x: 108, y: 1, w: 53, h: 29),
+                Pane(id: 8, x: 162, y: 1, w: 54, h: 29), Pane(id: 2, x: 0, y: 31, w: 53, h: 29),
+                Pane(id: 3, x: 54, y: 31, w: 53, h: 29), Pane(id: 1, x: 108, y: 31, w: 53, h: 29),
+                Pane(id: 11, x: 162, y: 31, w: 54, h: 29),
+            ]
+            let state = LayoutState(panes: panes, windowW: 216, windowH: 60, borderTop: 1,
+                                    zoomed: false, activePane: 6, paneCount: 7)
+            let action = LayoutEngine.computeLayout(state: state, event: .resize)
+            check("close keeps pane order", action.paneOrder == [7, 6, 8, 2, 3, 1, 11],
+                  "got \(String(describing: action.paneOrder))")
         }
 
         // resize while zoomed skips layout

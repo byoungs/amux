@@ -1,8 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build tmux from HEAD with static libevent/ncurses/utf8proc for bundling inside Amux.app.
+# Build a tmux release with static libevent/ncurses/utf8proc for bundling inside Amux.app.
 # Output: build/tmux-bundle/tmux (a binary with no Homebrew dylib dependencies)
+
+# tmux release tag to bundle. Must be 3.7+ (synchronized output, tmux PR #4744).
+TMUX_TAG=3.8
 
 BUILD_DIR="$(cd "$(dirname "$0")/.." && pwd)/build/tmux-deps"
 OUTPUT_DIR="$(cd "$(dirname "$0")/.." && pwd)/build/tmux-bundle"
@@ -98,12 +101,12 @@ else
     echo "✓ utf8proc already built"
 fi
 
-# --- tmux (HEAD, linked against static deps) ---
+# --- tmux (release tag, linked against static deps) ---
 echo ""
-echo "=== Building tmux HEAD ==="
+echo "=== Building tmux $TMUX_TAG ==="
 cd /tmp
 rm -rf tmux-build
-git clone --depth 1 https://github.com/tmux/tmux.git tmux-build
+git clone --depth 1 --branch "$TMUX_TAG" https://github.com/tmux/tmux.git tmux-build
 cd tmux-build
 
 # Save license

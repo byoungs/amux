@@ -47,7 +47,7 @@ make setup    # checks deps
 make dev      # build + launch the app
 ```
 
-Requires Xcode 15+ (Swift 5.9) and tmux HEAD (`brew install tmux --HEAD`).
+Requires Xcode 15+ (Swift 5.9) and tmux 3.7+ (`brew install tmux`).
 
 ## How to Use
 
@@ -237,8 +237,8 @@ Pane titles are auto-generated from the working directory and git branch:
 
 - **macOS 14+** — uses AppKit; not cross-platform.
 - **Xcode 15+ / Swift 5.9** — the toolchain ships with Xcode Command Line Tools.
-- **tmux HEAD** — required for flicker-free rendering (`brew install tmux --HEAD`).
-  See [tmux PR #4744](https://github.com/tmux/tmux/pull/4744).
+- **tmux 3.7+** — required for flicker-free rendering (`brew install tmux`).
+  3.7 added synchronized output ([tmux PR #4744](https://github.com/tmux/tmux/pull/4744)).
 
 ## Development
 

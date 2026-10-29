@@ -37,7 +37,7 @@ setup: setup-tmux
 setup-tmux:
 	@command -v tmux >/dev/null 2>&1 || { \
 		echo "✗ tmux not found."; \
-		echo "  macOS:  brew install tmux --HEAD"; \
+		echo "  macOS:  brew install tmux"; \
 		exit 1; \
 	}
 	@tmux_version=$$(tmux -V | sed 's/[^0-9.]//g'); \
@@ -45,7 +45,7 @@ setup-tmux:
 	case "$$tmux_version" in \
 		3.[7-9]*|[4-9]*) echo "✓ tmux version is good" ;; \
 		*) echo "⚠  tmux $$tmux_version may cause flickering."; \
-		   echo "  Recommended: brew install tmux --HEAD" ;; \
+		   echo "  Requires 3.7+: brew upgrade tmux" ;; \
 	esac
 
 # ── Native App ──────────────────────────────────────────
@@ -125,7 +125,7 @@ app-test:
 app-clean:
 	cd app && swift package clean
 
-# Build tmux from HEAD with static deps (for bundling)
+# Build a tmux release with static deps (for bundling)
 tmux-bundle:
 	./scripts/build-tmux.sh
 
